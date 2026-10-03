@@ -205,13 +205,13 @@ class NcmUsbBridge internal constructor(
 
     private fun readChunk(timeoutMillis: Long): Int? {
         checkOpen()
-        val length = minOf(readBuffer.size, LEGACY_USB_TRANSFER_LIMIT)
+        val timeout = timeoutMillis.coerceAtMost(Int.MAX_VALUE.toLong()).coerceAtLeast(1L).toInt()
         val transferred = try {
             connection.bulkTransfer(
                 inEndpoint,
                 readBuffer,
-                length,
-                timeoutMillis.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt(),
+                readBuffer.size,
+                timeout,
             )
         } catch (error: RuntimeException) {
             throw failSession("NCM read failed", error)
