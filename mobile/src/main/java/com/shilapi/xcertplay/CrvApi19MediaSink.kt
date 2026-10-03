@@ -1,0 +1,583 @@
+package com.shilapi.xcertplay
+
+import android.media.AudioFormat as AndroidAudioFormat
+import android.media.AudioManager
+import android.media.AudioTrack
+import android.media.MediaCodec
+import android.media.MediaFormat
+import android.view.Surface
+import com.shilapi.xcertplay.airplay.AudioCodecKind
+import com.shilapi.xcertplay.airplay.AudioFormat
+import com.shilapi.xcertplay.airplay.AudioStreamId
+import com.shilapi.xcertplay.airplay.MediaSink
+import com.shilapi.xcertplay.airplay.MicrophoneConfig
+import com.shilapi.xcertplay.airplay.VideoCodec
+import com.shilapi.xcertplay.media.MediaCodecSupport
+import java.io.Closeable
+import java.nio.ByteBuffer
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+
+/**
+ * Verifier-safe Android 4.4 media backend used by the 2021 CR-V build.
+ *
+ * Intentionally avoids every media API introduced after API19:
+ * AudioAttributes, AudioFocusRequest, AudioTrack.Builder, AudioFormat.Builder,
+ * MediaCodecList, getInputBuffer/getOutputBuffer and setOutputSurface.
+ */
+class CrvApi19MediaSink(
+    private val surface: Surface,
+    private val videoWidth: Int,
+    private val videoHeight: Int,
+    private val report: (String) -> Unit = {},
+) : MediaSink, Closeable {
+    private val videoCodecs = ConcurrentHashMap<Int, VideoCodec>()
+    private val videoConfigs = ConcurrentHashMap<Int, ByteArray>()
+    private val videoDecoders = ConcurrentHashMap<Int, LegacyVideoDecoder>()
+    private val recoveryHandlers = ConcurrentHashMap<Int, () -> Unit>()
+    private val diagnosticHandlers = ConcurrentHashMap<Int, (String) -> Unit>()
+    private val audioRenderers = ConcurrentHashMap<AudioStreamId, LegacyAudioRenderer>()
+
+    override fun setVideoRecoveryHandler(type: Int, handler: () -> Unit) {
+        recoveryHandlers[type] = handler
+    }
+
+    override fun setVideoDiagnosticHandler(type: Int, handler: (String) -> Unit) {
+        diagnosticHandlers[type] = handler
+    }
+
+    override fun onVideoCodec(type: Int, codec: VideoCodec) {
+        videoCodecs[type] = codec
+    }
+
+    override fun onVideoConfig(type: Int, codecData: ByteArray) {
+        val codec = videoCodecs[type] ?: VideoCodec.H264
+        videoConfigs[type] = codecData.copyOf()
+        decoder(type).configure(codec, codecData)
+    }
+
+    override fun onVideoFrame(type: Int, naluBytes: ByteArray) {
+        decoder(type).submit(naluBytes)
+    }
+
+    override fun onScreenStreamActive(type: Int, active: Boolean) {
+        if (!active) {
+            videoDecoders.remove(type)?.close()
+            videoCodecs.remove(type)
+            videoConfigs.remove(type)
+            recoveryHandlers.remove(type)
+            diagnosticHandlers.remove(type)
+        }
+    }
+
+    override fun onAudioStarted(id: AudioStreamId, format: AudioFormat, firstSample: Int) {
+        audioRenderers.remove(id)?.close()
+        LegacyAudioRenderer(format, report).also {
+            audioRenderers[id] = it
+            it.start()
+        }
+    }
+
+    override fun onAudioRtp(id: AudioStreamId, format: AudioFormat, rtp: ByteArray, sample: Int) {
+        audioRenderers[id]?.submit(rtp, sample)
+    }
+
+    override fun onAudioStopped(id: AudioStreamId) {
+        audioRenderers.remove(id)?.close()
+    }
+
+    override fun onMicrophoneStarted(id: AudioStreamId, config: MicrophoneConfig) = Unit
+    override fun onMicrophoneStopped(id: AudioStreamId) = Unit
+
+    override fun close() {
+        videoDecoders.values.toList().forEach { it.close() }
+        videoDecoders.clear()
+        audioRenderers.values.toList().forEach { it.close() }
+        audioRenderers.clear()
+        recoveryHandlers.clear()
+        diagnosticHandlers.clear()
+    }
+
+    private fun decoder(type: Int): LegacyVideoDecoder =
+        videoDecoders[type] ?: synchronized(videoDecoders) {
+            videoDecoders[type] ?: LegacyVideoDecoder(
+                surface = surface,
+                width = videoWidth,
+                height = videoHeight,
+                requestKeyFrame = { recoveryHandlers[type]?.invoke() },
+                diagnostic = { line ->
+                    diagnosticHandlers[type]?.invoke(line)
+                    report("Video: $line")
+                },
+            ).also { next ->
+                videoDecoders[type] = next
+                videoConfigs[type]?.let { data ->
+                    next.configure(videoCodecs[type] ?: VideoCodec.H264, data)
+                }
+            }
+        }
+
+    private class LegacyVideoDecoder(
+        private val surface: Surface,
+        private val width: Int,
+        private val height: Int,
+        private val requestKeyFrame: () -> Unit,
+        private val diagnostic: (String) -> Unit,
+    ) : Closeable {
+        private sealed class Job {
+            data class Config(val codec: VideoCodec, val data: ByteArray) : Job()
+            data class Frame(val data: ByteArray) : Job()
+        }
+
+        private val queue = LinkedBlockingQueue<Job>(VIDEO_QUEUE_CAPACITY)
+        private val running = AtomicBoolean(true)
+        private val thread = Thread(::run, "crv-api19-video").apply {
+            isDaemon = true
+            start()
+        }
+
+        private var decoder: MediaCodec? = null
+        private var lastCodec = VideoCodec.H264
+        private var lastConfig: ByteArray? = null
+        private var waitingForKeyFrame = true
+        private var firstRendered = false
+        private var lastKeyFrameRequestNs = 0L
+
+        fun configure(codec: VideoCodec, data: ByteArray) {
+            queue.offer(Job.Config(codec, data.copyOf()))
+        }
+
+        fun submit(data: ByteArray) {
+            if (queue.offer(Job.Frame(data.copyOf()))) return
+            queue.clear()
+            waitingForKeyFrame = true
+            requestKeyFrameIfDue()
+        }
+
+        override fun close() {
+            if (!running.compareAndSet(true, false)) return
+            thread.interrupt()
+        }
+
+        private fun run() {
+            try {
+                while (running.get()) {
+                    when (val job = queue.poll(20, TimeUnit.MILLISECONDS)) {
+                        is Job.Config -> configureNow(job.codec, job.data)
+                        is Job.Frame -> feed(job.data)
+                        null -> Unit
+                    }
+                    drain()
+                }
+            } catch (_: InterruptedException) {
+                // Normal shutdown.
+            } finally {
+                releaseDecoder()
+            }
+        }
+
+        private fun configureNow(videoCodec: VideoCodec, data: ByteArray) {
+            lastCodec = videoCodec
+            lastConfig = data.copyOf()
+            releaseDecoder()
+            waitingForKeyFrame = true
+            firstRendered = false
+
+            if (videoCodec != VideoCodec.H264) {
+                diagnostic("HEVC disabled on Android 4.4")
+                requestKeyFrameIfDue()
+                return
+            }
+
+            val (sps, pps) = MediaCodecSupport.avcParameterSets(data)
+            val format = MediaFormat.createVideoFormat(
+                MediaFormat.MIMETYPE_VIDEO_AVC,
+                width,
+                height,
+            )
+            format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, MAX_VIDEO_INPUT)
+            if (sps.isNotEmpty()) {
+                format.setByteBuffer("csd-0", ByteBuffer.wrap(START_CODE + sps))
+            }
+            if (pps.isNotEmpty()) {
+                format.setByteBuffer("csd-1", ByteBuffer.wrap(START_CODE + pps))
+            }
+
+            decoder = try {
+                MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).also { codec ->
+                    codec.configure(format, surface, null, 0)
+                    codec.start()
+                    diagnostic("API19 H.264 decoder ready")
+                }
+            } catch (error: Exception) {
+                diagnostic("H.264 decoder failed: ${error.javaClass.simpleName}")
+                null
+            }
+            requestKeyFrameIfDue()
+        }
+
+        private fun feed(packet: ByteArray) {
+            val config = lastConfig ?: return
+            if (decoder == null) configureNow(lastCodec, config)
+            val codec = decoder ?: return
+
+            val annexB = MediaCodecSupport.toAnnexB(packet)
+            if (annexB.isEmpty()) return
+
+            val randomAccess = MediaCodecSupport.isRandomAccess(annexB, lastCodec)
+            if (waitingForKeyFrame && !randomAccess) {
+                requestKeyFrameIfDue()
+                return
+            }
+            if (randomAccess) waitingForKeyFrame = false
+
+            try {
+                val index = codec.dequeueInputBuffer(VIDEO_INPUT_TIMEOUT_US)
+                if (index < 0) return
+                @Suppress("DEPRECATION")
+                val input = codec.inputBuffers[index]
+                input.clear()
+                if (annexB.size > input.remaining()) {
+                    codec.queueInputBuffer(index, 0, 0, 0L, 0)
+                    recover("video frame exceeds decoder input")
+                    return
+                }
+                input.put(annexB)
+                codec.queueInputBuffer(
+                    index,
+                    0,
+                    annexB.size,
+                    System.nanoTime() / 1000L,
+                    0,
+                )
+            } catch (error: Exception) {
+                recover("video input failed: ${error.javaClass.simpleName}")
+            }
+        }
+
+        private fun drain() {
+            val codec = decoder ?: return
+            val info = MediaCodec.BufferInfo()
+            try {
+                while (running.get()) {
+                    val index = codec.dequeueOutputBuffer(info, 0L)
+                    when {
+                        index == MediaCodec.INFO_TRY_AGAIN_LATER -> return
+                        index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> Unit
+                        index == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> Unit
+                        index >= 0 -> {
+                            codec.releaseOutputBuffer(index, true)
+                            if (!firstRendered) {
+                                firstRendered = true
+                                diagnostic("first frame rendered")
+                            }
+                        }
+                        else -> return
+                    }
+                }
+            } catch (error: Exception) {
+                recover("video output failed: ${error.javaClass.simpleName}")
+            }
+        }
+
+        private fun recover(reason: String) {
+            diagnostic(reason)
+            releaseDecoder()
+            waitingForKeyFrame = true
+            requestKeyFrameIfDue()
+        }
+
+        private fun requestKeyFrameIfDue() {
+            val now = System.nanoTime()
+            if (
+                lastKeyFrameRequestNs != 0L &&
+                now - lastKeyFrameRequestNs < KEYFRAME_INTERVAL_NS
+            ) return
+            lastKeyFrameRequestNs = now
+            runCatching(requestKeyFrame)
+        }
+
+        private fun releaseDecoder() {
+            val codec = decoder ?: return
+            decoder = null
+            runCatching { codec.stop() }
+            runCatching { codec.release() }
+        }
+    }
+
+    private class LegacyAudioRenderer(
+        private val format: AudioFormat,
+        private val report: (String) -> Unit,
+    ) : Closeable {
+        private data class Packet(val rtp: ByteArray, val sample: Int)
+
+        private val queue = LinkedBlockingQueue<Packet>(AUDIO_QUEUE_CAPACITY)
+        private val running = AtomicBoolean(true)
+        private val thread = Thread(::run, "crv-api19-audio").apply {
+            isDaemon = true
+        }
+
+        private var started = false
+        private var decoder: MediaCodec? = null
+        private var track: AudioTrack? = null
+
+        fun start() {
+            if (started) return
+            started = true
+            thread.start()
+        }
+
+        fun submit(rtp: ByteArray, sample: Int) {
+            if (!running.get()) return
+            if (!queue.offer(Packet(rtp.copyOf(), sample))) {
+                queue.poll()
+                queue.offer(Packet(rtp.copyOf(), sample))
+            }
+        }
+
+        override fun close() {
+            if (!running.compareAndSet(true, false)) return
+            thread.interrupt()
+        }
+
+        private fun run() {
+            try {
+                createTrack()
+                configureDecoder()
+                track?.play()
+                while (running.get()) {
+                    queue.poll(20, TimeUnit.MILLISECONDS)?.let(::handle)
+                    drainDecoder()
+                }
+            } catch (_: InterruptedException) {
+                // Normal shutdown.
+            } catch (error: Exception) {
+                report("Audio renderer failed: ${error.javaClass.simpleName}")
+            } finally {
+                release()
+            }
+        }
+
+        private fun createTrack() {
+            val channelMask = if (format.channels >= 2) {
+                AndroidAudioFormat.CHANNEL_OUT_STEREO
+            } else {
+                AndroidAudioFormat.CHANNEL_OUT_MONO
+            }
+            val encoding = AndroidAudioFormat.ENCODING_PCM_16BIT
+            val minimum = AudioTrack.getMinBufferSize(
+                format.sampleRate,
+                channelMask,
+                encoding,
+            )
+            if (minimum <= 0) {
+                report("AudioTrack unavailable")
+                return
+            }
+
+            val bufferBytes = maxOf(
+                minimum * 2,
+                format.sampleRate * format.channels * 2 / 5,
+            )
+            @Suppress("DEPRECATION")
+            val audio = AudioTrack(
+                AudioManager.STREAM_MUSIC,
+                format.sampleRate,
+                channelMask,
+                encoding,
+                bufferBytes,
+                AudioTrack.MODE_STREAM,
+            )
+            if (audio.state != AudioTrack.STATE_INITIALIZED) {
+                audio.release()
+                report("AudioTrack failed to initialize")
+                return
+            }
+            track = audio
+            report("Audio API19 ready: ${format.codec} ${format.sampleRate}Hz")
+        }
+
+        private fun configureDecoder() {
+            val mime = when (format.codec) {
+                AudioCodecKind.LPCM -> return
+                AudioCodecKind.AAC_LC -> MediaFormat.MIMETYPE_AUDIO_AAC
+                AudioCodecKind.OPUS -> "audio/opus"
+            }
+
+            val mediaFormat = MediaFormat().apply {
+                setString(MediaFormat.KEY_MIME, mime)
+                setInteger(MediaFormat.KEY_SAMPLE_RATE, format.sampleRate)
+                setInteger(MediaFormat.KEY_CHANNEL_COUNT, format.channels)
+                setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 64 * 1024)
+                if (format.codec == AudioCodecKind.AAC_LC) {
+                    setInteger("is-adts", 1)
+                    setByteBuffer(
+                        "csd-0",
+                        ByteBuffer.wrap(aacAudioSpecificConfig()),
+                    )
+                }
+            }
+
+            decoder = try {
+                MediaCodec.createDecoderByType(mime).also { codec ->
+                    codec.configure(mediaFormat, null, null, 0)
+                    codec.start()
+                }
+            } catch (error: Exception) {
+                report("Audio decoder unavailable: ${format.codec}")
+                null
+            }
+        }
+
+        private fun handle(packet: Packet) {
+            if (packet.rtp.size <= RTP_HEADER_BYTES) return
+            when (format.codec) {
+                AudioCodecKind.LPCM -> {
+                    val pcm = packet.rtp.copyOfRange(
+                        RTP_HEADER_BYTES,
+                        packet.rtp.size,
+                    )
+                    var index = 0
+                    while (index + 1 < pcm.size) {
+                        val first = pcm[index]
+                        pcm[index] = pcm[index + 1]
+                        pcm[index + 1] = first
+                        index += 2
+                    }
+                    writePcm(pcm)
+                }
+
+                AudioCodecKind.AAC_LC -> {
+                    val payload = packet.rtp.copyOfRange(
+                        RTP_HEADER_BYTES,
+                        packet.rtp.size,
+                    )
+                    if (payload.isNotEmpty()) {
+                        feedDecoder(
+                            MediaCodecSupport.adtsFrame(
+                                payload,
+                                format.sampleRate,
+                                format.channels,
+                            ),
+                            sampleTimestampUs(packet.sample),
+                        )
+                    }
+                }
+
+                AudioCodecKind.OPUS -> {
+                    val payload = packet.rtp.copyOfRange(
+                        RTP_HEADER_BYTES,
+                        packet.rtp.size,
+                    )
+                    if (payload.isNotEmpty()) {
+                        feedDecoder(payload, sampleTimestampUs(packet.sample))
+                    }
+                }
+            }
+        }
+
+        private fun feedDecoder(bytes: ByteArray, timestampUs: Long) {
+            val codec = decoder ?: return
+            try {
+                val index = codec.dequeueInputBuffer(AUDIO_INPUT_TIMEOUT_US)
+                if (index < 0) return
+                @Suppress("DEPRECATION")
+                val input = codec.inputBuffers[index]
+                input.clear()
+                if (bytes.size > input.remaining()) {
+                    codec.queueInputBuffer(index, 0, 0, 0L, 0)
+                    return
+                }
+                input.put(bytes)
+                codec.queueInputBuffer(index, 0, bytes.size, timestampUs, 0)
+            } catch (error: Exception) {
+                report("Audio decoder input failed")
+            }
+        }
+
+        private fun drainDecoder() {
+            val codec = decoder ?: return
+            val info = MediaCodec.BufferInfo()
+            try {
+                while (running.get()) {
+                    val index = codec.dequeueOutputBuffer(info, 0L)
+                    when {
+                        index == MediaCodec.INFO_TRY_AGAIN_LATER -> return
+                        index == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> Unit
+                        index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> Unit
+                        index >= 0 -> {
+                            if (info.size > 0) {
+                                @Suppress("DEPRECATION")
+                                val output = codec.outputBuffers[index]
+                                val pcm = ByteArray(info.size)
+                                output.position(info.offset)
+                                output.limit(info.offset + info.size)
+                                output.get(pcm)
+                                writePcm(pcm)
+                            }
+                            codec.releaseOutputBuffer(index, false)
+                        }
+                        else -> return
+                    }
+                }
+            } catch (error: Exception) {
+                report("Audio decoder output failed")
+            }
+        }
+
+        private fun writePcm(bytes: ByteArray) {
+            val audio = track ?: return
+            var offset = 0
+            while (offset < bytes.size && running.get()) {
+                @Suppress("DEPRECATION")
+                val written = audio.write(bytes, offset, bytes.size - offset)
+                if (written <= 0) return
+                offset += written
+            }
+        }
+
+        private fun sampleTimestampUs(sample: Int): Long =
+            (sample.toLong() and 0xffff_ffffL) * 1_000_000L / format.sampleRate
+
+        private fun aacAudioSpecificConfig(): ByteArray {
+            val frequencyIndex =
+                MediaCodecSupport.aacFrequencyIndex(format.sampleRate)
+            val value =
+                (AAC_LC_OBJECT_TYPE shl 11) or
+                    (frequencyIndex shl 7) or
+                    (format.channels.coerceIn(1, 7) shl 3)
+            return byteArrayOf(
+                (value ushr 8).toByte(),
+                value.toByte(),
+            )
+        }
+
+        private fun release() {
+            decoder?.let { codec ->
+                runCatching { codec.stop() }
+                runCatching { codec.release() }
+            }
+            decoder = null
+
+            track?.let { audio ->
+                runCatching { audio.stop() }
+                runCatching { audio.release() }
+            }
+            track = null
+        }
+    }
+
+    private companion object {
+        const val VIDEO_QUEUE_CAPACITY = 8
+        const val AUDIO_QUEUE_CAPACITY = 96
+        const val MAX_VIDEO_INPUT = 8 * 1024 * 1024
+        const val VIDEO_INPUT_TIMEOUT_US = 10_000L
+        const val AUDIO_INPUT_TIMEOUT_US = 10_000L
+        const val RTP_HEADER_BYTES = 12
+        const val AAC_LC_OBJECT_TYPE = 2
+        const val KEYFRAME_INTERVAL_NS = 1_000_000_000L
+        val START_CODE = byteArrayOf(0x00, 0x00, 0x00, 0x01)
+    }
+}
