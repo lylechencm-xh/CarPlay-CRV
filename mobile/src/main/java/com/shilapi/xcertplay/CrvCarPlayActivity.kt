@@ -43,6 +43,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private val io: ExecutorService = Executors.newSingleThreadExecutor()
     private var permissionReceiver: Closeable? = null
     private var attachReceiver: Closeable? = null
+    private var detachReceiver: Closeable? = null
 
     @Volatile private var awaitingCarPlayReattach = false
     private var pendingDevice: UsbDevice? = null
@@ -128,9 +129,23 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         }
 
         attachReceiver = usbHost.registerAttachReceiver { device ->
-            setStatus("iPhone attached")
+            reportStatus("iPhone attached")
             if (awaitingCarPlayReattach) requestPermissionForCarPlay(device)
             else requestPermission(device)
+        }
+        detachReceiver = usbHost.registerDetachReceiver {
+            if (!awaitingCarPlayReattach) {
+                runOnUiThread {
+                    controller?.close()
+                    controller = null
+                    pendingUsbSession?.close()
+                    pendingUsbSession = null
+                    pendingDevice = null
+                    reportStatus("iPhone disconnected")
+                }
+            } else {
+                reportStatus("iPhone switching USB mode")
+            }
         }
 
         prepareVpn()
@@ -186,15 +201,16 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     private fun beginUsb(device: UsbDevice) {
-        setStatus("Switching iPhone to CarPlay USB mode")
+        awaitingCarPlayReattach = true
+        reportStatus("Switching iPhone to CarPlay USB mode")
         usbHost.requestCarPlayReenumerationAsync(device, io) { result ->
             when (result) {
-                is IphoneUsbHost.TransitionResult.ReenumerationRequested -> {
-                    awaitingCarPlayReattach = true
-                    setStatus("Waiting for iPhone CarPlay USB mode")
+                is IphoneUsbHost.TransitionResult.ReenumerationRequested ->
+                    reportStatus("Waiting for iPhone CarPlay USB mode")
+                is IphoneUsbHost.TransitionResult.Failed -> {
+                    awaitingCarPlayReattach = false
+                    reportStatus("USB setup failed: ${result.error.message ?: "unknown"}")
                 }
-                is IphoneUsbHost.TransitionResult.Failed ->
-                    setStatus("USB setup failed: ${result.error.message ?: "unknown"}")
             }
         }
     }
@@ -289,6 +305,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         permissionReceiver = null
         attachReceiver?.close()
         attachReceiver = null
+        detachReceiver?.close()
+        detachReceiver = null
 
         controller?.close()
         controller = null
