@@ -11,7 +11,6 @@ import com.shilapi.xcertplay.airplay.AirPlaySession
 import com.shilapi.xcertplay.airplay.AirPlaySessionListener
 import com.shilapi.xcertplay.airplay.CarPlayMediaEngine
 import com.shilapi.xcertplay.iap2.session.Iap2Session
-import com.shilapi.xcertplay.media.AndroidMediaSink
 import com.shilapi.xcertplay.mfi.Iap2MfiAuthenticationClient
 import com.shilapi.xcertplay.mfi.MfiAuthenticator
 import com.shilapi.xcertplay.network.CarPlayVpnService
@@ -61,15 +60,11 @@ class CrvWiredCarPlayController(
     private val lockdownState = CrvLockdownState(appContext)
     private val deviceId = deviceId(identity.publicKey)
 
-    private val sink = AndroidMediaSink(
+    private val sink = CrvApi19MediaSink(
         surface = surface,
         videoWidth = displayWidth,
         videoHeight = displayHeight,
-        preferSoftwareHevcDecoder = false,
-        advancedAudioChannelMapping = false,
-        audioFocusEnabled = false,
-        context = appContext,
-        onAudioDiagnostic = { report(it) },
+        report = report,
     )
     private val media = CarPlayMediaEngine(
         sink = sink,
