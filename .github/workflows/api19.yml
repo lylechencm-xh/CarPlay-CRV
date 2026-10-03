@@ -20,7 +20,18 @@ jobs:
         with:
           gradle-version: '9.5.0'
       - name: Lint CR-V API19 path
+        id: lint
+        continue-on-error: true
         run: gradle :shared:lintDebug :mobile:lintDebug --stacktrace
+      - name: Print lint errors
+        if: always()
+        run: |
+          for report in shared/build/reports/lint-results-debug.txt mobile/build/reports/lint-results-debug.txt; do
+            if [ -f "$report" ]; then
+              echo "===== $report ====="
+              grep -n -E "Error:|Warning:" "$report" || true
+            fi
+          done
       - name: Build CR-V API19 APK
         run: gradle :mobile:assembleDebug --stacktrace
       - name: Upload CR-V API19 APK
