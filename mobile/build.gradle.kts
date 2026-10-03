@@ -15,7 +15,7 @@ android {
     defaultConfig {
         applicationId = "com.shihab.diplay"
         minSdk = 19
-        targetSdk = 37
+        targetSdk = 28
         versionCode = 29
         versionName = "0.2.10"
 
@@ -55,11 +55,7 @@ android {
 }
 
 dependencies {
-    implementation(project(":common"))
     implementation(project(":shared"))
-    implementation(libs.androidx.app.projected)
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.lifecycle.runtime.ktx)
 }
 
 // No implicit import. Only the two explicitly selected local runtime assets are allowed.
