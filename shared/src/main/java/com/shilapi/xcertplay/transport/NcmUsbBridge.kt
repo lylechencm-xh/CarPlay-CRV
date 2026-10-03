@@ -4,12 +4,9 @@ import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbConstants
-import android.hardware.usb.UsbRequest
 import android.util.Log
 import java.io.Closeable
-import java.nio.ByteBuffer
 import java.util.ArrayDeque
-import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -41,13 +38,6 @@ class NcmUsbBridge internal constructor(
     private var buffered = ByteArray(0)
     private var bufferedSize = 0
     private val readBuffer = ByteArray(READ_CHUNK_BYTES)
-    // Bulk IN uses one persistent async request: bulkTransfer() pins its byte[] in a JNI critical
-    // section for the whole wait, which blocks ART's GC thread flip and, with it, every other USB
-    // transfer (seen as ~0.8 s stalls of video and audio). A timed-out request stays queued, so no
-    // data is lost between calls. This is the only requestWait() user on this connection.
-    private val directReadBuffer = ByteBuffer.allocateDirect(READ_CHUNK_BYTES)
-    private var readRequest: UsbRequest? = null
-    private var readQueued = false
     private val statusRunning = AtomicBoolean(statusEndpoint != null)
     private val statusThread = statusEndpoint?.let { endpoint ->
         Thread({ drainStatus(endpoint) }, "ncm-status-in").apply {
@@ -112,13 +102,10 @@ class NcmUsbBridge internal constructor(
 
     override fun close() {
         statusRunning.set(false)
-        val requestToClose = synchronized(stateLock) {
+        synchronized(stateLock) {
             if (closed) return
             closed = true
-            readRequest
         }
-        // Wakes a reader blocked in requestWait(); it then observes the closed state.
-        runCatching { requestToClose?.cancel() }
         statusThread?.let { thread ->
             thread.interrupt()
             try {
@@ -135,7 +122,6 @@ class NcmUsbBridge internal constructor(
             }
         }
         connection.close()
-        runCatching { requestToClose?.close() }
     }
 
     private fun drainStatus(endpoint: UsbEndpoint) {
@@ -219,47 +205,18 @@ class NcmUsbBridge internal constructor(
 
     private fun readChunk(timeoutMillis: Long): Int? {
         checkOpen()
-        val request = try {
-            // Publish and queue atomically with close(), so detach cannot miss a new request.
-            synchronized(stateLock) {
-                checkOpenLocked()
-                val current = readRequest ?: UsbRequest().also {
-                    if (!it.initialize(connection, inEndpoint)) {
-                        it.close()
-                        throw failSession("Android could not initialize the NCM read request")
-                    }
-                    readRequest = it
-                }
-                if (!readQueued) {
-                    directReadBuffer.clear()
-                    if (!current.queue(directReadBuffer)) throw failSession("Android could not queue the NCM read request")
-                    readQueued = true
-                }
-                current
-            }
+        val length = minOf(readBuffer.size, LEGACY_USB_TRANSFER_LIMIT)
+        val transferred = try {
+            connection.bulkTransfer(
+                inEndpoint,
+                readBuffer,
+                length,
+                timeoutMillis.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt(),
+            )
         } catch (error: RuntimeException) {
             throw failSession("NCM read failed", error)
         }
-        try {
-            val completed = try {
-                connection.requestWait(timeoutMillis.coerceAtLeast(1))
-            } catch (_: TimeoutException) {
-                // Nothing arrived yet; the request stays queued for the next call. USBMUX owns
-                // authoritative detach/failure detection for the same phone.
-                return null
-            } ?: throw failSession("Android returned no NCM read request")
-            if (completed !== request) throw failSession("Android completed an unexpected NCM request")
-            readQueued = false
-            val transferred = directReadBuffer.position()
-            if (transferred <= 0) return null
-            directReadBuffer.flip()
-            directReadBuffer.get(readBuffer, 0, transferred)
-            return transferred
-        } catch (error: IphoneUsbException) {
-            throw error
-        } catch (error: RuntimeException) {
-            throw failSession("NCM read failed", error)
-        }
+        return if (transferred <= 0) null else transferred
     }
 
     private fun failSession(message: String, cause: Throwable? = null): IphoneUsbException.DeviceUnavailable {
@@ -290,6 +247,7 @@ class NcmUsbBridge internal constructor(
 
     companion object {
         private const val READ_CHUNK_BYTES = 32 * 1024
+        private const val LEGACY_USB_TRANSFER_LIMIT = 16 * 1024
         private const val USB_PACKET_SIZE = 512
         private const val STATUS_POLL_TIMEOUT_MILLIS = 20
         private const val STATUS_POLL_INTERVAL_MILLIS = 500L
@@ -313,7 +271,7 @@ class NcmUsbBridge internal constructor(
                 val firstClaimed = connection.claimInterface(first, true)
                 Log.i(
                     IphoneCarPlayConfiguration.TAG,
-                    "claim iface=${first.id}/${first.alternateSetting} class=${first.interfaceClass}" +
+                    "claim iface=${first.id} class=${first.interfaceClass}" +
                         " subclass=${first.interfaceSubclass} proto=${first.interfaceProtocol} ok=$firstClaimed",
                 )
                 if (!firstClaimed) {
@@ -326,8 +284,7 @@ class NcmUsbBridge internal constructor(
                     val dataClaimed = connection.claimInterface(function.data, true)
                     Log.i(
                         IphoneCarPlayConfiguration.TAG,
-                        "claim iface=${function.data.id}/${function.data.alternateSetting}" +
-                            " class=${function.data.interfaceClass} ok=$dataClaimed",
+                        "claim iface=${function.data.id} class=${function.data.interfaceClass} ok=$dataClaimed",
                     )
                     if (!dataClaimed) {
                         throw IphoneUsbException.DeviceUnavailable(
@@ -336,14 +293,22 @@ class NcmUsbBridge internal constructor(
                     }
                     claimed.add(function.data)
                 }
-                val altSelected = connection.setInterface(function.data)
+                val altSelected = connection.controlTransfer(
+                    UsbConstants.USB_DIR_OUT or UsbConstants.USB_TYPE_STANDARD or USB_RECIP_INTERFACE,
+                    USB_REQUEST_SET_INTERFACE,
+                    function.dataAlternateSetting,
+                    function.data.id,
+                    null,
+                    0,
+                    USB_CONTROL_TIMEOUT_MILLIS,
+                ) >= 0
                 Log.i(
                     IphoneCarPlayConfiguration.TAG,
-                    "setInterface iface=${function.data.id}/${function.data.alternateSetting} ok=$altSelected",
+                    "SET_INTERFACE iface=${function.data.id} alt=${function.dataAlternateSetting} ok=$altSelected",
                 )
                 if (!altSelected) {
                     throw IphoneUsbException.DeviceUnavailable(
-                        "Android could not select the NCM data alternate setting",
+                        "Android 4.4 could not select the NCM data alternate setting",
                     )
                 }
                 Log.i(
@@ -418,6 +383,8 @@ class NcmUsbBridge internal constructor(
         private fun ByteArray.macString(): String =
             joinToString(":") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
+        private const val USB_RECIP_INTERFACE = 0x01
+        private const val USB_REQUEST_SET_INTERFACE = 0x0b
         private const val USB_INTERFACE_DESCRIPTOR_TYPE = 0x04
         private const val USB_REQUEST_GET_DESCRIPTOR = 0x06
         private const val USB_STRING_DESCRIPTOR_TYPE = 0x03
