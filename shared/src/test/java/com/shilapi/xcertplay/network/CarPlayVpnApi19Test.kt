@@ -4,6 +4,7 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbEndpoint
 import android.net.VpnService
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import com.shilapi.xcertplay.airplay.AirPlayConfig
 import com.shilapi.xcertplay.airplay.AirPlayDisplayConfig
@@ -28,10 +29,12 @@ import org.robolectric.util.ReflectionHelpers
 import org.robolectric.util.ReflectionHelpers.ClassParameter
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [19], manifest = Config.NONE, shadows = [VpnApi19BuilderShadow::class])
+@Config(sdk = [21], manifest = Config.NONE, shadows = [VpnApi19BuilderShadow::class])
 class CarPlayVpnApi19Test {
     @Test fun api19SkipsModernVpnScopingAndReleasesFailedAttachment() {
         VpnApi19Boundary.calls.clear()
+        val originalSdk = Build.VERSION.SDK_INT
+        ReflectionHelpers.setStaticField(Build.VERSION::class.java, "SDK_INT", 19)
         val controller = Robolectric.buildService(CarPlayVpnService::class.java).create()
         try {
             val service = controller.get()
@@ -60,6 +63,7 @@ class CarPlayVpnApi19Test {
             assertNull(ReflectionHelpers.getField<Any?>(service, "tun"))
         } finally {
             controller.destroy()
+            ReflectionHelpers.setStaticField(Build.VERSION::class.java, "SDK_INT", originalSdk)
         }
     }
 
