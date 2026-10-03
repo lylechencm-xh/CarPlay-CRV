@@ -19,6 +19,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '9.5.0'
+      - name: Lint CR-V API19 path
+        run: gradle :shared:lintDebug :mobile:lintDebug --stacktrace
       - name: Build CR-V API19 APK
         run: gradle :mobile:assembleDebug --stacktrace
       - name: Upload CR-V API19 APK
