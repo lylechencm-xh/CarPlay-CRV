@@ -60,7 +60,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         usbHost = IphoneUsbHost(this, usbManager, IphoneUsbMatcher.appleVendor())
         permissionReceiver = usbHost.registerPermissionReceiver { result ->
             when (result) {
-                is IphoneUsbHost.PermissionResult.Granted -> beginUsb(result.device)
+                is IphoneUsbHost.PermissionResult.Granted ->
+                    if (awaitingCarPlayReattach) openCarPlayUsb(result.device) else beginUsb(result.device)
                 is IphoneUsbHost.PermissionResult.Denied -> setStatus("USB permission denied")
             }
         }
