@@ -23,9 +23,11 @@ import com.shilapi.xcertplay.transport.Iap2WiredControlClient
 import com.shilapi.xcertplay.transport.IphoneUsbException
 import com.shilapi.xcertplay.transport.LockdownCarKitClient
 import com.shilapi.xcertplay.transport.LockdownPairingClient
+import com.shilapi.xcertplay.transport.LockdownPairRecord
 import com.shilapi.xcertplay.transport.NcmFunctionDiscovery
 import com.shilapi.xcertplay.transport.NcmUsbBridge
 import java.io.Closeable
+import java.security.GeneralSecurityException
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
@@ -56,6 +58,7 @@ class CrvWiredCarPlayController(
     private val airPlayState = CrvAirPlayState(appContext)
     private val identity = airPlayState.identity
     private val pairingStore = airPlayState.pairingStore()
+    private val lockdownState = CrvLockdownState(appContext)
     private val deviceId = deviceId(identity.publicKey)
 
     private val sink = AndroidMediaSink(
@@ -143,16 +146,24 @@ class CrvWiredCarPlayController(
         mux = host
         report("USBMUX ready")
 
-        val paired = LockdownPairingClient(host).pair(
-            label = LABEL,
-            hostId = UUID.randomUUID().toString().uppercase(Locale.US),
-            systemBuid = UUID.randomUUID().toString().uppercase(Locale.US),
-            totalTimeoutMillis = PAIR_TIMEOUT_MILLIS,
-            isCancelled = { closed.get() },
-        )
-        report("iPhone Lockdown paired")
-
-        val carkit = LockdownCarKitClient(host).open(paired, LABEL)
+        val carKitClient = LockdownCarKitClient(host)
+        var pairRecord = lockdownState.load()
+        val carkit = if (pairRecord != null) {
+            report("Using saved iPhone pairing")
+            try {
+                carKitClient.open(pairRecord, LABEL)
+            } catch (error: Throwable) {
+                if (!isPairRejection(error)) throw error
+                report("Saved iPhone pairing rejected; pairing again")
+                lockdownState.clear()
+                pairRecord = pairNew(host)
+                carKitClient.open(pairRecord, LABEL)
+            }
+        } else {
+            pairRecord = pairNew(host)
+            carKitClient.open(pairRecord, LABEL)
+        }
+        report("iPhone Lockdown ready")
         val session = Iap2Session.open(
             underlying = carkit,
             traceContext = "crv-wired",
@@ -220,6 +231,35 @@ class CrvWiredCarPlayController(
             timeoutMillis = Iap2WiredControlClient.NO_TIMEOUT_MILLIS,
             onProgress = { report(it) },
         )
+    }
+
+    private fun pairNew(host: Iap2UsbMuxHost): LockdownPairRecord {
+        val paired = LockdownPairingClient(host).pair(
+            label = LABEL,
+            hostId = UUID.randomUUID().toString().uppercase(Locale.US),
+            systemBuid = UUID.randomUUID().toString().uppercase(Locale.US),
+            totalTimeoutMillis = PAIR_TIMEOUT_MILLIS,
+            isCancelled = { closed.get() },
+        )
+        lockdownState.save(paired.pairRecord)
+        report("iPhone Lockdown paired and saved")
+        return paired.pairRecord
+    }
+
+    private fun isPairRejection(error: Throwable): Boolean {
+        var cause: Throwable? = error
+        while (cause != null) {
+            if (cause is GeneralSecurityException) return true
+            val message = cause.message.orEmpty()
+            if (
+                message.contains("InvalidHost", ignoreCase = true) ||
+                message.contains("InvalidPair", ignoreCase = true) ||
+                message.contains("PairRecord", ignoreCase = true) ||
+                message.contains("HostID", ignoreCase = true)
+            ) return true
+            cause = cause.cause
+        }
+        return false
     }
 
     private fun openNcm(device: UsbDevice): NcmUsbBridge {
