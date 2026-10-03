@@ -254,6 +254,11 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             displayWidth = surfaceWidth,
             displayHeight = surfaceHeight,
             report = ::reportStatus,
+            onStopped = {
+                runOnUiThread {
+                    controller = null
+                }
+            },
         )
         controller = next
         setStatus("Starting wired CarPlay")
