@@ -285,11 +285,11 @@ class IphoneUsbHost(
             appContext,
             0,
             intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            PendingIntent.FLAG_UPDATE_CURRENT or immutablePendingIntentFlag(),
         )
     }
 
-    private fun registerReceiver(filter: IntentFilter, onReceive: (Intent) -> Unit): Closeable {
+    private fun immutablePendingIntentFlag(): Int =\n        if (Build.VERSION.SDK_INT >= 23) 0x04000000 else 0\n\n    private fun registerReceiver(filter: IntentFilter, onReceive: (Intent) -> Unit): Closeable {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) = onReceive(intent)
         }
@@ -373,12 +373,7 @@ class Iap2UsbSession internal constructor(
                     "Android could not queue USBMUX read request (${requestDiagnostics(timeoutMillis, buffer.capacity())})",
                 )
             }
-            val completed = try {
-                connection.requestWait(timeoutMillis)
-            } catch (_: TimeoutException) {
-                drainCancelledRead(request)
-                return@synchronized null
-            }
+            val completed = requestWaitCompat(timeoutMillis, request) ?: return@synchronized null
             if (completed == null) {
                 throw failSession("Android returned no USBMUX read request")
             }
@@ -425,17 +420,13 @@ class Iap2UsbSession internal constructor(
         if (!request.cancel()) {
             throw failSession("Android could not cancel timed out USBMUX read request")
         }
-        val completed = try {
-            connection.requestWait(CANCEL_DRAIN_TIMEOUT_MILLIS)
-        } catch (_: TimeoutException) {
-            throw failSession("Timed out draining cancelled USBMUX read request")
-        }
+        val completed = requestWaitCompat(CANCEL_DRAIN_TIMEOUT_MILLIS, request)\n            ?: throw failSession("Timed out draining cancelled USBMUX read request")
         if (completed !== request) {
             throw failSession("Android did not drain the cancelled USBMUX read request")
         }
     }
 
-    private fun failSession(message: String, cause: Throwable? = null): IphoneUsbException.DeviceUnavailable {
+    /** API 19 has only blocking requestWait(); poll cancellation from a helper thread is unsafe.\n     * Use bulkTransfer with a timeout on KitKat, and the timed UsbRequest API on API 26+. */\n    private fun requestWaitCompat(timeoutMillis: Long, request: UsbRequest): UsbRequest? {\n        if (Build.VERSION.SDK_INT >= 26) {\n            return try { connection.requestWait(timeoutMillis) } catch (_: TimeoutException) {\n                if (!request.cancel()) throw failSession("Android could not cancel timed out USBMUX read request")\n                null\n            }\n        }\n        // Pre-26 requestWait() has no timeout. The caller must not block forever on API 19.\n        throw IphoneUsbException.TimedOut("Timed UsbRequest reads require API 26; use legacy bulkTransfer reader on API 19")\n    }\n\n    private fun failSession(message: String, cause: Throwable? = null): IphoneUsbException.DeviceUnavailable {
         val error = IphoneUsbException.DeviceUnavailable(message, cause)
         synchronized(stateLock) {
             if (failure == null) failure = error
