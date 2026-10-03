@@ -32,6 +32,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private var permissionReceiver: Closeable? = null
     private var attachReceiver: Closeable? = null
     private var usbSession: Iap2UsbSession? = null
+    @Volatile private var awaitingCarPlayReattach = false
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
@@ -65,7 +66,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         }
         attachReceiver = usbHost.registerAttachReceiver { device ->
             setStatus("iPhone reattached")
-            requestPermission(device)
+            if (awaitingCarPlayReattach) requestPermissionForCarPlay(device) else requestPermission(device)
         }
 
         val device = usbHost.discover().firstOrNull()
@@ -79,12 +80,21 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         }
     }
 
+    private fun requestPermissionForCarPlay(device: UsbDevice) {
+        when (usbHost.requestPermission(device)) {
+            is IphoneUsbHost.PermissionRequest.AlreadyGranted -> openCarPlayUsb(device)
+            is IphoneUsbHost.PermissionRequest.Requested -> setStatus("Waiting for CarPlay USB permission")
+        }
+    }
+
     private fun beginUsb(device: UsbDevice) {
         setStatus("Starting CarPlay USB mode")
         usbHost.requestCarPlayReenumerationAsync(device, io) { result ->
             when (result) {
-                is IphoneUsbHost.TransitionResult.ReenumerationRequested ->
+                is IphoneUsbHost.TransitionResult.ReenumerationRequested -> {
+                    awaitingCarPlayReattach = true
                     setStatus("Waiting for iPhone CarPlay USB mode")
+                }
                 is IphoneUsbHost.TransitionResult.Failed ->
                     setStatus("USB setup failed: ${result.error.message ?: "unknown"}")
             }
@@ -95,6 +105,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         usbHost.openIap2UsbSessionAsync(device, io) { result ->
             when (result) {
                 is IphoneUsbHost.Iap2SessionResult.Connected -> {
+                    awaitingCarPlayReattach = false
                     usbSession?.close()
                     usbSession = result.session
                     setStatus("USBMUX connected")
