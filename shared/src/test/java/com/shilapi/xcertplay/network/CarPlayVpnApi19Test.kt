@@ -34,10 +34,10 @@ class CarPlayVpnApi19Test {
     @Test fun api19SkipsModernVpnScopingAndReleasesFailedAttachment() {
         VpnApi19Boundary.calls.clear()
         val originalSdk = Build.VERSION.SDK_INT
-        ReflectionHelpers.setStaticField(Build.VERSION::class.java, "SDK_INT", 19)
         val controller = Robolectric.buildService(CarPlayVpnService::class.java).create()
         try {
             val service = controller.get()
+            ReflectionHelpers.setStaticField(Build.VERSION::class.java, "SDK_INT", 19)
             val result = service.attach(
                 ncm(),
                 "fe80::1234",
@@ -62,8 +62,8 @@ class CarPlayVpnApi19Test {
             assertNull(ReflectionHelpers.getField<Any?>(service, "bridge"))
             assertNull(ReflectionHelpers.getField<Any?>(service, "tun"))
         } finally {
-            controller.destroy()
             ReflectionHelpers.setStaticField(Build.VERSION::class.java, "SDK_INT", originalSdk)
+            controller.destroy()
         }
     }
 
