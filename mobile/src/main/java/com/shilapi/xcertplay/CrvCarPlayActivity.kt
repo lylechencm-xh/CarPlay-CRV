@@ -27,55 +27,48 @@ import java.io.Closeable
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-/**
- * 2021 Honda CR-V / Android 4.4 wired CarPlay entry point.
- *
- * Platform APIs only: no Compose, Media3, Android Auto or wireless path.
- */
+/** Android 4.4 wired CarPlay entry point for the 2021 Honda CR-V. */
 class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private lateinit var usbManager: UsbManager
     private lateinit var usbHost: IphoneUsbHost
     private lateinit var video: TextureView
     private lateinit var status: TextView
 
-    private val usbIo: ExecutorService =
-        Executors.newSingleThreadExecutor { task -> Thread(task, "crv-usb").apply { isDaemon = true } }
-
+    private val io: ExecutorService = Executors.newSingleThreadExecutor()
     private var permissionReceiver: Closeable? = null
     private var attachReceiver: Closeable? = null
-    private var pendingUsbSession: Iap2UsbSession? = null
 
     @Volatile private var awaitingCarPlayReattach = false
-    private var initialUsbStarted = false
+    private var pendingUsbSession: Iap2UsbSession? = null
+    private var pendingUsbDevice: UsbDevice? = null
 
-    private var videoSurface: Surface? = null
-    private var surfaceWidth = 0
-    private var surfaceHeight = 0
+    private var renderSurface: Surface? = null
+    private var renderWidth = 0
+    private var renderHeight = 0
 
-    private var vpnReady = false
-    private var vpnBound = false
     private var vpnService: CarPlayVpnService? = null
+    private var vpnBound = false
     private var controller: CrvWiredCarPlayController? = null
 
     private val vpnConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
             vpnService = (binder as CarPlayVpnService.LocalBinder).service
-            setStatus("CarPlay network service ready")
-            maybeStartInitialUsb()
+            vpnBound = true
+            setStatus("CarPlay network ready")
             maybeStartController()
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
             vpnService = null
+            vpnBound = false
             controller?.close()
             controller = null
-            setStatus("CarPlay network service disconnected")
+            setStatus("CarPlay network service stopped")
         }
     }
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
-
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
@@ -83,8 +76,15 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             surfaceTextureListener = this@CrvCarPlayActivity
             isOpaque = true
             setOnTouchListener { view, event ->
-                handleTouch(view, event)
-                true
+                val active = controller ?: return@setOnTouchListener false
+                if (view.width <= 0 || view.height <= 0) return@setOnTouchListener false
+                val down = event.actionMasked != MotionEvent.ACTION_UP &&
+                    event.actionMasked != MotionEvent.ACTION_CANCEL
+                active.sendTouch(
+                    event.x.toDouble() / view.width.toDouble(),
+                    event.y.toDouble() / view.height.toDouble(),
+                    down,
+                )
             }
         }
 
@@ -102,107 +102,77 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             addView(status, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         })
 
+        prepareVpn()
+        prepareUsb()
+    }
+
+    private fun prepareVpn() {
+        val consent = CarPlayVpnService.prepare(this)
+        if (consent == null) {
+            bindVpnService()
+        } else {
+            setStatus("Allow CarPlay network access")
+            startActivityForResult(consent, REQUEST_VPN)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_VPN) return
+        if (resultCode == RESULT_OK) {
+            bindVpnService()
+        } else {
+            setStatus("VPN permission is required for wired CarPlay")
+        }
+    }
+
+    private fun bindVpnService() {
+        if (vpnBound) return
+        val intent = Intent(this, CarPlayVpnService::class.java)
+        if (!bindService(intent, vpnConnection, Context.BIND_AUTO_CREATE)) {
+            setStatus("Could not start CarPlay network service")
+        }
+    }
+
+    private fun prepareUsb() {
         usbManager = getSystemService(USB_SERVICE) as UsbManager
         usbHost = IphoneUsbHost(this, usbManager, IphoneUsbMatcher.appleVendor())
 
         permissionReceiver = usbHost.registerPermissionReceiver { result ->
             when (result) {
-                is IphoneUsbHost.PermissionResult.Granted -> {
-                    if (awaitingCarPlayReattach) {
-                        openCarPlayUsb(result.device)
-                    } else {
-                        beginUsb(result.device)
-                    }
-                }
-                is IphoneUsbHost.PermissionResult.Denied ->
-                    setStatus("USB permission denied")
+                is IphoneUsbHost.PermissionResult.Granted ->
+                    if (awaitingCarPlayReattach) openCarPlayUsb(result.device) else beginUsb(result.device)
+                is IphoneUsbHost.PermissionResult.Denied -> setStatus("USB permission denied")
             }
         }
 
         attachReceiver = usbHost.registerAttachReceiver { device ->
             setStatus("iPhone attached")
-            if (!prerequisitesReady()) {
-                setStatus("iPhone detected; preparing CarPlay network")
-                return@registerAttachReceiver
-            }
-            if (awaitingCarPlayReattach) {
-                requestPermissionForCarPlay(device)
-            } else {
-                requestPermission(device)
-            }
+            if (awaitingCarPlayReattach) requestPermissionForCarPlay(device) else requestPermission(device)
         }
-
-        vpnBound = bindService(
-            Intent(this, CarPlayVpnService::class.java),
-            vpnConnection,
-            Context.BIND_AUTO_CREATE,
-        )
-        if (!vpnBound) {
-            setStatus("Could not start CarPlay network service")
-        }
-
-        requestVpnPermission()
-    }
-
-    private fun requestVpnPermission() {
-        val prepare = CarPlayVpnService.prepare(this)
-        if (prepare == null) {
-            vpnReady = true
-            maybeStartInitialUsb()
-            return
-        }
-        setStatus("Approve CarPlay network connection")
-        startActivityForResult(prepare, REQUEST_VPN)
-    }
-
-    @Deprecated("Deprecated in Android API 30; required for Android 4.4")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQUEST_VPN) return
-        vpnReady = resultCode == RESULT_OK
-        if (vpnReady) {
-            setStatus("CarPlay network approved")
-            maybeStartInitialUsb()
-            maybeStartController()
-        } else {
-            setStatus("CarPlay network permission denied")
-        }
-    }
-
-    private fun prerequisitesReady(): Boolean =
-        vpnReady && vpnService != null && videoSurface != null
-
-    private fun maybeStartInitialUsb() {
-        if (initialUsbStarted || !prerequisitesReady()) return
-        initialUsbStarted = true
 
         val device = usbHost.discover().firstOrNull()
-        if (device == null) {
-            setStatus("Connect iPhone by USB")
-        } else {
-            requestPermission(device)
-        }
+        if (device == null) setStatus("Connect iPhone by USB") else requestPermission(device)
     }
 
     private fun requestPermission(device: UsbDevice) {
         when (usbHost.requestPermission(device)) {
             is IphoneUsbHost.PermissionRequest.AlreadyGranted -> beginUsb(device)
-            is IphoneUsbHost.PermissionRequest.Requested ->
-                setStatus("Waiting for USB permission")
+            is IphoneUsbHost.PermissionRequest.Requested -> setStatus("Waiting for USB permission")
         }
     }
 
     private fun requestPermissionForCarPlay(device: UsbDevice) {
         when (usbHost.requestPermission(device)) {
             is IphoneUsbHost.PermissionRequest.AlreadyGranted -> openCarPlayUsb(device)
-            is IphoneUsbHost.PermissionRequest.Requested ->
-                setStatus("Waiting for CarPlay USB permission")
+            is IphoneUsbHost.PermissionRequest.Requested -> setStatus("Waiting for CarPlay USB permission")
         }
     }
 
     private fun beginUsb(device: UsbDevice) {
         setStatus("Switching iPhone to CarPlay USB mode")
-        usbHost.requestCarPlayReenumerationAsync(device, usbIo) { result ->
+        usbHost.requestCarPlayReenumerationAsync(device, io) { result ->
             when (result) {
                 is IphoneUsbHost.TransitionResult.ReenumerationRequested -> {
                     awaitingCarPlayReattach = true
@@ -215,14 +185,13 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     private fun openCarPlayUsb(device: UsbDevice) {
-        setStatus("Opening CarPlay USB data path")
-        usbHost.openIap2UsbSessionAsync(device, usbIo) { result ->
+        usbHost.openIap2UsbSessionAsync(device, io) { result ->
             when (result) {
                 is IphoneUsbHost.Iap2SessionResult.Connected -> {
                     awaitingCarPlayReattach = false
                     pendingUsbSession?.close()
                     pendingUsbSession = result.session
-                    pendingDevice = device
+                    pendingUsbDevice = device
                     setStatus("USBMUX connected")
                     maybeStartController()
                 }
@@ -232,46 +201,29 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         }
     }
 
-    @Volatile private var pendingDevice: UsbDevice? = null
-
+    @Synchronized
     private fun maybeStartController() {
-        val service = vpnService ?: return
-        val surface = videoSurface ?: return
-        val device = pendingDevice ?: return
+        if (controller != null) return
         val session = pendingUsbSession ?: return
-        if (!vpnReady || controller != null) return
+        val device = pendingUsbDevice ?: return
+        val surface = renderSurface ?: return
+        val vpn = vpnService ?: return
+        if (renderWidth <= 0 || renderHeight <= 0) return
 
         pendingUsbSession = null
-        pendingDevice = null
-
-        val next = CrvWiredCarPlayController(
+        pendingUsbDevice = null
+        controller = CrvWiredCarPlayController(
             context = this,
             usbManager = usbManager,
-            vpn = service,
+            vpn = vpn,
             surface = surface,
-            displayWidth = surfaceWidth.coerceAtLeast(1),
-            displayHeight = surfaceHeight.coerceAtLeast(1),
+            displayWidth = renderWidth,
+            displayHeight = renderHeight,
             report = ::setStatus,
-        )
-        controller = next
-        setStatus("Starting CarPlay protocol")
-        next.start(device, session)
-    }
-
-    private fun handleTouch(view: TextureView, event: MotionEvent) {
-        val width = view.width
-        val height = view.height
-        if (width <= 0 || height <= 0) return
-
-        val down = when (event.actionMasked) {
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> false
-            else -> true
+        ).also {
+            setStatus("Starting wired CarPlay")
+            it.start(device, session)
         }
-        controller?.sendTouch(
-            x = event.x.toDouble() / width.toDouble(),
-            y = event.y.toDouble() / height.toDouble(),
-            down = down,
-        )
     }
 
     private fun setStatus(message: String) {
@@ -279,21 +231,16 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
-        videoSurface?.release()
-        videoSurface = Surface(texture)
-        surfaceWidth = width
-        surfaceHeight = height
-        maybeStartInitialUsb()
+        renderSurface?.release()
+        renderSurface = Surface(texture)
+        renderWidth = width
+        renderHeight = height
         maybeStartController()
     }
 
-    override fun onSurfaceTextureSizeChanged(
-        texture: SurfaceTexture,
-        width: Int,
-        height: Int,
-    ) {
-        surfaceWidth = width
-        surfaceHeight = height
+    override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) {
+        renderWidth = width
+        renderHeight = height
     }
 
     override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
@@ -301,34 +248,29 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
         controller?.close()
         controller = null
-        videoSurface?.release()
-        videoSurface = null
+        renderSurface?.release()
+        renderSurface = null
         return true
     }
 
     override fun onDestroy() {
         controller?.close()
         controller = null
-
         pendingUsbSession?.close()
         pendingUsbSession = null
-
         permissionReceiver?.close()
         attachReceiver?.close()
-
         if (vpnBound) {
             runCatching { unbindService(vpnConnection) }
             vpnBound = false
         }
-
-        videoSurface?.release()
-        videoSurface = null
-
-        usbIo.shutdownNow()
+        renderSurface?.release()
+        renderSurface = null
+        io.shutdownNow()
         super.onDestroy()
     }
 
-    companion object {
-        private const val REQUEST_VPN = 4101
+    private companion object {
+        const val REQUEST_VPN = 4201
     }
 }
