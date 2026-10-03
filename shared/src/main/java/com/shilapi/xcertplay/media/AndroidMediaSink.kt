@@ -930,14 +930,19 @@ private class AudioRenderer(
         val built: AudioTrack
         var routeLabel: String
         if (streamOverride == 0) {
-            val attributes = audioAttributesFor(selection)
-            routeLabel = "usage"
-            built = AudioTrack.Builder()
-                .setAudioAttributes(attributes)
-                .setAudioFormat(pcmFormat(encoding, channelMask))
-                .setTransferMode(AudioTrack.MODE_STREAM)
-                .setBufferSizeInBytes(plan.trackBufferBytes)
-                .build()
+            routeLabel = if (Build.VERSION.SDK_INT >= 21) "usage" else "streamType=music(api19)"
+            built = if (Build.VERSION.SDK_INT >= 21) {
+                AudioTrack.Builder()
+                    .setAudioAttributes(audioAttributesFor(selection))
+                    .setAudioFormat(pcmFormat(encoding, channelMask))
+                    .setTransferMode(AudioTrack.MODE_STREAM)
+                    .setBufferSizeInBytes(plan.trackBufferBytes)
+                    .build()
+            } else {
+                @Suppress("DEPRECATION")
+                AudioTrack(AudioManager.STREAM_MUSIC, format.sampleRate, channelMask, encoding,
+                    plan.trackBufferBytes, AudioTrack.MODE_STREAM)
+            }
         } else {
             val streamType = streamOverride
             routeLabel = "streamType=$streamType"
@@ -951,18 +956,24 @@ private class AudioRenderer(
                 createFallback = {
                     routeLabel = "streamType=$streamType(fallback=usage)"
                     Log.w(TAG, "streamType=$streamType rejected by this ROM; falling back to usage-based track")
-                    AudioTrack.Builder()
-                        .setAudioAttributes(audioAttributesFor(selection))
-                        .setAudioFormat(pcmFormat(encoding, channelMask))
-                        .setTransferMode(AudioTrack.MODE_STREAM)
-                        .setBufferSizeInBytes(plan.trackBufferBytes)
-                        .build()
+                    if (Build.VERSION.SDK_INT >= 21) {
+                        AudioTrack.Builder()
+                            .setAudioAttributes(audioAttributesFor(selection))
+                            .setAudioFormat(pcmFormat(encoding, channelMask))
+                            .setTransferMode(AudioTrack.MODE_STREAM)
+                            .setBufferSizeInBytes(plan.trackBufferBytes)
+                            .build()
+                    } else {
+                        @Suppress("DEPRECATION")
+                        AudioTrack(AudioManager.STREAM_MUSIC, format.sampleRate, channelMask, encoding,
+                            plan.trackBufferBytes, AudioTrack.MODE_STREAM)
+                    }
                 },
             )
         }
         track = built
-        trackAttributes = built.audioAttributes
-        val capacityBytes = built.bufferSizeInFrames * frameBytes
+        trackAttributes = if (Build.VERSION.SDK_INT >= 21) built.audioAttributes else attributes
+        val capacityBytes = if (Build.VERSION.SDK_INT >= 23) built.bufferSizeInFrames * frameBytes else plan.trackBufferBytes
         startThresholdBytes = MediaAudioBuffer.startBytesFor(plan.startBytes, capacityBytes, PREBUFFER_WRITE_CHUNK_BYTES)
         report("Audio: ready audioType=${format.audioType} codec=${format.codec} " +
             "rate=${format.sampleRate} channels=${format.channels} " +
