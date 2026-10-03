@@ -25,3 +25,10 @@ jobs:
           name: carplay-crv-api19-debug
           path: mobile/build/outputs/apk/debug/mobile-debug.apk
           if-no-files-found: error
+
+      - name: Upload CR-V APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarPlay-CRV-api19-debug
+          path: mobile/build/outputs/apk/debug/mobile-debug.apk
+          if-no-files-found: error
