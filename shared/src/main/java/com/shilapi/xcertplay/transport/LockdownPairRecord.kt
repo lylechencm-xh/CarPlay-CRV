@@ -317,8 +317,11 @@ private object CertificateMaterialGenerator {
         if (commonName == null) sequence() else sequence(set(sequence(objectIdentifier("2.5.4.3"), utf8String(commonName))))
 
     private fun pem(label: String, der: ByteArray): ByteArray {
-        val encoded = Base64.getMimeEncoder(64, byteArrayOf('\n'.code.toByte())).encodeToString(der)
-        return "-----BEGIN $label-----\n$encoded\n-----END $label-----\n".toByteArray(StandardCharsets.US_ASCII)
+        val encoded = Base64.encodeToString(der, Base64.NO_WRAP)
+            .chunked(64)
+            .joinToString("\n")
+        return "-----BEGIN $label-----\n$encoded\n-----END $label-----\n"
+            .toByteArray(StandardCharsets.US_ASCII)
     }
 
     private fun algorithmIdentifier(oid: String): ByteArray = sequence(objectIdentifier(oid), der(0x05, ByteArray(0)))
