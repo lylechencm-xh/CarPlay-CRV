@@ -20,7 +20,6 @@ import com.shilapi.xcertplay.transport.Iap2UsbMuxHost
 import com.shilapi.xcertplay.transport.Iap2UsbSession
 import com.shilapi.xcertplay.transport.Iap2WiredCarPlayEndpoint
 import com.shilapi.xcertplay.transport.Iap2WiredControlClient
-import com.shilapi.xcertplay.transport.IphoneCarPlayConfiguration
 import com.shilapi.xcertplay.transport.IphoneUsbException
 import com.shilapi.xcertplay.transport.LockdownCarKitClient
 import com.shilapi.xcertplay.transport.LockdownPairingClient
@@ -65,18 +64,19 @@ class CrvWiredCarPlayController(
         videoHeight = displayHeight,
         preferSoftwareHevcDecoder = false,
         advancedAudioChannelMapping = false,
-        audioFocusEnabled = true,
+        audioFocusEnabled = false,
         context = appContext,
         onAudioDiagnostic = { report(it) },
     )
     private val media = CarPlayMediaEngine(
         sink = sink,
-        microphoneEnabled = true,
+        microphoneEnabled = false,
     )
 
     @Volatile private var activeSession: AirPlaySession? = null
     @Volatile private var mux: Iap2UsbMuxHost? = null
     @Volatile private var csm: Iap2Session? = null
+    @Volatile private var ncm: NcmUsbBridge? = null
     @Volatile private var vpnAttached = false
 
     private val listener = object : AirPlaySessionListener {
@@ -111,6 +111,7 @@ class CrvWiredCarPlayController(
                 .onFailure { error ->
                     report("CarPlay failed: ${error.message ?: error.javaClass.simpleName}")
                     cleanupAfterFailure()
+                    runCatching { usbSession.close() }
                 }
         }
     }
@@ -160,13 +161,14 @@ class CrvWiredCarPlayController(
         csm = session
         report("iAP2 carkit channel ready")
 
-        val ncm = openNcm(device)
-        val hostMac = ncm.hostMac ?: macBytes(deviceId)
+        val ncmBridge = openNcm(device)
+        ncm = ncmBridge
+        val hostMac = ncmBridge.hostMac ?: macBytes(deviceId)
         val airPlay = airPlayConfig(deviceId)
 
         when (
             val attached = vpn.attach(
-                ncm = ncm,
+                ncm = ncmBridge,
                 linkLocal = LINK_LOCAL,
                 hostMac = hostMac,
                 config = airPlay,
@@ -186,8 +188,6 @@ class CrvWiredCarPlayController(
             ?: throw IphoneUsbException.DeviceUnavailable("AirPlay listener did not bind")
         report("AirPlay listening on $LINK_LOCAL:$airPlayPort")
 
-        val usbInterface = IphoneCarPlayConfiguration.usbMuxInterface(device)?.id
-            ?: DEFAULT_CARPLAY_USB_INTERFACE
         val identification = Iap2IdentificationConfig(
             name = "Honda CR-V CarPlay",
             modelIdentifier = "CR-V-2021",
@@ -195,7 +195,7 @@ class CrvWiredCarPlayController(
             serialNumber = "CRV-${deviceId.replace(":", "")}",
             firmwareVersion = "1.0",
             hardwareVersion = "2021",
-            carPlayUsbInterfaceNumber = usbInterface,
+            carPlayUsbInterfaceNumber = DEFAULT_CARPLAY_USB_INTERFACE,
             locationInformationEnabled = false,
             vehicleStatusEnabled = false,
             vehicleSpeedEnabled = false,
@@ -244,7 +244,7 @@ class CrvWiredCarPlayController(
         ),
         rightHandDrive = false,
         hevc = false,
-        microphone = true,
+        microphone = false,
         manufacturer = "Honda",
         model = "CR-V 2021",
         oemLabel = "Honda",
@@ -256,6 +256,10 @@ class CrvWiredCarPlayController(
         if (vpnAttached) {
             runCatching { vpn.detach() }
             vpnAttached = false
+            ncm = null
+        } else {
+            runCatching { ncm?.close() }
+            ncm = null
         }
         runCatching { csm?.close() }
         csm = null
