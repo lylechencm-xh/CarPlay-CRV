@@ -48,11 +48,13 @@ class CrvWiredCarPlayController(
     private val displayWidth: Int,
     private val displayHeight: Int,
     private val report: (String) -> Unit,
+    private val onStopped: () -> Unit = {},
 ) : Closeable {
     private val appContext = context.applicationContext
     private val executor: ExecutorService =
         Executors.newSingleThreadExecutor { task -> Thread(task, "crv-carplay-wired").apply { isDaemon = true } }
     private val closed = AtomicBoolean(false)
+    private val stoppedNotified = AtomicBoolean(false)
 
     private val airPlayState = CrvAirPlayState(appContext)
     private val identity = airPlayState.identity
@@ -90,6 +92,8 @@ class CrvWiredCarPlayController(
 
         override fun onTransportError(message: String) {
             report("CarPlay transport error: $message")
+            // Break the blocking wired control loop so the worker can tear the complete stack down.
+            runCatching { csm?.close() }
         }
 
         override fun onDebugLog(message: String) {
@@ -105,12 +109,17 @@ class CrvWiredCarPlayController(
 
     fun start(device: UsbDevice, usbSession: Iap2UsbSession) {
         executor.execute {
-            runCatching { runWired(device, usbSession) }
-                .onFailure { error ->
+            try {
+                runWired(device, usbSession)
+            } catch (error: Throwable) {
+                if (!closed.get()) {
                     report("CarPlay failed: ${error.message ?: error.javaClass.simpleName}")
-                    cleanupAfterFailure()
-                    runCatching { usbSession.close() }
                 }
+            } finally {
+                cleanupAfterFailure()
+                runCatching { usbSession.close() }
+                notifyStopped()
+            }
         }
     }
 
@@ -307,6 +316,13 @@ class CrvWiredCarPlayController(
         cleanupAfterFailure()
         sink.close()
         executor.shutdownNow()
+        notifyStopped()
+    }
+
+    private fun notifyStopped() {
+        if (stoppedNotified.compareAndSet(false, true)) {
+            runCatching(onStopped)
+        }
     }
 
     private fun deviceId(publicKey: ByteArray): String {
