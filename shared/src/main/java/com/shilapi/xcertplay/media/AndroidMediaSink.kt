@@ -651,7 +651,8 @@ private class VideoDecoder(
             dequeue = { codec.dequeueInputBuffer(INPUT_TIMEOUT_US) },
         )
         if (index < 0) { recover("video decoder input stalled"); return }
-        val input = checkNotNull(codec.getInputBuffer(index)) { "Decoder input buffer unavailable" }
+        @Suppress("DEPRECATION")
+        val input = if (Build.VERSION.SDK_INT >= 21) codec.getInputBuffer(index) else codec.inputBuffers[index]
         input.clear()
         if (annexB.size <= input.remaining()) {
             input.put(annexB)
@@ -1186,7 +1187,8 @@ private class AudioRenderer(
             }
             return
         }
-        val input = codec.getInputBuffer(index) ?: return
+        @Suppress("DEPRECATION")
+        val input = if (Build.VERSION.SDK_INT >= 21) codec.getInputBuffer(index) else codec.inputBuffers[index]
         input.clear()
         if (payload.size <= input.remaining()) {
             input.put(payload)
@@ -1228,7 +1230,8 @@ private class AudioRenderer(
                         }
                     }
                     if (size > 0) {
-                        val output = codec.getOutputBuffer(index)
+                        @Suppress("DEPRECATION")
+                        val output = if (Build.VERSION.SDK_INT >= 21) codec.getOutputBuffer(index) else codec.outputBuffers[index]
                         if (output != null) {
                             if (size > pcm.size) pcm = ByteArray(size)
                             output.position(info.offset)
