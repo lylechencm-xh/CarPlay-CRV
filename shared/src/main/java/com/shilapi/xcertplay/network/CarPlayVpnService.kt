@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.Binder
+import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.util.Log
@@ -91,8 +92,13 @@ class CarPlayVpnService : VpnService() {
                 .addRoute(LINK_LOCAL_ROUTE, LINK_PREFIX)
                 .setSession(SESSION_NAME)
                 .setMtu(TUN_MTU)
-            // setBlocking() and addAllowedApplication() were added in API 21.
-            // KitKat establishes a non-blocking TUN; Ipv6NcmBridge handles zero-byte reads.
+
+            // Preserve upstream VPN scoping on API 21+, but avoid hard references to those
+            // methods in the API19 code path so Dalvik can load this class safely on KitKat.
+            if (Build.VERSION.SDK_INT >= 21) {
+                configureModernVpnBuilder(builder)
+            }
+
             val tunFd = builder.establish()
                 ?: throw IOException("VpnService.establish returned null")
             tun = tunFd
@@ -282,6 +288,23 @@ class CarPlayVpnService : VpnService() {
         ).apply {
             isDaemon = true
             start()
+        }
+    }
+
+    private fun configureModernVpnBuilder(builder: Builder) {
+        try {
+            builder.javaClass
+                .getMethod("setBlocking", java.lang.Boolean.TYPE)
+                .invoke(builder, true)
+            builder.javaClass
+                .getMethod("addAllowedApplication", String::class.java)
+                .invoke(builder, packageName)
+        } catch (error: java.lang.reflect.InvocationTargetException) {
+            val cause = error.cause
+            if (cause is Exception) throw cause
+            throw error
+        } catch (error: ReflectiveOperationException) {
+            throw IllegalStateException("VPN scoping APIs unavailable on API ${Build.VERSION.SDK_INT}", error)
         }
     }
 
