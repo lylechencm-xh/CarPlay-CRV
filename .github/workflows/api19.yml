@@ -2,6 +2,9 @@ name: API19 Legacy Build
 on:
   push:
     branches: [legacy-api19]
+concurrency:
+  group: api19-legacy
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: ubuntu-latest
