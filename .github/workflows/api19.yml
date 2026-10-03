@@ -23,7 +23,6 @@ jobs:
         run: gradle :shared:testDebugUnitTest --stacktrace
       - name: Lint CR-V API19 path
         id: lint
-        continue-on-error: true
         run: gradle :shared:lintDebug :mobile:lintDebug --stacktrace
       - name: Print lint errors
         if: always()
