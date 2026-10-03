@@ -3,11 +3,9 @@ package com.shilapi.xcertplay.transport
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbEndpoint
-import android.hardware.usb.UsbRequest
+import android.hardware.usb.UsbConstants
 import java.lang.reflect.InvocationTargetException
-import java.nio.ByteBuffer
 import java.util.ArrayDeque
-import java.util.concurrent.TimeoutException
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -25,7 +23,7 @@ import org.robolectric.util.ReflectionHelpers.ClassParameter
 /** Replays USB completion boundaries through the real UsbSession read and USBMUX frame parser. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33], manifest = Config.NONE,
-    shadows = [EvidenceUsbConnectionShadow::class, EvidenceUsbRequestShadow::class])
+    shadows = [EvidenceUsbConnectionShadow::class])
 class UsbMuxIssue100RegressionTest {
     @Before fun resetReplay() { UsbEvidenceReplay.reset() }
 
@@ -168,48 +166,45 @@ class UsbMuxIssue100RegressionTest {
 object UsbEvidenceReplay {
     val transfers = ArrayDeque<ByteArray>()
     val writes = mutableListOf<ByteArray>()
-    var request: UsbRequest? = null
-    var buffer: ByteBuffer? = null
-    var cancelled = false
     var completedReads = 0
     var timedOutReads = 0
+
     fun reset() {
-        transfers.clear(); writes.clear()
-        request = null; buffer = null; cancelled = false; completedReads = 0; timedOutReads = 0
+        transfers.clear()
+        writes.clear()
+        completedReads = 0
+        timedOutReads = 0
     }
 }
 
 @Implements(UsbDeviceConnection::class)
 class EvidenceUsbConnectionShadow {
-    @Implementation fun bulkTransfer(endpoint: UsbEndpoint, buffer: ByteArray,
-        length: Int, timeoutMillis: Int): Int {
-        UsbEvidenceReplay.writes.add(buffer.copyOf(length))
-        return length
-    }
-    @Implementation fun requestWait(timeoutMillis: Long): UsbRequest {
-        if (UsbEvidenceReplay.cancelled) return UsbEvidenceReplay.request!!
-        val bytes = UsbEvidenceReplay.transfers.pollFirst() ?: run {
-            Thread.sleep(timeoutMillis.coerceAtMost(50))
-            UsbEvidenceReplay.timedOutReads++
-            throw TimeoutException()
+    @Implementation fun bulkTransfer(
+        endpoint: UsbEndpoint,
+        buffer: ByteArray,
+        length: Int,
+        timeoutMillis: Int,
+    ): Int {
+        if (endpoint.direction == UsbConstants.USB_DIR_OUT) {
+            UsbEvidenceReplay.writes.add(buffer.copyOf(length))
+            return length
         }
-        UsbEvidenceReplay.buffer!!.put(bytes)
+
+        val bytes = UsbEvidenceReplay.transfers.pollFirst()
+        if (bytes == null) {
+            Thread.sleep(timeoutMillis.toLong().coerceAtMost(50L))
+            UsbEvidenceReplay.timedOutReads++
+            return -1
+        }
+        val count = minOf(length, bytes.size)
+        bytes.copyInto(buffer, 0, 0, count)
+        if (count < bytes.size) {
+            UsbEvidenceReplay.transfers.addFirst(bytes.copyOfRange(count, bytes.size))
+        }
         UsbEvidenceReplay.completedReads++
-        return UsbEvidenceReplay.request!!
+        return count
     }
+
     @Implementation fun close() = Unit
 }
 
-@Implements(UsbRequest::class)
-class EvidenceUsbRequestShadow {
-    @RealObject lateinit var request: UsbRequest
-    @Implementation fun initialize(connection: UsbDeviceConnection, endpoint: UsbEndpoint) = true
-    @Implementation fun queue(buffer: ByteBuffer): Boolean {
-        UsbEvidenceReplay.request = request
-        UsbEvidenceReplay.buffer = buffer
-        UsbEvidenceReplay.cancelled = false
-        return true
-    }
-    @Implementation fun cancel(): Boolean { UsbEvidenceReplay.cancelled = true; return true }
-    @Implementation fun close() = Unit
-}
