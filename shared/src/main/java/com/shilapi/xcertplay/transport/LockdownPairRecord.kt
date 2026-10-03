@@ -13,7 +13,7 @@ import java.security.Signature
 import java.security.interfaces.RSAPublicKey
 import java.security.spec.RSAPublicKeySpec
 import java.text.SimpleDateFormat
-import java.util.Base64
+import android.util.Base64
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
@@ -299,7 +299,7 @@ private object CertificateMaterialGenerator {
         val end = "-----END RSA PUBLIC KEY-----"
         require(text.startsWith(begin) && text.endsWith(end)) { "Expected a PKCS#1 RSA public key" }
         val encoded = text.substring(begin.length, text.length - end.length).filterNot(Char::isWhitespace)
-        val der = Base64.getDecoder().decode(encoded)
+        val der = Base64.decode(encoded, Base64.DEFAULT)
         val outer = DerReader(der)
         val sequence = outer.readConstructed(0x30)
         val modulus = sequence.readPositiveInteger()
