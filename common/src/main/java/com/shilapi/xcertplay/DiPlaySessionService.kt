@@ -22,11 +22,14 @@ class DiPlaySessionService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(NotificationChannel(CHANNEL, "CarPlay connection", NotificationManager.IMPORTANCE_LOW))
-        val open = PendingIntent.getActivity(this, 0, Intent(this, CarPlayHostActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= 26) {
+            manager.createNotificationChannel(NotificationChannel(CHANNEL, "CarPlay connection", NotificationManager.IMPORTANCE_LOW))
+        }
+        val open = PendingIntent.getActivity(this, 0, Intent(this, CarPlayHostActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or immutableFlag())
         val stop = PendingIntent.getService(this, 1, Intent(this, DiPlaySessionService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val notification = Notification.Builder(this, CHANNEL)
+        val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL) else Notification.Builder(this)
+        val notification = builder
             .setSmallIcon(R.drawable.ic_diplay_notification)
             .setContentTitle("DiPlay")
             .setContentText("CarPlay connection running")
@@ -53,6 +56,8 @@ class DiPlaySessionService : Service() {
         CarPlayBackgroundSession.stop()
         stopSelf()
     }
+    private fun immutableFlag(): Int = if (Build.VERSION.SDK_INT >= 23) 0x04000000 else 0
+
     companion object {
         const val ACTION_STOP = "com.shihab.diplay.DISCONNECT"
         private const val CHANNEL = "diplay_connection"
