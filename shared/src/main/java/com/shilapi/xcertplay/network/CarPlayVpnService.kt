@@ -29,6 +29,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * The wired path also owns the Android VPN tunnel and NCM IPv6 bridge. VPN consent is requested
  * with [prepare] before binding.
  */
+internal fun useScopedVpnBuilder(sdkInt: Int): Boolean = sdkInt >= 21
+
 class CarPlayVpnService : VpnService() {
     inner class LocalBinder : Binder() {
         val service: CarPlayVpnService get() = this@CarPlayVpnService
@@ -95,7 +97,7 @@ class CarPlayVpnService : VpnService() {
 
             // Preserve upstream VPN scoping on API 21+, but avoid hard references to those
             // methods in the API19 code path so Dalvik can load this class safely on KitKat.
-            if (Build.VERSION.SDK_INT >= 21) {
+            if (useScopedVpnBuilder(Build.VERSION.SDK_INT)) {
                 configureModernVpnBuilder(builder)
             }
 
