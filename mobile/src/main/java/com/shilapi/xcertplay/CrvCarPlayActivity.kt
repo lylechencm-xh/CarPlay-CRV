@@ -123,8 +123,10 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                     if (awaitingCarPlayReattach) openCarPlayUsb(result.device)
                     else beginUsb(result.device)
                 }
-                is IphoneUsbHost.PermissionResult.Denied ->
-                    setStatus("USB permission denied")
+                is IphoneUsbHost.PermissionResult.Denied -> {
+                    awaitingCarPlayReattach = false
+                    reportStatus("USB permission denied")
+                }
             }
         }
 
@@ -229,8 +231,10 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                     setStatus("USBMUX connected")
                     runOnUiThread { maybeStartCarPlay() }
                 }
-                is IphoneUsbHost.Iap2SessionResult.Failed ->
-                    setStatus("USBMUX failed: ${result.error.message ?: "unknown"}")
+                is IphoneUsbHost.Iap2SessionResult.Failed -> {
+                    awaitingCarPlayReattach = false
+                    reportStatus("USBMUX failed: ${result.error.message ?: "unknown"}")
+                }
             }
         }
     }
