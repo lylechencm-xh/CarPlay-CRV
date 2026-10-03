@@ -134,6 +134,19 @@ class IphoneUsbHost(
             parseAttachedDevice(it)?.let(onAttached)
         }
 
+    /** Returns a configured Apple device for detach broadcasts. */
+    fun parseDetachedDevice(intent: Intent): UsbDevice? {
+        if (intent.action != UsbManager.ACTION_USB_DEVICE_DETACHED) return null
+        val device = intent.usbDevice() ?: return null
+        return device.takeIf { matcher.matches(it.vendorId, it.productId) }
+    }
+
+    /** Register once for detach so the legacy host can reset cleanly before a later reconnect. */
+    fun registerDetachReceiver(onDetached: (UsbDevice) -> Unit): Closeable =
+        registerReceiver(IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED)) {
+            parseDetachedDevice(it)?.let(onDetached)
+        }
+
     /**
      * Sends the LIVI-evidenced vendor request then closes the connection before re-enumeration.
      * The callback is invoked from [executor].
