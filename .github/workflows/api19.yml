@@ -2,7 +2,6 @@ name: API19 Legacy Build
 on:
   push:
     branches: [legacy-api19]
-  workflow_dispatch:
 jobs:
   build:
     runs-on: ubuntu-latest
