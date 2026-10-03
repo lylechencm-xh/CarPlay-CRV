@@ -354,6 +354,21 @@ class Iap2UsbSession internal constructor(
     fun read(timeoutMillis: Long): ByteArray? = synchronized(readLock) {
         checkOpen()
         require(timeoutMillis > 0) { "timeoutMillis must be positive" }
+
+        // KitKat's UsbRequest API has no timed requestWait(). bulkTransfer has had a timeout
+        // since USB host was introduced and is therefore the safe API 19 path.
+        if (Build.VERSION.SDK_INT < 26) {
+            val buffer = ByteArray(USBMUX_READ_CHUNK_BYTES)
+            val transferred = connection.bulkTransfer(
+                inEndpoint,
+                buffer,
+                buffer.size,
+                timeoutMillis.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+            )
+            if (transferred < 0) return@synchronized null
+            return@synchronized buffer.copyOf(transferred)
+        }
+
         val request = UsbRequest()
         var initialized = false
         try {
@@ -373,13 +388,14 @@ class Iap2UsbSession internal constructor(
                     "Android could not queue USBMUX read request (${requestDiagnostics(timeoutMillis, buffer.capacity())})",
                 )
             }
-            val completed = requestWaitCompat(timeoutMillis, request) ?: return@synchronized null
-            if (completed == null) {
-                throw failSession("Android returned no USBMUX read request")
+            val completed = try {
+                connection.requestWait(timeoutMillis)
+            } catch (_: TimeoutException) {
+                request.cancel()
+                return@synchronized null
             }
-            if (completed !== request) {
-                throw failSession("Android completed an unexpected USB request")
-            }
+            if (completed == null) throw failSession("Android returned no USBMUX read request")
+            if (completed !== request) throw failSession("Android completed an unexpected USB request")
             return@synchronized ByteArray(buffer.position()).also {
                 buffer.flip()
                 buffer.get(it)
