@@ -38,8 +38,8 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix = ".hudtest"
-            versionNameSuffix = "-hud-test"
+            applicationIdSuffix = ".crvapi19"
+            versionNameSuffix = "-crv-api19"
         }
         release {
             optimization {
