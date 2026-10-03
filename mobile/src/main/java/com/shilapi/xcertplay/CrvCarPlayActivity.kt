@@ -38,6 +38,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private lateinit var usbHost: IphoneUsbHost
     private lateinit var video: TextureView
     private lateinit var status: TextView
+    private lateinit var diagnostics: CrvDiagnostics
 
     private val io: ExecutorService = Executors.newSingleThreadExecutor()
     private var permissionReceiver: Closeable? = null
@@ -110,6 +111,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             addView(status, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         })
 
+        diagnostics = CrvDiagnostics(this)
+        diagnostics.log("app started api=" + android.os.Build.VERSION.SDK_INT)
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
         usbHost = IphoneUsbHost(this, usbManager, IphoneUsbMatcher.appleVendor())
 
@@ -234,11 +237,16 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             surface = surface,
             displayWidth = surfaceWidth,
             displayHeight = surfaceHeight,
-            report = ::setStatus,
+            report = ::reportStatus,
         )
         controller = next
         setStatus("Starting wired CarPlay")
         next.start(device, usb)
+    }
+
+    private fun reportStatus(message: String) {
+        diagnostics.log(message)
+        setStatus(message)
     }
 
     private fun setStatus(message: String) {
@@ -298,6 +306,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         videoSurface?.release()
         videoSurface = null
 
+        if (::diagnostics.isInitialized) diagnostics.log("app stopped")
         io.shutdownNow()
         super.onDestroy()
     }
