@@ -71,7 +71,7 @@ class CrvWiredCarPlayController(
     )
     private val media = CarPlayMediaEngine(
         sink = sink,
-        microphoneEnabled = false,
+        microphoneEnabled = true,
     )
 
     @Volatile private var activeSession: AirPlaySession? = null
@@ -293,7 +293,7 @@ class CrvWiredCarPlayController(
         ),
         rightHandDrive = false,
         hevc = false,
-        microphone = false,
+        microphone = true,
         opusAudioOutput = false,
         manufacturer = "Honda",
         model = "CR-V 2021",
