@@ -244,7 +244,7 @@ class CrvApi19MediaSink(
 
             val (sps, pps) = MediaCodecSupport.avcParameterSets(data)
             val format = MediaFormat.createVideoFormat(
-                MediaFormat.MIMETYPE_VIDEO_AVC,
+                "video/avc",
                 width,
                 height,
             )
@@ -257,7 +257,7 @@ class CrvApi19MediaSink(
             }
 
             decoder = try {
-                MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).also { codec ->
+                MediaCodec.createDecoderByType("video/avc").also { codec ->
                     codec.configure(format, surface, null, 0)
                     codec.start()
                     diagnostic("API19 H.264 decoder ready")
@@ -453,7 +453,7 @@ class CrvApi19MediaSink(
         private fun configureDecoder() {
             val mime = when (format.codec) {
                 AudioCodecKind.LPCM -> return
-                AudioCodecKind.AAC_LC -> MediaFormat.MIMETYPE_AUDIO_AAC
+                AudioCodecKind.AAC_LC -> "audio/mp4a-latm"
                 AudioCodecKind.OPUS -> "audio/opus"
             }
 
