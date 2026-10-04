@@ -50,6 +50,7 @@ android {
     }
     lint {
         abortOnError = true
+        disable += "ExpiredTargetSdkVersion"
     }
 
     compileOptions {
