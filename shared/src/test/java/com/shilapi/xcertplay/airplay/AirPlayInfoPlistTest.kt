@@ -250,4 +250,28 @@ class AirPlayInfoPlistTest {
         })
     }
 
+    @Test
+    fun api19MicrophoneAdvertisesPcmInputWithoutOpus() {
+        val info = AirPlayInfoPlist.build(
+            AirPlayConfig(
+                deviceName = "test",
+                deviceId = "02:00:00:00:00:02",
+                btMac = "02:00:00:00:00:02",
+                sourceVersion = "366.0",
+                main = AirPlayDisplayConfig(widthPixels = 1280, heightPixels = 720),
+                microphone = true,
+                opusAudioOutput = false,
+            ),
+        )
+
+        val formats = (info["audioFormats"] as List<*>).map { it as Map<*, *> }
+        val telephony = formats.single { it["audioType"] == "telephony" }
+        val speech = formats.single { it["audioType"] == "speechRecognition" }
+        assertEquals(0x4154, telephony["audioInputFormats"])
+        assertEquals(0x4154, speech["audioInputFormats"])
+        assertTrue(formats.all {
+            ((it["audioOutputFormats"] as Number).toInt() and 0x70000000) == 0
+        })
+    }
+
 }
