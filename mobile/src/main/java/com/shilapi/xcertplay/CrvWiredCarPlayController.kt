@@ -19,6 +19,7 @@ import com.shilapi.xcertplay.transport.Iap2UsbMuxHost
 import com.shilapi.xcertplay.transport.Iap2UsbSession
 import com.shilapi.xcertplay.transport.Iap2WiredCarPlayEndpoint
 import com.shilapi.xcertplay.transport.Iap2WiredControlClient
+import com.shilapi.xcertplay.transport.IphoneCarPlayConfiguration
 import com.shilapi.xcertplay.transport.IphoneUsbException
 import com.shilapi.xcertplay.transport.LockdownCarKitClient
 import com.shilapi.xcertplay.transport.LockdownPairingClient
@@ -203,6 +204,10 @@ class CrvWiredCarPlayController(
             ?: throw IphoneUsbException.DeviceUnavailable("AirPlay listener did not bind")
         report("AirPlay listening on $LINK_LOCAL:$airPlayPort")
 
+        val usbMuxInterfaceNumber = IphoneCarPlayConfiguration.usbMuxInterface(device)?.id
+            ?: throw IphoneUsbException.Protocol("CarPlay USB layout exposes no USBMUX interface")
+        report("CarPlay USBMUX interface=$usbMuxInterfaceNumber")
+
         val identification = Iap2IdentificationConfig(
             name = "Honda CR-V CarPlay",
             modelIdentifier = "CR-V-2021",
@@ -210,7 +215,7 @@ class CrvWiredCarPlayController(
             serialNumber = "CRV-${deviceId.replace(":", "")}",
             firmwareVersion = "1.0",
             hardwareVersion = "2021",
-            carPlayUsbInterfaceNumber = DEFAULT_CARPLAY_USB_INTERFACE,
+            carPlayUsbInterfaceNumber = usbMuxInterfaceNumber,
             locationInformationEnabled = false,
             vehicleStatusEnabled = false,
             vehicleSpeedEnabled = false,
@@ -289,6 +294,7 @@ class CrvWiredCarPlayController(
         rightHandDrive = false,
         hevc = false,
         microphone = false,
+        opusAudioOutput = false,
         manufacturer = "Honda",
         model = "CR-V 2021",
         oemLabel = "Honda",
@@ -342,7 +348,6 @@ class CrvWiredCarPlayController(
         private const val SOURCE_VERSION = "950.7.1"
         private const val LINK_LOCAL = "fe80::2"
         private const val AVAILABLE_CURRENT_MA = 1500
-        private const val DEFAULT_CARPLAY_USB_INTERFACE = 3
         private const val PAIR_TIMEOUT_MILLIS = 5 * 60_000L
     }
 }
