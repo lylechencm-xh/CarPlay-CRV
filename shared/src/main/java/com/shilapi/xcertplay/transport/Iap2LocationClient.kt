@@ -225,7 +225,7 @@ object Iap2LocationMessages {
 
     /** The parameter ids of a 0xFFFA request (the sentence types asked for), or none if unreadable. */
     fun requestedComponents(frame: Iap2Frame): Set<Int> =
-        runCatching { frame.body().asList().map { it.id }.toSortedSet() }.getOrDefault(emptySet())
+        runCatching { frame.body().asList().map { it.id }.toSortedSet() }.getOrElse { emptySet() }
 
     fun locationInformation(nmeaSentence: String): Iap2Frame {
         require(nmeaSentence.isNotEmpty()) { "NMEA sentence must not be empty" }
