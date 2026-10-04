@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay
 
+import android.content.Context
 import android.media.AudioFormat as AndroidAudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
@@ -28,11 +29,27 @@ import java.util.concurrent.atomic.AtomicBoolean
  * MediaCodecList, getInputBuffer/getOutputBuffer and setOutputSurface.
  */
 class CrvApi19MediaSink(
+    context: Context,
     private val surface: Surface,
     private val videoWidth: Int,
     private val videoHeight: Int,
     private val report: (String) -> Unit = {},
 ) : MediaSink, Closeable {
+    private val audioManager =
+        context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private val audioFocusHeld = AtomicBoolean(false)
+    private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { change ->
+        when (change) {
+            AudioManager.AUDIOFOCUS_GAIN -> report("Audio focus gained")
+            AudioManager.AUDIOFOCUS_LOSS -> {
+                audioFocusHeld.set(false)
+                report("Audio focus lost")
+            }
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> report("Audio focus transient")
+        }
+    }
+
     private val videoCodecs = ConcurrentHashMap<Int, VideoCodec>()
     private val videoConfigs = ConcurrentHashMap<Int, ByteArray>()
     private val videoDecoders = ConcurrentHashMap<Int, LegacyVideoDecoder>()
@@ -74,6 +91,7 @@ class CrvApi19MediaSink(
     }
 
     override fun onAudioStarted(id: AudioStreamId, format: AudioFormat, firstSample: Int) {
+        ensureAudioFocus()
         audioRenderers.remove(id)?.close()
         LegacyAudioRenderer(format, report).also {
             audioRenderers[id] = it
@@ -87,6 +105,7 @@ class CrvApi19MediaSink(
 
     override fun onAudioStopped(id: AudioStreamId) {
         audioRenderers.remove(id)?.close()
+        if (audioRenderers.isEmpty()) abandonAudioFocus()
     }
 
     override fun onMicrophoneStarted(id: AudioStreamId, config: MicrophoneConfig) {
@@ -105,10 +124,31 @@ class CrvApi19MediaSink(
         videoDecoders.clear()
         audioRenderers.values.toList().forEach { it.close() }
         audioRenderers.clear()
+        abandonAudioFocus()
         microphones.values.toList().forEach { it.close() }
         microphones.clear()
         recoveryHandlers.clear()
         diagnosticHandlers.clear()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun ensureAudioFocus() {
+        if (!audioFocusHeld.compareAndSet(false, true)) return
+        val result = audioManager.requestAudioFocus(
+            audioFocusListener,
+            AudioManager.STREAM_MUSIC,
+            AudioManager.AUDIOFOCUS_GAIN,
+        )
+        if (result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+            audioFocusHeld.set(false)
+            report("Audio focus not granted")
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun abandonAudioFocus() {
+        if (!audioFocusHeld.compareAndSet(true, false)) return
+        runCatching { audioManager.abandonAudioFocus(audioFocusListener) }
     }
 
     private fun decoder(type: Int): LegacyVideoDecoder =
