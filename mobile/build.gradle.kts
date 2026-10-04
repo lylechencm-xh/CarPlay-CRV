@@ -49,7 +49,6 @@ android {
         }
     }
     lint {
-        checkOnly += setOf("NewApi")
         abortOnError = true
     }
 
