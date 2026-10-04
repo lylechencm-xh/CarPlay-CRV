@@ -1,7 +1,7 @@
 name: API19 Legacy Build
 on:
   push:
-    branches: [legacy-api19]
+    branches: [legacy-api19, crv-api19]
 
 concurrency:
   group: api19-legacy
