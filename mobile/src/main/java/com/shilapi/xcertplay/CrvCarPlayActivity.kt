@@ -93,6 +93,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         video = TextureView(this).apply {
             surfaceTextureListener = this@CrvCarPlayActivity
             isOpaque = true
+            isClickable = true
             setOnTouchListener { view, event ->
                 val width = view.width.coerceAtLeast(1)
                 val height = view.height.coerceAtLeast(1)
@@ -101,7 +102,10 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN,
                     MotionEvent.ACTION_MOVE -> controller?.sendTouch(x, y, true)
-                    MotionEvent.ACTION_UP,
+                    MotionEvent.ACTION_UP -> {
+                        controller?.sendTouch(x, y, false)
+                        view.performClick()
+                    }
                     MotionEvent.ACTION_CANCEL -> controller?.sendTouch(x, y, false)
                 }
                 true
@@ -109,7 +113,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         }
 
         status = TextView(this).apply {
-            text = "Starting CarPlay"
+            text = getString(R.string.status_starting)
             setTextColor(Color.WHITE)
             setBackgroundColor(0x66000000)
             gravity = Gravity.CENTER
