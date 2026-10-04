@@ -230,4 +230,24 @@ class AirPlayInfoPlistTest {
             .toSet()
         assertEquals(setOf(100, 101, 102), types)
     }
+    @Test
+    fun opusOutputCanBeDisabledForApi19() {
+        val base = AirPlayConfig(
+            deviceName = "test",
+            deviceId = "02:00:00:00:00:02",
+            btMac = "02:00:00:00:00:02",
+            sourceVersion = "366.0",
+            main = AirPlayDisplayConfig(widthPixels = 1280, heightPixels = 720),
+        )
+
+        fun outputFormats(config: AirPlayConfig): List<Int> =
+            (AirPlayInfoPlist.build(config)["audioFormats"] as List<*>)
+                .map { ((it as Map<*, *>)["audioOutputFormats"] as Number).toInt() }
+
+        assertTrue(outputFormats(base).any { it and 0x70000000 != 0 })
+        assertTrue(outputFormats(base.copy(opusAudioOutput = false)).all {
+            it and 0x70000000 == 0
+        })
+    }
+
 }
