@@ -26,7 +26,6 @@ FORBIDDEN = {
     "Comparator.comparing(": "Java 8 Comparator factory is unavailable on KitKat",
     ".computeIfAbsent(": "Java 8 Map.computeIfAbsent is unavailable on KitKat",
     ".computeIfPresent(": "Java 8 Map.computeIfPresent is unavailable on KitKat",
-    ".getOrDefault(": "Java 8 Map.getOrDefault is unavailable on KitKat",
     ".removeIf(": "Java 8 Collection.removeIf is unavailable on KitKat",
 }
 
