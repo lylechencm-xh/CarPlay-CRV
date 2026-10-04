@@ -1,3 +1,4 @@
 <resources>
-    <string name="app_name">DiPlay</string>
+    <string name="app_name">CarPlay CR-V</string>
+    <string name="status_starting">Starting CarPlay</string>
 </resources>
