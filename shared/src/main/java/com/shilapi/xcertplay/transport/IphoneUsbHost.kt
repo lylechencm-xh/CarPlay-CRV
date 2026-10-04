@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.transport
 
+import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -292,6 +293,7 @@ class IphoneUsbHost(
         )
     }
 
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private fun registerReceiver(filter: IntentFilter, onReceive: (Intent) -> Unit): Closeable {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) = onReceive(intent)
