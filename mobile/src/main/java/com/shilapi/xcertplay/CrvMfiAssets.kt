@@ -123,5 +123,5 @@ object CrvMfiAssets {
         runCatching {
             val names = context.assets.list(LocalMfiAuthenticationClient.DIRECTORY).orEmpty().toSet()
             requiredFiles.all(names::contains)
-        }.getOrDefault(false)
+        }.getOrElse { false }
 }
