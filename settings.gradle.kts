@@ -31,3 +31,6 @@ include(":maphost")
 project(":maphost").projectDir = file("samples/maphost")
 include(":home")
 project(":home").projectDir = file("samples/home")
+
+// Android 4.4 / API 19 wired-first Honda CR-V build.
+include(":crvlegacy")
