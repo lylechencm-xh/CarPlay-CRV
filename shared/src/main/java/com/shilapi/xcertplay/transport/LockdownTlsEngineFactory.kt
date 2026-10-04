@@ -10,6 +10,8 @@ import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.spec.PKCS8EncodedKeySpec
 import android.util.Base64
+import org.bouncycastle.jce.provider.BouncyCastleProvider
+import org.bouncycastle.jsse.provider.BouncyCastleJsseProvider
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLEngine
@@ -40,10 +42,12 @@ object LockdownTlsEngineFactory {
                 load(null, password)
                 setKeyEntry(KEY_ALIAS, privateKey, password, arrayOf(certificate))
             }
-            val keyManagers = KeyManagerFactory.getInstance("PKIX").apply {
+            val keyManagers = KeyManagerFactory.getInstance(
+                KeyManagerFactory.getDefaultAlgorithm(),
+            ).apply {
                 init(keyStore, password)
             }.keyManagers
-            val context = SSLContext.getInstance("TLS").apply {
+            val context = SSLContext.getInstance("TLS", jsseProvider).apply {
                 init(keyManagers, arrayOf(UsbLockdownTrustManager), null)
             }
             return context.createSSLEngine(PEER_HOST, PEER_PORT).apply {
@@ -94,6 +98,11 @@ object LockdownTlsEngineFactory {
 
         override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
     }
+
+    // API19's platform SSLEngine has no TLS 1.2. Keep a private BC/BCJSSE pair instead of
+    // replacing Android's system-wide legacy "BC" provider.
+    private val cryptoProvider by lazy { BouncyCastleProvider() }
+    private val jsseProvider by lazy { BouncyCastleJsseProvider(cryptoProvider) }
 
     private const val KEY_ALIAS = "lockdown-host"
     private const val PEER_HOST = "Device"
