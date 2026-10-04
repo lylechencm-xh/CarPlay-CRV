@@ -406,7 +406,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         destroyed = true
         openCarPlayAfterPermission = false
         reconnectGeneration++
-        usbTransitionGeneration++
+        usbTransitionGeneration.incrementAndGet()
         mainHandler.removeCallbacksAndMessages(null)
 
         permissionReceiver?.close()
