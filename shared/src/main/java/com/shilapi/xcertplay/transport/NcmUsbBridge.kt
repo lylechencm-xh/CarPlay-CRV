@@ -246,8 +246,10 @@ class NcmUsbBridge internal constructor(
             ((source[offset + 3].toInt() and 0xff) shl 24)
 
     companion object {
-        private const val READ_CHUNK_BYTES = 32 * 1024
+        // Android USB bulk transfers were capped at 16 KiB before Android P.
+        // Keep each KitKat read explicitly within that limit instead of relying on platform truncation.
         private const val LEGACY_USB_TRANSFER_LIMIT = 16 * 1024
+        private const val READ_CHUNK_BYTES = LEGACY_USB_TRANSFER_LIMIT
         private const val USB_PACKET_SIZE = 512
         private const val STATUS_POLL_TIMEOUT_MILLIS = 20
         private const val STATUS_POLL_INTERVAL_MILLIS = 500L
