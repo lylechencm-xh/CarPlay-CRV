@@ -22,7 +22,7 @@ android {
     }
 
 
-    localAuthenticationAssets?.let { sourceSets.getByName("main").assets.directories.add(it) }
+    localAuthenticationAssets?.let { sourceSets.getByName("main").assets.srcDir(it) }
 
     signingConfigs {
         create("release") {
