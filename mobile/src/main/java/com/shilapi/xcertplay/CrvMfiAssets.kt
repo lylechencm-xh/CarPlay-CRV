@@ -30,7 +30,9 @@ object CrvMfiAssets {
 
         if (external != null && hasCompleteIdentity(external)) {
             installValidated(external, target)
-            return LocalMfiAuthenticationClient.load(target)
+            val installed = LocalMfiAuthenticationClient.load(target)
+            removeExternalProvisioningCopy(external)
+            return installed
         }
 
         // Standalone builds may explicitly inject the two files into APK assets at build time.
@@ -97,6 +99,13 @@ object CrvMfiAssets {
         } finally {
             staging.deleteRecursively()
         }
+    }
+
+    private fun removeExternalProvisioningCopy(directory: File) {
+        for (name in requiredFiles) {
+            runCatching { File(directory, name).delete() }
+        }
+        runCatching { directory.delete() }
     }
 
     private fun stagingDirectory(context: Context): File =
