@@ -149,8 +149,13 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             reconnectAttempts = 0
             reconnectGeneration++
             reportStatus("iPhone attached")
-            if (awaitingCarPlayReattach) requestPermissionForCarPlay(device)
-            else requestPermission(device)
+            if (awaitingCarPlayReattach) {
+                awaitingCarPlayReattach = false
+                usbTransitionGeneration++
+                requestPermissionForCarPlay(device)
+            } else {
+                requestPermission(device)
+            }
         }
         detachReceiver = usbHost.registerDetachReceiver {
             if (!awaitingCarPlayReattach) {
