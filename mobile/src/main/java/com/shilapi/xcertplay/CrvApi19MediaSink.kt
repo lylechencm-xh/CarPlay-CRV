@@ -39,6 +39,7 @@ class CrvApi19MediaSink(
     private val recoveryHandlers = ConcurrentHashMap<Int, () -> Unit>()
     private val diagnosticHandlers = ConcurrentHashMap<Int, (String) -> Unit>()
     private val audioRenderers = ConcurrentHashMap<AudioStreamId, LegacyAudioRenderer>()
+    private val microphones = ConcurrentHashMap<AudioStreamId, CrvApi19MicrophoneUplink>()
 
     override fun setVideoRecoveryHandler(type: Int, handler: () -> Unit) {
         recoveryHandlers[type] = handler
@@ -88,14 +89,24 @@ class CrvApi19MediaSink(
         audioRenderers.remove(id)?.close()
     }
 
-    override fun onMicrophoneStarted(id: AudioStreamId, config: MicrophoneConfig) = Unit
-    override fun onMicrophoneStopped(id: AudioStreamId) = Unit
+    override fun onMicrophoneStarted(id: AudioStreamId, config: MicrophoneConfig) {
+        microphones.remove(id)?.close()
+        CrvApi19MicrophoneUplink(config, report).also { uplink ->
+            if (uplink.start()) microphones[id] = uplink else uplink.close()
+        }
+    }
+
+    override fun onMicrophoneStopped(id: AudioStreamId) {
+        microphones.remove(id)?.close()
+    }
 
     override fun close() {
         videoDecoders.values.toList().forEach { it.close() }
         videoDecoders.clear()
         audioRenderers.values.toList().forEach { it.close() }
         audioRenderers.clear()
+        microphones.values.toList().forEach { it.close() }
+        microphones.clear()
         recoveryHandlers.clear()
         diagnosticHandlers.clear()
     }
