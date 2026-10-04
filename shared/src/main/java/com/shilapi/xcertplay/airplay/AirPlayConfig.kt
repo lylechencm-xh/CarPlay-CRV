@@ -45,6 +45,8 @@ data class AirPlayConfig(
     val hevc: Boolean = false,
     val disableAudioOutput: Boolean = false,
     val microphone: Boolean = false,
+    /** Advertise Opus output formats only when the platform decoder is known to exist. */
+    val opusAudioOutput: Boolean = true,
     val manufacturer: String = "xcertplay",
     val model: String = "xcertplay",
     val oemLabel: String = "xcertplay",
