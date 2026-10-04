@@ -56,11 +56,11 @@ class AudioStream(
         val data = bindAnyPort()
         // Keep short Wi-Fi bursts in the kernel while decrypting or scheduling pauses
         // the receive thread. The platform may cap this request; log the actual size.
-        val originalBufferBytes = runCatching { data.receiveBufferSize }.getOrDefault(0)
+        val originalBufferBytes = runCatching { data.receiveBufferSize }.getOrElse { 0 }
         if (originalBufferBytes < AUDIO_RECEIVE_BUFFER_BYTES) {
             runCatching { data.receiveBufferSize = AUDIO_RECEIVE_BUFFER_BYTES }
         }
-        onDiagnostic("Audio UDP receive buffer type=$streamType original=$originalBufferBytes requested=$AUDIO_RECEIVE_BUFFER_BYTES actual=${runCatching { data.receiveBufferSize }.getOrDefault(0)}")
+        onDiagnostic("Audio UDP receive buffer type=$streamType original=$originalBufferBytes requested=$AUDIO_RECEIVE_BUFFER_BYTES actual=${runCatching { data.receiveBufferSize }.getOrElse { 0 }}")
         val control = bindAnyPort()
         dataSocket = data
         controlSocket = control
