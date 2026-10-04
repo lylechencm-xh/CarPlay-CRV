@@ -23,6 +23,10 @@ jobs:
         run: python3 .github/scripts/check-api19-java.py
       - name: Run upstream wired-core tests
         run: ./gradlew :shared:testDebugUnitTest --stacktrace
+      - name: Print failed unit-test details
+        if: failure()
+        run: |
+          find shared/build/test-results/testDebugUnitTest -type f -name '*.xml' -print -exec cat {} \; || true
       - name: Lint CR-V API19 path
         id: lint
         run: ./gradlew :shared:lintDebug :mobile:lintDebug --stacktrace
