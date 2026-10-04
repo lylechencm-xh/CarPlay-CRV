@@ -64,6 +64,7 @@ class CrvWiredCarPlayController(
     private val deviceId = deviceId(identity.publicKey)
 
     private val sink = CrvApi19MediaSink(
+        context = appContext,
         surface = surface,
         videoWidth = displayWidth,
         videoHeight = displayHeight,
