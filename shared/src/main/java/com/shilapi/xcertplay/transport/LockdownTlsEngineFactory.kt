@@ -9,7 +9,7 @@ import java.security.KeyStore
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.spec.PKCS8EncodedKeySpec
-import android.util.Base64
+import org.bouncycastle.util.encoders.Base64
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import org.bouncycastle.jsse.provider.BouncyCastleJsseProvider
 import javax.net.ssl.KeyManagerFactory
@@ -67,7 +67,7 @@ object LockdownTlsEngineFactory {
         if (begin < 0 || end < 0) throw GeneralSecurityException("Invalid PKCS#8 private key PEM")
         val encoded = pem.copyOfRange(begin + BEGIN_PRIVATE_KEY.size, end)
         return try {
-            Base64.decode(encoded, Base64.DEFAULT)
+            Base64.decode(encoded)
         } catch (error: IllegalArgumentException) {
             throw GeneralSecurityException("Invalid PKCS#8 private key PEM", error)
         } finally {
