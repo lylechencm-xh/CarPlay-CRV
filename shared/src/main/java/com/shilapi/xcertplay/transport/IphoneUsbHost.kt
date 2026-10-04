@@ -266,7 +266,7 @@ class IphoneUsbHost(
                     "in=${describeUsbEndpoint(endpoints.second)}",
             )
             if (!connection.claimInterface(usbMux, true)) {
-                throw IphoneUsbException.DeviceUnavailable("Android could not claim USBMUX interface 1")
+                throw IphoneUsbException.DeviceUnavailable("Android could not claim USBMUX interface ${usbMux.id}")
             }
             claimedInterface = usbMux
             return Iap2UsbSession(connection, endpoints.first, endpoints.second)
