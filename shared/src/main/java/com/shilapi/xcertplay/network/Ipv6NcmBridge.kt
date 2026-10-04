@@ -221,10 +221,11 @@ internal object TunIoCompatibility {
     fun isWouldBlock(error: IOException): Boolean {
         var current: Throwable? = error
         while (current != null) {
+            val item = current
             val text = buildString {
-                append(current.javaClass.simpleName)
+                append(item.javaClass.simpleName)
                 append(' ')
-                append(current.message.orEmpty())
+                append(item.message.orEmpty())
             }.lowercase(Locale.US)
             if (
                 "eagain" in text ||
