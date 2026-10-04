@@ -11,7 +11,9 @@ import android.graphics.SurfaceTexture
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.Surface
@@ -21,6 +23,7 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import com.shilapi.xcertplay.network.CarPlayVpnService
 import com.shilapi.xcertplay.transport.Iap2UsbSession
+import com.shilapi.xcertplay.transport.IphoneCarPlayConfiguration
 import com.shilapi.xcertplay.transport.IphoneUsbHost
 import com.shilapi.xcertplay.transport.IphoneUsbMatcher
 import java.io.Closeable
@@ -41,11 +44,16 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private lateinit var diagnostics: CrvDiagnostics
 
     private val io: ExecutorService = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var permissionReceiver: Closeable? = null
     private var attachReceiver: Closeable? = null
     private var detachReceiver: Closeable? = null
 
     @Volatile private var awaitingCarPlayReattach = false
+    private var usbTransitionGeneration = 0
+    private var reconnectGeneration = 0
+    private var reconnectAttempts = 0
+    private var destroyed = false
     private var pendingDevice: UsbDevice? = null
     private var pendingUsbSession: Iap2UsbSession? = null
 
@@ -131,6 +139,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         }
 
         attachReceiver = usbHost.registerAttachReceiver { device ->
+            reconnectAttempts = 0
+            reconnectGeneration++
             reportStatus("iPhone attached")
             if (awaitingCarPlayReattach) requestPermissionForCarPlay(device)
             else requestPermission(device)
@@ -143,6 +153,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                     pendingUsbSession?.close()
                     pendingUsbSession = null
                     pendingDevice = null
+                    reconnectAttempts = 0
+                    reconnectGeneration++
                     reportStatus("iPhone disconnected")
                 }
             } else {
@@ -204,13 +216,26 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     private fun beginUsb(device: UsbDevice) {
         awaitingCarPlayReattach = true
+        val generation = ++usbTransitionGeneration
         reportStatus("Switching iPhone to CarPlay USB mode")
         usbHost.requestCarPlayReenumerationAsync(device, io) { result ->
             when (result) {
-                is IphoneUsbHost.TransitionResult.ReenumerationRequested ->
+                is IphoneUsbHost.TransitionResult.ReenumerationRequested -> {
                     reportStatus("Waiting for iPhone CarPlay USB mode")
+                    mainHandler.postDelayed({
+                        if (
+                            !destroyed &&
+                            awaitingCarPlayReattach &&
+                            generation == usbTransitionGeneration
+                        ) {
+                            awaitingCarPlayReattach = false
+                            reportStatus("CarPlay USB mode switch timed out; reconnect iPhone")
+                        }
+                    }, USB_REENUMERATION_TIMEOUT_MILLIS)
+                }
                 is IphoneUsbHost.TransitionResult.Failed -> {
                     awaitingCarPlayReattach = false
+                    usbTransitionGeneration++
                     reportStatus("USB setup failed: ${result.error.message ?: "unknown"}")
                 }
             }
@@ -223,6 +248,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             when (result) {
                 is IphoneUsbHost.Iap2SessionResult.Connected -> {
                     awaitingCarPlayReattach = false
+                    usbTransitionGeneration++
                     synchronized(this) {
                         pendingUsbSession?.close()
                         pendingUsbSession = result.session
@@ -233,6 +259,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 }
                 is IphoneUsbHost.Iap2SessionResult.Failed -> {
                     awaitingCarPlayReattach = false
+                    usbTransitionGeneration++
                     reportStatus("USBMUX failed: ${result.error.message ?: "unknown"}")
                 }
             }
@@ -261,6 +288,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             onStopped = {
                 runOnUiThread {
                     controller = null
+                    scheduleReconnect()
                 }
             },
         )
@@ -270,8 +298,47 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     private fun reportStatus(message: String) {
+        if (message == "CarPlay active") {
+            reconnectAttempts = 0
+            reconnectGeneration++
+        }
         diagnostics.log(message)
         setStatus(message)
+    }
+
+    private fun scheduleReconnect() {
+        if (destroyed || videoSurface == null || vpnService == null) return
+        if (reconnectAttempts >= MAX_AUTOMATIC_RECONNECTS) {
+            reportStatus("CarPlay stopped; reconnect iPhone to retry")
+            return
+        }
+        val generation = ++reconnectGeneration
+        reconnectAttempts++
+        reportStatus("CarPlay stopped; retrying USB session ${reconnectAttempts}/$MAX_AUTOMATIC_RECONNECTS")
+        mainHandler.postDelayed({
+            if (
+                destroyed ||
+                generation != reconnectGeneration ||
+                controller != null ||
+                pendingUsbSession != null ||
+                videoSurface == null ||
+                vpnService == null
+            ) {
+                return@postDelayed
+            }
+            val device = usbHost.discover().firstOrNull()
+            if (device == null) {
+                reportStatus("Connect iPhone by USB")
+                return@postDelayed
+            }
+            if (IphoneCarPlayConfiguration.hasActiveCarPlayLayout(device)) {
+                awaitingCarPlayReattach = true
+                requestPermissionForCarPlay(device)
+            } else {
+                awaitingCarPlayReattach = false
+                requestPermission(device)
+            }
+        }, AUTOMATIC_RECONNECT_DELAY_MILLIS)
     }
 
     private fun setStatus(message: String) {
@@ -310,6 +377,11 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     override fun onDestroy() {
+        destroyed = true
+        reconnectGeneration++
+        usbTransitionGeneration++
+        mainHandler.removeCallbacksAndMessages(null)
+
         permissionReceiver?.close()
         permissionReceiver = null
         attachReceiver?.close()
@@ -340,5 +412,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     companion object {
         private const val REQUEST_VPN = 1001
+        private const val USB_REENUMERATION_TIMEOUT_MILLIS = 15_000L
+        private const val AUTOMATIC_RECONNECT_DELAY_MILLIS = 2_000L
+        private const val MAX_AUTOMATIC_RECONNECTS = 3
     }
 }
