@@ -50,6 +50,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private var detachReceiver: Closeable? = null
 
     @Volatile private var awaitingCarPlayReattach = false
+    @Volatile private var openCarPlayAfterPermission = false
     private var usbTransitionGeneration = 0
     private var reconnectGeneration = 0
     private var reconnectAttempts = 0
@@ -128,11 +129,17 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         permissionReceiver = usbHost.registerPermissionReceiver { result ->
             when (result) {
                 is IphoneUsbHost.PermissionResult.Granted -> {
-                    if (awaitingCarPlayReattach) openCarPlayUsb(result.device)
-                    else beginUsb(result.device)
+                    if (openCarPlayAfterPermission) {
+                        openCarPlayAfterPermission = false
+                        openCarPlayUsb(result.device)
+                    } else {
+                        beginUsb(result.device)
+                    }
                 }
                 is IphoneUsbHost.PermissionResult.Denied -> {
+                    openCarPlayAfterPermission = false
                     awaitingCarPlayReattach = false
+                    usbTransitionGeneration++
                     reportStatus("USB permission denied")
                 }
             }
@@ -153,6 +160,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                     pendingUsbSession?.close()
                     pendingUsbSession = null
                     pendingDevice = null
+                    openCarPlayAfterPermission = false
                     reconnectAttempts = 0
                     reconnectGeneration++
                     reportStatus("iPhone disconnected")
@@ -199,6 +207,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     private fun requestPermission(device: UsbDevice) {
+        openCarPlayAfterPermission = false
         when (usbHost.requestPermission(device)) {
             is IphoneUsbHost.PermissionRequest.AlreadyGranted -> beginUsb(device)
             is IphoneUsbHost.PermissionRequest.Requested ->
@@ -207,14 +216,19 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     private fun requestPermissionForCarPlay(device: UsbDevice) {
+        openCarPlayAfterPermission = true
         when (usbHost.requestPermission(device)) {
-            is IphoneUsbHost.PermissionRequest.AlreadyGranted -> openCarPlayUsb(device)
+            is IphoneUsbHost.PermissionRequest.AlreadyGranted -> {
+                openCarPlayAfterPermission = false
+                openCarPlayUsb(device)
+            }
             is IphoneUsbHost.PermissionRequest.Requested ->
                 setStatus("Waiting for CarPlay USB permission")
         }
     }
 
     private fun beginUsb(device: UsbDevice) {
+        openCarPlayAfterPermission = false
         awaitingCarPlayReattach = true
         val generation = ++usbTransitionGeneration
         reportStatus("Switching iPhone to CarPlay USB mode")
@@ -247,6 +261,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         usbHost.openIap2UsbSessionAsync(device, io) { result ->
             when (result) {
                 is IphoneUsbHost.Iap2SessionResult.Connected -> {
+                    openCarPlayAfterPermission = false
                     awaitingCarPlayReattach = false
                     usbTransitionGeneration++
                     synchronized(this) {
@@ -258,6 +273,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                     runOnUiThread { maybeStartCarPlay() }
                 }
                 is IphoneUsbHost.Iap2SessionResult.Failed -> {
+                    openCarPlayAfterPermission = false
                     awaitingCarPlayReattach = false
                     usbTransitionGeneration++
                     reportStatus("USBMUX failed: ${result.error.message ?: "unknown"}")
@@ -332,7 +348,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 return@postDelayed
             }
             if (IphoneCarPlayConfiguration.hasActiveCarPlayLayout(device)) {
-                awaitingCarPlayReattach = true
+                awaitingCarPlayReattach = false
                 requestPermissionForCarPlay(device)
             } else {
                 awaitingCarPlayReattach = false
@@ -378,6 +394,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     override fun onDestroy() {
         destroyed = true
+        openCarPlayAfterPermission = false
         reconnectGeneration++
         usbTransitionGeneration++
         mainHandler.removeCallbacksAndMessages(null)
