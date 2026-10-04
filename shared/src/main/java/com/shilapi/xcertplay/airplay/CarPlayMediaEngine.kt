@@ -436,16 +436,23 @@ class CarPlayMediaEngine(
 }
 
 internal fun unsignedPlistDecimal(value: Any?): String? = when (value) {
-    is Long -> java.lang.Long.toUnsignedString(value)
-    is Int -> Integer.toUnsignedString(value)
+    is Long -> unsignedLong(value).toString()
+    is Int -> (value.toLong() and 0xffff_ffffL).toString()
     is Short -> (value.toInt() and 0xffff).toString()
     is Byte -> (value.toInt() and 0xff).toString()
     is BigInteger -> if (value.signum() >= 0) value.toString() else null
-    else -> (value as? Number)?.toLong()?.let(java.lang.Long::toUnsignedString)
+    else -> (value as? Number)?.toLong()?.let { unsignedLong(it).toString() }
 }
 
 internal fun unsignedPlistInteger(value: Any?): Any = when (value) {
-    is Long -> if (value < 0) BigInteger(java.lang.Long.toUnsignedString(value)) else value
-    is Int -> if (value < 0) BigInteger(Integer.toUnsignedString(value)) else value
+    is Long -> if (value < 0) unsignedLong(value) else value
+    is Int -> if (value < 0) BigInteger.valueOf(value.toLong() and 0xffff_ffffL) else value
     else -> value ?: 0L
 }
+
+private fun unsignedLong(value: Long): BigInteger =
+    if (value >= 0) {
+        BigInteger.valueOf(value)
+    } else {
+        BigInteger.valueOf(value and Long.MAX_VALUE).setBit(63)
+    }
