@@ -132,7 +132,8 @@ jobs:
           } > release/BUILD-INFO.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add release/CarPlay-CRV-2021-v0.2.12-api17.apk release/BUILD-INFO.txt
+          git add release/BUILD-INFO.txt
+          git add -f release/CarPlay-CRV-2021-v0.2.12-api17.apk
           if git diff --cached --quiet; then
             echo "release APK unchanged; nothing to commit."
           else
