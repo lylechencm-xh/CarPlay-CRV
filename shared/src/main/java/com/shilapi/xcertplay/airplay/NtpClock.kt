@@ -217,8 +217,15 @@ private fun ntp64Now(): BigInteger {
 }
 
 private fun ntpFromNanos(ns: Long): BigInteger {
-    val seconds = BigInteger.valueOf(Math.floorDiv(ns, 1_000_000_000L))
-    val nanos = BigInteger.valueOf(Math.floorMod(ns, 1_000_000_000L))
+    val divisor = 1_000_000_000L
+    var secondsValue = ns / divisor
+    var nanosValue = ns % divisor
+    if (nanosValue < 0L) {
+        secondsValue -= 1L
+        nanosValue += divisor
+    }
+    val seconds = BigInteger.valueOf(secondsValue)
+    val nanos = BigInteger.valueOf(nanosValue)
     return seconds.shiftLeft(32).or(nanos.shiftLeft(32).divide(NANOS_PER_SECOND))
 }
 
