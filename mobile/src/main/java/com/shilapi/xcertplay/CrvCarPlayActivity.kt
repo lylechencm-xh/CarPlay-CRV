@@ -138,7 +138,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                         openCarPlayAfterPermission = false
                         openCarPlayUsb(result.device)
                     } else {
-                        beginUsb(result.device)
+                        routeGrantedDevice(result.device)
                     }
                 }
                 is IphoneUsbHost.PermissionResult.Denied -> {
@@ -219,9 +219,20 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private fun requestPermission(device: UsbDevice) {
         openCarPlayAfterPermission = false
         when (usbHost.requestPermission(device)) {
-            is IphoneUsbHost.PermissionRequest.AlreadyGranted -> beginUsb(device)
+            is IphoneUsbHost.PermissionRequest.AlreadyGranted -> routeGrantedDevice(device)
             is IphoneUsbHost.PermissionRequest.Requested ->
                 setStatus("Waiting for USB permission")
+        }
+    }
+
+    private fun routeGrantedDevice(device: UsbDevice) {
+        if (IphoneCarPlayConfiguration.hasActiveCarPlayLayout(device)) {
+            awaitingCarPlayReattach = false
+            usbTransitionGeneration.incrementAndGet()
+            reportStatus("iPhone already in CarPlay USB mode")
+            openCarPlayUsb(device)
+        } else {
+            beginUsb(device)
         }
     }
 
@@ -246,16 +257,13 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             when (result) {
                 is IphoneUsbHost.TransitionResult.ReenumerationRequested -> {
                     reportStatus("Waiting for iPhone CarPlay USB mode")
-                    mainHandler.postDelayed({
-                        if (
-                            !destroyed &&
-                            awaitingCarPlayReattach &&
-                            generation == usbTransitionGeneration.get()
-                        ) {
-                            awaitingCarPlayReattach = false
-                            reportStatus("CarPlay USB mode switch timed out; reconnect iPhone")
-                        }
-                    }, USB_REENUMERATION_TIMEOUT_MILLIS)
+                    mainHandler.post {
+                        pollForCarPlayReattach(
+                            generation = generation,
+                            deadlineMillis = android.os.SystemClock.elapsedRealtime() +
+                                USB_REENUMERATION_TIMEOUT_MILLIS,
+                        )
+                    }
                 }
                 is IphoneUsbHost.TransitionResult.Failed -> {
                     awaitingCarPlayReattach = false
@@ -264,6 +272,39 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 }
             }
         }
+    }
+
+    private fun pollForCarPlayReattach(generation: Int, deadlineMillis: Long) {
+        if (
+            destroyed ||
+            !awaitingCarPlayReattach ||
+            generation != usbTransitionGeneration.get()
+        ) {
+            return
+        }
+
+        val activeDevice = usbHost.discover().firstOrNull {
+            IphoneCarPlayConfiguration.hasActiveCarPlayLayout(it)
+        }
+        if (activeDevice != null) {
+            awaitingCarPlayReattach = false
+            usbTransitionGeneration.incrementAndGet()
+            reportStatus("CarPlay USB mode detected")
+            requestPermissionForCarPlay(activeDevice)
+            return
+        }
+
+        if (android.os.SystemClock.elapsedRealtime() >= deadlineMillis) {
+            awaitingCarPlayReattach = false
+            usbTransitionGeneration.incrementAndGet()
+            reportStatus("CarPlay USB mode switch timed out; reconnect iPhone")
+            return
+        }
+
+        mainHandler.postDelayed(
+            { pollForCarPlayReattach(generation, deadlineMillis) },
+            USB_REENUMERATION_POLL_MILLIS,
+        )
     }
 
     private fun openCarPlayUsb(device: UsbDevice) {
@@ -444,6 +485,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     companion object {
         private const val REQUEST_VPN = 1001
         private const val USB_REENUMERATION_TIMEOUT_MILLIS = 15_000L
+        private const val USB_REENUMERATION_POLL_MILLIS = 500L
         private const val AUTOMATIC_RECONNECT_DELAY_MILLIS = 2_000L
         private const val MAX_AUTOMATIC_RECONNECTS = 3
     }
