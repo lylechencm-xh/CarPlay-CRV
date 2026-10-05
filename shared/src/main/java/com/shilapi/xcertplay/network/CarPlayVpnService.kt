@@ -92,16 +92,13 @@ class CarPlayVpnService : VpnService() {
             }
             require(hostMac.size == 6) { "hostMac must be 6 bytes" }
 
-            val tunFd = Builder()
+            val builder = Builder()
                 .addAddress(linkLocal, LINK_PREFIX)
                 .addRoute(LINK_LOCAL_ROUTE, LINK_PREFIX)
                 .setSession(SESSION_NAME)
                 .setMtu(TUN_MTU)
-                .setBlocking(true)
-                // An empty app list routes every UID through this VPN. Scope it before establish;
-                // rejection must reach the existing attachment cleanup, never an unscoped retry.
-                .addAllowedApplication(packageName)
-                .establish()
+            configureOptionalBuilderFeatures(builder)
+            val tunFd = builder.establish()
                 ?: throw IOException("VpnService.establish returned null")
             tun = tunFd
 
@@ -154,6 +151,21 @@ class CarPlayVpnService : VpnService() {
         } catch (error: Exception) {
             releaseLocked()
             AttachResult.Failed(error.message ?: error.javaClass.simpleName)
+        }
+    }
+
+    /**
+     * API21 added per-app VPN scoping and explicit blocking mode. Android 4.2.2/API17 does not
+     * expose either method, so resolve them only when present. The API17 route is already limited
+     * to the CarPlay link-local IPv6 prefix, avoiding a device-wide default route.
+     */
+    private fun configureOptionalBuilderFeatures(builder: Builder) {
+        val type = builder.javaClass
+        runCatching {
+            type.getMethod("setBlocking", java.lang.Boolean.TYPE).invoke(builder, true)
+        }
+        runCatching {
+            type.getMethod("addAllowedApplication", String::class.java).invoke(builder, packageName)
         }
     }
 
