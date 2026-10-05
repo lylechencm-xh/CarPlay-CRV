@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.transport
 
+import java.io.Closeable
 import com.shilapi.xcertplay.iap2.wire.Iap2CsmFramer
 import com.shilapi.xcertplay.iap2.wire.Iap2Frame
 import java.io.IOException
@@ -16,7 +17,7 @@ import kotlin.math.min
  */
 class Iap2CsmChannel private constructor(
     private val link: Iap2LinkChannel,
-) : AutoCloseable {
+) : Closeable {
     private val stateLock = Object()
     private val sendLock = Object()
     private val receiveLock = Object()
