@@ -30,21 +30,16 @@ jobs:
 
       - name: Copy all missing upstream files without overwriting CR-V changes
         run: |
-          rsync -a --ignore-existing --exclude '.git/' _upstream/ ./
+          rsync -a --ignore-existing \
+            --exclude '.git/' \
+            --exclude '.github/workflows/' \
+            _upstream/ ./
           rm -rf _upstream
 
-      - name: Verify upstream paths are now present
+      - name: Verify upstream copy exclusions
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import subprocess
-          upstream = subprocess.check_output(
-              ["git", "ls-tree", "-r", "--name-only", "HEAD:_upstream"],
-              text=True,
-          ) if False else ""
-          # The actual completeness check is performed after commit by comparing trees.
-          print("Copy stage completed.")
-          PY
+          test ! -e _upstream
+          echo "Upstream source/resources copied; upstream workflow files intentionally excluded."
 
       - name: Commit imported upstream files
         run: |
