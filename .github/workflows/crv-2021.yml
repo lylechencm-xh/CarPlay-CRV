@@ -123,6 +123,8 @@ jobs:
             echo "package=com.shihab.diplay"
             echo "minSdk=17"
             echo "signing=${{ steps.signing.outputs.label }}"
+            echo "carplay_authentication=not-bundled"
+            echo "test_scope=install-and-transport-preauth"
             echo "source_commit=${GITHUB_SHA}"
             if [ -f UPSTREAM-DIPLAY.txt ]; then
               grep '^Upstream commit:' UPSTREAM-DIPLAY.txt || true
