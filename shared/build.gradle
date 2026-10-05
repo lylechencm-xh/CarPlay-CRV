@@ -94,7 +94,11 @@ def crvCoreUnitTests = [
 ]
 
 tasks.configureEach { task ->
-    if (task.name.toLowerCase().contains('unittestkotlin') && task.hasProperty('source')) {
-        task.include(crvCoreUnitTests)
+    if (task.name == 'compileDebugUnitTestKotlin' && task.hasProperty('source')) {
+        task.setSource(fileTree('src/test/java') {
+            crvCoreUnitTests.each { pattern ->
+                include pattern.replace('**/com/', 'com/')
+            }
+        })
     }
 }
