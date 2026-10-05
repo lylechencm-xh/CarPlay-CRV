@@ -282,7 +282,7 @@ class IphoneUsbHost(
         connection: UsbDeviceConnection,
         device: UsbDevice,
     ): UsbInterface {
-        val configuration = IphoneCarPlayConfiguration.find(device)
+        val configuration = IphoneCarPlayConfigurationApi21.find(device)
             ?: throw IphoneUsbException.Protocol(
                 "Re-enumerated iPhone exposes no USBMUX CarPlay configuration",
             )
@@ -292,7 +292,7 @@ class IphoneUsbHost(
                 "setConfiguration ${configuration.id} reported failure; claiming anyway",
             )
         }
-        return IphoneCarPlayConfiguration.usbMuxInterface(configuration)
+        return IphoneCarPlayConfigurationApi21.usbMuxInterface(configuration)
             ?: throw IphoneUsbException.Protocol("CarPlay configuration exposes no USBMUX interface")
     }
 
