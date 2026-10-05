@@ -162,6 +162,19 @@ class CarPlayVpnService : VpnService() {
 
     fun isAttached(): Boolean = active.get() && attachment != null
 
+    fun diagnosticSummary(): String {
+        val sessionCount = synchronized(sessionsLock) { sessions.size }
+        val stats = bridge?.stats()
+        return if (stats == null) {
+            "AirPlay transport attached=${isAttached()} sessions=$sessionCount mode=wifi port=${boundPort() ?: 0}"
+        } else {
+            "AirPlay transport attached=${isAttached()} sessions=$sessionCount mode=ncm " +
+                "port=${boundPort() ?: 0} " +
+                "ncmIn=${stats.ncmToTunPackets}/${stats.ncmToTunBytes}B " +
+                "ncmOut=${stats.tunToNcmPackets}/${stats.tunToNcmBytes}B"
+        }
+    }
+
     /** Port the AirPlay listener actually bound, which may differ from the configured port. */
     fun boundPort(): Int? = attachment?.config?.port
 
