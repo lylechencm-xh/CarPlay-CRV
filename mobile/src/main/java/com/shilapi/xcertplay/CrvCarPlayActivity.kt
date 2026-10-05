@@ -415,8 +415,9 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     private fun reportStatus(message: String) {
-        diagnostics.log(message)
+        val stage = stageFor(message)
         if (message == "CarPlay active") {
+            diagnostics.log(CrvConnectionStage.CARPLAY_ACTIVE, message)
             mainHandler.post {
                 if (!destroyed) {
                     reconnectAttempts = 0
@@ -432,6 +433,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         if (isConnectionError(message)) {
             connectionError(message)
         } else {
+            diagnostics.log(stage, message)
             connectionStatus(message)
         }
     }
@@ -444,6 +446,11 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         }
         val generation = ++reconnectGeneration
         reconnectAttempts++
+        val delayMillis = reconnectDelayMillis(reconnectAttempts)
+        diagnostics.log(
+            CrvConnectionStage.RETRYING,
+            "retry=$reconnectAttempts/$MAX_AUTOMATIC_RECONNECTS delayMs=$delayMillis",
+        )
         beginConnectionStatus(
             "CarPlay stopped; retrying session ${reconnectAttempts}/$MAX_AUTOMATIC_RECONNECTS",
         )
@@ -470,7 +477,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 awaitingCarPlayReattach = false
                 requestPermission(device)
             }
-        }, AUTOMATIC_RECONNECT_DELAY_MILLIS)
+        }, delayMillis)
     }
 
     private fun beginConnectionStatus(message: String) {
@@ -488,7 +495,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     private fun connectionError(message: String) {
-        diagnostics.log(message)
+        diagnostics.log(CrvConnectionStage.ERROR, message)
         connectionStatusActive = true
         runOnUiThread {
             if (destroyed) return@runOnUiThread
@@ -509,6 +516,35 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private fun isConnectionError(message: String): Boolean {
         val value = message.lowercase(java.util.Locale.US)
         return ERROR_STATUS_WORDS.any(value::contains)
+    }
+
+    private fun reconnectDelayMillis(attempt: Int): Long {
+        val index = (attempt - 1).coerceIn(0, RECONNECT_DELAYS_MILLIS.lastIndex)
+        return RECONNECT_DELAYS_MILLIS[index]
+    }
+
+    private fun stageFor(message: String): CrvConnectionStage {
+        val value = message.lowercase(java.util.Locale.US)
+        return when {
+            isConnectionError(message) -> CrvConnectionStage.ERROR
+            "carplay active" in value -> CrvConnectionStage.CARPLAY_ACTIVE
+            "wi-fi hotspot" in value -> CrvConnectionStage.WIFI_HOTSPOT
+            "wi-fi" in value -> CrvConnectionStage.WIFI_HANDOFF
+            "airplay" in value && ("accepted" in value || "connected" in value) ->
+                CrvConnectionStage.AIRPLAY_CONNECTED
+            "airplay" in value && ("listening" in value || "ready" in value) ->
+                CrvConnectionStage.AIRPLAY_LISTENING
+            "mfi" in value || "authentication" in value -> CrvConnectionStage.MFI
+            "lockdown" in value || "pairing" in value -> CrvConnectionStage.LOCKDOWN
+            "iap2" in value -> CrvConnectionStage.IAP2
+            "ncm" in value -> CrvConnectionStage.NCM
+            "usbmux" in value -> CrvConnectionStage.USBMUX_READY
+            "network ready" in value -> CrvConnectionStage.NETWORK_READY
+            "permission" in value -> CrvConnectionStage.USB_PERMISSION
+            "switching" in value || "usb mode" in value -> CrvConnectionStage.USB_REENUMERATION
+            "iphone" in value || "usb" in value -> CrvConnectionStage.USB_DETECTED
+            else -> CrvConnectionStage.IDLE
+        }
     }
 
     override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
@@ -577,8 +613,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         private const val REQUEST_VPN = 1001
         private const val USB_REENUMERATION_TIMEOUT_MILLIS = 15_000L
         private const val USB_REENUMERATION_POLL_MILLIS = 500L
-        private const val AUTOMATIC_RECONNECT_DELAY_MILLIS = 2_000L
-        private const val MAX_AUTOMATIC_RECONNECTS = 3
+        private val RECONNECT_DELAYS_MILLIS = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L)
+        private const val MAX_AUTOMATIC_RECONNECTS = 4
         private val ERROR_STATUS_WORDS = listOf(
             "failed",
             "failure",
