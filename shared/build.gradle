@@ -19,6 +19,29 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+
+    sourceSets {
+        main {
+            // Keep the complete upstream DiPlay source tree in the repository, but compile only
+            // the CR-V/API19 runtime surface. These upstream-only features depend on newer
+            // AndroidX/Car App/JmDNS APIs or orchestration code that is not used by the legacy
+            // head-unit entry point.
+            java.exclude(
+                'com/shilapi/xcertplay/adb/**',
+                'com/shilapi/xcertplay/hud/**',
+                'com/shilapi/xcertplay/network/CarPlayBonjour.kt',
+                'com/shilapi/xcertplay/network/LocalOnlyHotspotManager.kt',
+                'com/shilapi/xcertplay/network/ManualHotspotInterfaces.kt',
+                'com/shilapi/xcertplay/network/WifiP2pGroupManager.kt',
+                'com/shilapi/xcertplay/orchestration/CarPlayController.kt',
+                'com/shilapi/xcertplay/shared/MyCarAppScreen.kt',
+                'com/shilapi/xcertplay/shared/MyCarAppService.kt',
+                'com/shilapi/xcertplay/shared/MyCarAppSession.kt',
+                'com/shilapi/xcertplay/media/AndroidMediaSink.kt',
+                'com/shilapi/xcertplay/mfi/RemoteMfiAuthenticationClient.kt',
+            )
+        }
+    }
 }
 dependencies {
     implementation libs.bouncycastle
