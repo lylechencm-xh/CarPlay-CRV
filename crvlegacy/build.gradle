@@ -32,6 +32,7 @@ android {
 def crvExcludedKotlin = [
     '**/com/shilapi/xcertplay/adb/**',
     '**/com/shilapi/xcertplay/hud/**',
+    '**/com/shilapi/xcertplay/location/**',
     '**/com/shilapi/xcertplay/glance/**',
     '**/com/shilapi/xcertplay/network/CarPlayBonjour.kt',
     '**/com/shilapi/xcertplay/network/LocalOnlyHotspotManager.kt',
