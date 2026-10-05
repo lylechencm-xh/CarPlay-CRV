@@ -1,0 +1,53 @@
+name: CR-V 2021 Android 4.4 Build
+
+on:
+  push:
+    branches: [crv-2021-integrated]
+  workflow_dispatch:
+
+concurrency:
+  group: crv-2021-integrated
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: '9.5.0'
+      - name: Check Android 4.4 Java library surface
+        run: python3 .github/scripts/check-api19-java.py
+      - name: Run wired CarPlay core tests
+        run: ./gradlew :shared:testDebugUnitTest --stacktrace
+      - name: Print failed unit-test details
+        if: failure()
+        run: |
+          find shared/build/test-results/testDebugUnitTest -type f -name '*.xml' -print -exec cat {} \; || true
+      - name: Lint CR-V Android 4.4 path
+        run: ./gradlew :shared:lintDebug :mobile:lintDebug --stacktrace
+      - name: Print lint details
+        if: always()
+        run: |
+          for report in shared/build/reports/lint-results-debug.txt mobile/build/reports/lint-results-debug.txt; do
+            if [ -f "$report" ]; then
+              echo "===== $report ====="
+              grep -n -E "Error:|Warning:" "$report" || true
+            fi
+          done
+      - name: Build CR-V 2021 Android 4.4 APK
+        run: ./gradlew :mobile:assembleDebug --stacktrace
+      - name: Upload CR-V 2021 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarPlay-CRV-2021-api19-debug
+          path: mobile/build/outputs/apk/debug/mobile-debug.apk
+          if-no-files-found: error
