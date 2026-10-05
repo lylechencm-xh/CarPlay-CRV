@@ -2,7 +2,7 @@ package com.shilapi.xcertplay.transport
 
 import android.annotation.SuppressLint
 import java.io.ByteArrayInputStream
-import java.nio.charset.StandardCharsets
+import java.nio.charset.Charset
 import java.security.GeneralSecurityException
 import java.security.KeyFactory
 import java.security.KeyStore
@@ -99,6 +99,6 @@ object LockdownTlsEngineFactory {
     private const val KEY_ALIAS = "lockdown-host"
     private const val PEER_HOST = "Device"
     private const val PEER_PORT = 0
-    private val BEGIN_PRIVATE_KEY = "-----BEGIN PRIVATE KEY-----".toByteArray(StandardCharsets.US_ASCII)
-    private val END_PRIVATE_KEY = "-----END PRIVATE KEY-----".toByteArray(StandardCharsets.US_ASCII)
+    private val BEGIN_PRIVATE_KEY = "-----BEGIN PRIVATE KEY-----".toByteArray(Charset.forName("US-ASCII"))
+    private val END_PRIVATE_KEY = "-----END PRIVATE KEY-----".toByteArray(Charset.forName("US-ASCII"))
 }
