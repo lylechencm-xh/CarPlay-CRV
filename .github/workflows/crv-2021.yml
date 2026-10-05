@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -99,3 +99,17 @@ jobs:
           name: CarPlay-CRV-2021-v0.2.12-api19-legacy-id
           path: mobile/build/outputs/apk/debug/mobile-debug.apk
           if-no-files-found: error
+
+      - name: Commit APK to repository release folder
+        run: |
+          mkdir -p release
+          cp mobile/build/outputs/apk/debug/mobile-debug.apk release/CarPlay-CRV-2021-v0.2.12-api19.apk
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add release/CarPlay-CRV-2021-v0.2.12-api19.apk
+          if git diff --cached --quiet; then
+            echo "release APK unchanged; nothing to commit."
+          else
+            git commit -m "chore(release): update CR-V 2021 API19 APK [skip ci]"
+            git push origin HEAD:crv-2021-integrated
+          fi
