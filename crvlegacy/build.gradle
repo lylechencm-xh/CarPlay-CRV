@@ -14,7 +14,7 @@ android {
     sourceSets {
         main {
             manifest.srcFile '../shared/src/main/AndroidManifest.xml'
-            java.srcDir '../shared/src/main/java'
+            kotlin.directories.add('../shared/src/main/java')
         }
     }
 
