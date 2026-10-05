@@ -7,7 +7,7 @@
     <application
         android:allowBackup="false"
         android:hardwareAccelerated="true"
-        android:icon="@drawable/ic_launcher_carplay"
+        android:icon="@mipmap/ic_launcher_carplay"
         android:label="@string/app_name"
         android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen">
         <activity
