@@ -80,9 +80,9 @@ FORBIDDEN = {
     "Math.toIntExact(": "Java 8 Math.toIntExact is unavailable on Jelly Bean",
     "String.join(": "Java 8 String.join is unavailable on Jelly Bean",
     "Comparator.comparing(": "Java 8 Comparator factory is unavailable on Jelly Bean",
-    ".computeIfAbsent(": "Java 8 Map.computeIfAbsent is unavailable on Jelly Bean",
-    ".computeIfPresent(": "Java 8 Map.computeIfPresent is unavailable on Jelly Bean",
-    ".removeIf(": "Java 8 Collection.removeIf is unavailable on Jelly Bean",
+    ".computeIfAbsent": "Java 8 Map.computeIfAbsent is unavailable on Jelly Bean",
+    ".computeIfPresent": "Java 8 Map.computeIfPresent is unavailable on Jelly Bean",
+    ".removeIf": "Java 8 Collection.removeIf is unavailable on Jelly Bean",
 }
 
 failures = []
