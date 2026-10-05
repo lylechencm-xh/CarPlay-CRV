@@ -75,6 +75,7 @@ def crvExcludedKotlin = [
     '**/com/shilapi/xcertplay/shared/MyCarAppSession.kt',
     '**/com/shilapi/xcertplay/media/AndroidMediaSink.kt',
     '**/com/shilapi/xcertplay/media/MicrophoneUplink.kt',
+    '**/com/shilapi/xcertplay/media/OpusEncoder.kt',
     '**/com/shilapi/xcertplay/mfi/RemoteMfiAuthenticationClient.kt',
 ]
 
