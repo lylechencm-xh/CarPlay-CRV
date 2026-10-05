@@ -1,6 +1,5 @@
 package com.shilapi.xcertplay.transport
 
-import java.io.Closeable
 import com.shilapi.xcertplay.iap2.message.Iap2ControlMessages
 import com.shilapi.xcertplay.iap2.wire.Iap2Frame
 import java.util.Locale
@@ -29,7 +28,7 @@ data class CarPlayLocationFix(
 }
 
 /** Supplies location data only while the phone has subscribed to iAP2 LocationInformation. */
-interface Iap2LocationProvider : Closeable {
+interface Iap2LocationProvider : AutoCloseable {
     /** The 0xFFFA parameter ids, i.e. the sentence types the iPhone asked for; called before [start]. */
     fun onRequested(components: Set<Int>) = Unit
 
@@ -120,19 +119,15 @@ object NmeaLocationEncoder {
     private data class NmeaCoordinate(val value: String, val hemisphere: String)
 
     private class Timestamp(millis: Long) {
-        private val fields = java.util.GregorianCalendar(
-            java.util.TimeZone.getTimeZone("UTC"),
-            Locale.US,
-        ).apply {
-            timeInMillis = millis
-        }
+        private val fields = java.time.Instant.ofEpochMilli(millis)
+            .atZone(java.time.ZoneOffset.UTC)
 
-        val hour: Int = fields.get(java.util.Calendar.HOUR_OF_DAY)
-        val minute: Int = fields.get(java.util.Calendar.MINUTE)
-        val second: Int = fields.get(java.util.Calendar.SECOND)
-        val day: Int = fields.get(java.util.Calendar.DAY_OF_MONTH)
-        val month: Int = fields.get(java.util.Calendar.MONTH) + 1
-        val year: Int = fields.get(java.util.Calendar.YEAR)
+        val hour: Int = fields.hour
+        val minute: Int = fields.minute
+        val second: Int = fields.second
+        val day: Int = fields.dayOfMonth
+        val month: Int = fields.monthValue
+        val year: Int = fields.year
     }
 
     private const val KNOTS_PER_METER_PER_SECOND = 1.94384449
@@ -226,7 +221,7 @@ object Iap2LocationMessages {
 
     /** The parameter ids of a 0xFFFA request (the sentence types asked for), or none if unreadable. */
     fun requestedComponents(frame: Iap2Frame): Set<Int> =
-        runCatching { frame.body().asList().map { it.id }.toSortedSet() }.getOrElse { emptySet() }
+        runCatching { frame.body().asList().map { it.id }.toSortedSet() }.getOrDefault(emptySet())
 
     fun locationInformation(nmeaSentence: String): Iap2Frame {
         require(nmeaSentence.isNotEmpty()) { "NMEA sentence must not be empty" }
