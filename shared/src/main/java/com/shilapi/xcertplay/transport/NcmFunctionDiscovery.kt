@@ -28,15 +28,20 @@ object NcmFunctionDiscovery {
         val bulkOut: UsbEndpoint,
     )
 
-    fun find(configuration: UsbConfiguration): NcmFunction? {
-        return findCdcNcm(configuration)
+    fun find(device: android.hardware.usb.UsbDevice): NcmFunction? {
+        val interfaces = (0 until device.interfaceCount).map(device::getInterface)
+        return findCdcNcm(interfaces)
     }
 
-    private fun findCdcNcm(configuration: UsbConfiguration): NcmFunction? {
-        val control = interfaces(configuration).firstOrNull {
+    fun find(configuration: UsbConfiguration): NcmFunction? {
+        return findCdcNcm(interfaces(configuration))
+    }
+
+    private fun findCdcNcm(interfaces: List<UsbInterface>): NcmFunction? {
+        val control = interfaces.firstOrNull {
             it.interfaceClass == CONTROL_CLASS && it.interfaceSubclass == CONTROL_SUBCLASS
         } ?: return null
-        val data = interfaces(configuration)
+        val data = interfaces
             .filter { it.interfaceClass == DATA_CLASS && bulkEndpoints(it) != null }
             .minByOrNull { if (it.alternateSetting == DATA_ALTERNATE_SETTING) 0 else 1 }
             ?: return null
