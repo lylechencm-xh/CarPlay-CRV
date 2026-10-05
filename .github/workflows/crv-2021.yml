@@ -24,34 +24,38 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '9.5.0'
-      - name: Prepare fixed CR-V test signing key when configured
+
+      - name: Require fixed CR-V test signing key
         env:
           CRV_TEST_KEYSTORE_BASE64: ${{ secrets.CRV_TEST_KEYSTORE_BASE64 }}
           CRV_TEST_STORE_PASSWORD_SECRET: ${{ secrets.CRV_TEST_STORE_PASSWORD }}
           CRV_TEST_KEY_ALIAS_SECRET: ${{ secrets.CRV_TEST_KEY_ALIAS }}
           CRV_TEST_KEY_PASSWORD_SECRET: ${{ secrets.CRV_TEST_KEY_PASSWORD }}
         run: |
-          if [ -n "$CRV_TEST_KEYSTORE_BASE64" ] && [ -n "$CRV_TEST_STORE_PASSWORD_SECRET" ] && [ -n "$CRV_TEST_KEY_ALIAS_SECRET" ] && [ -n "$CRV_TEST_KEY_PASSWORD_SECRET" ]; then
-            printf '%s' "$CRV_TEST_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/crv-test.keystore"
-            echo "CRV_TEST_KEYSTORE_PATH=$RUNNER_TEMP/crv-test.keystore" >> "$GITHUB_ENV"
-            echo "CRV_TEST_STORE_PASSWORD=$CRV_TEST_STORE_PASSWORD_SECRET" >> "$GITHUB_ENV"
-            echo "CRV_TEST_KEY_ALIAS=$CRV_TEST_KEY_ALIAS_SECRET" >> "$GITHUB_ENV"
-            echo "CRV_TEST_KEY_PASSWORD=$CRV_TEST_KEY_PASSWORD_SECRET" >> "$GITHUB_ENV"
-            echo "CRV_FIXED_SIGNING=1" >> "$GITHUB_ENV"
-          else
-            echo "::warning::Fixed signing secrets are not configured; building a recognition-test APK with the runner debug key."
-            echo "CRV_FIXED_SIGNING=0" >> "$GITHUB_ENV"
+          if [ -z "$CRV_TEST_KEYSTORE_BASE64" ] || [ -z "$CRV_TEST_STORE_PASSWORD_SECRET" ] || [ -z "$CRV_TEST_KEY_ALIAS_SECRET" ] || [ -z "$CRV_TEST_KEY_PASSWORD_SECRET" ]; then
+            echo "::error::Fixed CR-V signing secrets are required. Refusing to build a recognition-test APK with an ephemeral runner debug key."
+            exit 1
           fi
+          printf '%s' "$CRV_TEST_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/crv-test.keystore"
+          echo "CRV_TEST_KEYSTORE_PATH=$RUNNER_TEMP/crv-test.keystore" >> "$GITHUB_ENV"
+          echo "CRV_TEST_STORE_PASSWORD=$CRV_TEST_STORE_PASSWORD_SECRET" >> "$GITHUB_ENV"
+          echo "CRV_TEST_KEY_ALIAS=$CRV_TEST_KEY_ALIAS_SECRET" >> "$GITHUB_ENV"
+          echo "CRV_TEST_KEY_PASSWORD=$CRV_TEST_KEY_PASSWORD_SECRET" >> "$GITHUB_ENV"
+
       - name: Check Android 4.4 Java library surface
         run: python3 .github/scripts/check-api19-java.py
+
       - name: Run wired CarPlay core tests
         run: ./gradlew :shared:testDebugUnitTest --stacktrace
+
       - name: Print failed unit-test details
         if: failure()
         run: |
           find shared/build/test-results/testDebugUnitTest -type f -name '*.xml' -print -exec cat {} \; || true
+
       - name: Lint CR-V Android 4.4 path
         run: ./gradlew :shared:lintDebug :mobile:lintDebug --stacktrace
+
       - name: Print lint details
         if: always()
         run: |
@@ -61,16 +65,28 @@ jobs:
               grep -n -E "Error:|Warning:" "$report" || true
             fi
           done
+
       - name: Build CR-V 2021 Android 4.4 APK
         run: ./gradlew :mobile:assembleDebug --stacktrace
+
+      - name: Verify APK legacy package identity
+        run: |
+          AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
+          "$AAPT" dump badging mobile/build/outputs/apk/debug/mobile-debug.apk | tee /tmp/crv-badging.txt
+          grep -F "package: name='com.shihab.diplay'" /tmp/crv-badging.txt
+          if grep -F "package: name='com.shihab.diplay.crv'" /tmp/crv-badging.txt; then
+            echo "::error::Unexpected .crv package suffix found in APK."
+            exit 1
+          fi
+
       - name: Verify fixed CR-V APK signing certificate
-        if: env.CRV_FIXED_SIGNING == '1'
         run: |
           keytool -printcert -jarfile mobile/build/outputs/apk/debug/mobile-debug.apk | tee /tmp/crv-apk-cert.txt
           grep -F "SHA256: E4:E5:E2:47:FF:F3:AF:8E:BE:B1:0C:2A:C4:22:E9:E4:17:25:6A:29:50:A7:74:40:DB:F8:25:09:38:47:B9:FC" /tmp/crv-apk-cert.txt
+
       - name: Upload CR-V 2021 APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarPlay-CRV-2021-v0.2.11-api19-recognition-test
+          name: CarPlay-CRV-2021-v0.2.12-api19-legacy-id
           path: mobile/build/outputs/apk/debug/mobile-debug.apk
           if-no-files-found: error
