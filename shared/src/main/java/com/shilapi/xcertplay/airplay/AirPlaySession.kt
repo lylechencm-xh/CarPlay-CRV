@@ -790,13 +790,13 @@ class AirPlaySession(
         videoPlaybackAvailability.setEventReady(false)
         videoPlaybackAvailability.setFeatureEnabled(false)
         ntp.close()
-        safeClose(keepAliveSocket)
+        safeCloseDatagramSocket(keepAliveSocket)
         keepAliveSocket = null
         keepAliveThread?.interrupt()
         keepAliveThread = null
-        safeClose(eventServer)
+        safeCloseServerSocket(eventServer)
         eventServer = null
-        safeClose(eventSocket)
+        safeCloseSocket(eventSocket)
         eventSocket = null
         eventCipher = null
         eventThreads.forEach { it.interrupt() }
@@ -812,7 +812,7 @@ class AirPlaySession(
             val shared = pairVerify.shared
             if (shared == null) {
                 Log.e(TAG, "airplay event rejected: pair-verify shared secret unavailable")
-                safeClose(socket)
+                safeCloseSocket(socket)
                 close()
                 return
             }
@@ -890,7 +890,7 @@ class AirPlaySession(
             videoPlaybackAvailability.setEventReady(false)
             if (eventSocket === socket) eventSocket = null
             eventCipher = null
-            safeClose(socket)
+            safeCloseSocket(socket)
             if (!closed.get()) close()
         }
     }
@@ -954,6 +954,18 @@ internal fun safeClose(closeable: Closeable?) {
     } catch (_: Exception) {
         // Best-effort close.
     }
+}
+
+private fun safeCloseSocket(socket: Socket?) {
+    try { socket?.close() } catch (_: Exception) { }
+}
+
+private fun safeCloseServerSocket(socket: ServerSocket?) {
+    try { socket?.close() } catch (_: Exception) { }
+}
+
+private fun safeCloseDatagramSocket(socket: DatagramSocket?) {
+    try { socket?.close() } catch (_: Exception) { }
 }
 
 private fun ByteArray.toHex(): String =
