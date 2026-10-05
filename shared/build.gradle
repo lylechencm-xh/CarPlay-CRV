@@ -1,11 +1,13 @@
 plugins {
     id 'com.android.library'
 }
+
 android {
     namespace = 'com.shilapi.xcertplay.shared'
     compileSdk = 37
 
     defaultConfig {
+        // Shared code remains compile-compatible with the CR-V Android 4.4 application.
         minSdk = 17
         targetSdk = 28
     }
@@ -21,84 +23,20 @@ android {
     }
 }
 
-// Keep complete upstream source files in the repository, but exclude upstream-only Kotlin
-// features from CR-V/API19 compilation. Android's java.exclude() does not affect Kotlin sources,
-// so apply the patterns directly to every Kotlin compile task.
-def crvExcludedKotlin = [
-    '**/com/shilapi/xcertplay/adb/**',
-    '**/com/shilapi/xcertplay/hud/**',
-    '**/com/shilapi/xcertplay/network/CarPlayBonjour.kt',
-    '**/com/shilapi/xcertplay/network/LocalOnlyHotspotManager.kt',
-    '**/com/shilapi/xcertplay/network/ManualHotspotInterfaces.kt',
-    '**/com/shilapi/xcertplay/network/WifiP2pGroupManager.kt',
-    '**/com/shilapi/xcertplay/orchestration/CarPlayController.kt',
-    '**/com/shilapi/xcertplay/shared/MyCarAppScreen.kt',
-    '**/com/shilapi/xcertplay/shared/MyCarAppService.kt',
-    '**/com/shilapi/xcertplay/shared/MyCarAppSession.kt',
-    '**/com/shilapi/xcertplay/media/AndroidMediaSink.kt',
-    '**/com/shilapi/xcertplay/mfi/RemoteMfiAuthenticationClient.kt',
-    '**/com/shilapi/xcertplay/glance/CarPlayGlance.kt',
-    '**/com/shilapi/xcertplay/network/CarHotspotSettings.kt',
-    '**/com/shilapi/xcertplay/network/CarHotspotTethering.kt',
-    '**/com/shilapi/xcertplay/network/HotspotJoinRepair.kt',
-    '**/com/shilapi/xcertplay/network/HotspotJoinRepairMain.kt',
-    '**/com/shilapi/xcertplay/network/ManualHotspotManager.kt',
-    '**/com/shilapi/xcertplay/network/WifiScanPause.kt',
-]
-
-tasks.configureEach { task ->
-    if (task.name.toLowerCase().contains('kotlin') && task.hasProperty('source')) {
-        task.exclude(crvExcludedKotlin)
-    }
-}
-
 dependencies {
+    // Upstream shared-core dependencies.
+    implementation libs.jmdns
+
+    // Car App APIs are needed to compile the complete upstream tree but are not part of the
+    // CR-V API19 runtime surface. Keep them off the legacy APK runtime dependency graph.
+    compileOnly libs.androidx.app
+
+    // CR-V/legacy transport crypto stack.
     implementation libs.bouncycastle
     implementation libs.bctls
+
     testImplementation libs.junit
     testImplementation libs.robolectric
+    testImplementation libs.androidx.app
 }
 
-/*
- * CR-V/API19 unit-test surface.
- *
- * Use an allow-list instead of chasing upstream-only tests one by one. The repository keeps the
- * complete upstream test tree, but this legacy build compiles only protocol/transport/runtime
- * tests exercised by the Honda CR-V path. New upstream HUD, Android Auto, cluster, hotspot or
- * experimental wireless tests therefore cannot break this build unless they are explicitly
- * promoted into the CR-V surface.
- */
-def crvCoreUnitTests = [
-    '**/com/shilapi/xcertplay/iap2/Iap2ProtocolTest.kt',
-
-    '**/com/shilapi/xcertplay/mfi/LocalMfiAuthenticationClientTest.kt',
-    '**/com/shilapi/xcertplay/mfi/MfiAuthenticationClientTest.kt',
-    '**/com/shilapi/xcertplay/mfi/MfiSelfCheckTest.kt',
-
-    '**/com/shilapi/xcertplay/network/AirPlayPortSelectorTest.kt',
-    '**/com/shilapi/xcertplay/network/CarPlayVpnApiLevelTest.kt',
-    '**/com/shilapi/xcertplay/network/CarPlayVpnScopeTest.kt',
-    '**/com/shilapi/xcertplay/network/TunIoCompatibilityTest.kt',
-    '**/com/shilapi/xcertplay/network/WirelessHostAddressTest.kt',
-
-    '**/com/shilapi/xcertplay/transport/EthernetIpv6CodecTest.kt',
-    '**/com/shilapi/xcertplay/transport/Iap2ControlDeadlineTest.kt',
-    '**/com/shilapi/xcertplay/transport/Iap2FileTransferReceiverTest.kt',
-    '**/com/shilapi/xcertplay/transport/Iap2LinkEngineFileTransferTest.kt',
-    '**/com/shilapi/xcertplay/transport/Iap2WiredControlClientTest.kt',
-    '**/com/shilapi/xcertplay/transport/LockdownTlsEngineFactoryTest.kt',
-    '**/com/shilapi/xcertplay/transport/LockdownTlsProviderTest.kt',
-    '**/com/shilapi/xcertplay/transport/Ntb16CodecTest.kt',
-    '**/com/shilapi/xcertplay/transport/UsbMuxFrameBufferTest.kt',
-    '**/com/shilapi/xcertplay/transport/UsbMuxIssue100RegressionTest.kt',
-]
-
-tasks.configureEach { task ->
-    if (task.name == 'compileDebugUnitTestKotlin' && task.hasProperty('source')) {
-        task.setSource(fileTree('src/test/java') {
-            crvCoreUnitTests.each { pattern ->
-                include pattern.replace('**/com/', 'com/')
-            }
-        })
-    }
-}
