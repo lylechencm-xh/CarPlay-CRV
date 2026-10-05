@@ -12,6 +12,23 @@ import java.net.InetAddress
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.LockSupport
 
+internal object TunIoCompatibility {
+    fun isWouldBlock(error: Throwable): Boolean {
+        var current: Throwable? = error
+        while (current != null) {
+            val message = current.message.orEmpty().lowercase(java.util.Locale.US)
+            if (
+                "eagain" in message ||
+                "ewouldblock" in message ||
+                "resource temporarily unavailable" in message ||
+                "try again" in message
+            ) return true
+            current = current.cause
+        }
+        return false
+    }
+}
+
 /**
  * Moves IPv6 packets between an Android VpnService tun and the iPhone NCM Ethernet link.
  *
@@ -93,7 +110,15 @@ class Ipv6NcmBridge(
         val buffer = ByteArray(TUN_READ_BYTES)
         try {
             while (running.get()) {
-                val length = input.read(buffer)
+                val length = try {
+                    input.read(buffer)
+                } catch (error: IOException) {
+                    if (TunIoCompatibility.isWouldBlock(error)) {
+                        LockSupport.parkNanos(ZERO_READ_BACKOFF_NANOS)
+                        continue
+                    }
+                    throw error
+                }
                 if (length == -1) {
                     if (running.get()) onError(IOException("NCM IPv6 tunnel closed"))
                     return
