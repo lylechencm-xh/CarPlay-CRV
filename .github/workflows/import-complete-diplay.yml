@@ -34,12 +34,36 @@ jobs:
             --exclude '.git/' \
             --exclude '.github/workflows/' \
             _upstream/ ./
-          rm -rf _upstream
 
-      - name: Verify upstream copy exclusions
+      - name: Verify all upstream non-workflow files are present
         run: |
-          test ! -e _upstream
-          echo "Upstream source/resources copied; upstream workflow files intentionally excluded."
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path(".")
+          upstream = root / "_upstream"
+
+          missing = []
+          for src in upstream.rglob("*"):
+              if not src.is_file():
+                  continue
+              rel = src.relative_to(upstream)
+              if ".git" in rel.parts:
+                  continue
+              if len(rel.parts) >= 2 and rel.parts[0] == ".github" and rel.parts[1] == "workflows":
+                  continue
+              if not (root / rel).exists():
+                  missing.append(str(rel))
+
+          if missing:
+              print("Missing upstream files:")
+              for path in missing[:200]:
+                  print(path)
+              raise SystemExit(1)
+
+          print("All upstream non-workflow files are present.")
+          PY
+          rm -rf _upstream
 
       - name: Commit imported upstream files
         run: |
@@ -50,5 +74,16 @@ jobs:
             echo "No missing upstream files."
           else
             git commit -m "chore(upstream): import complete DiPlay tree while preserving CR-V changes [skip ci]"
-            git push origin HEAD:crv-2021-integrated
+            for attempt in 1 2 3; do
+              git fetch origin crv-2021-integrated
+              git rebase origin/crv-2021-integrated
+              if git push origin HEAD:crv-2021-integrated; then
+                break
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "::error::Failed to publish upstream import after 3 retries."
+                exit 1
+              fi
+              sleep 2
+            done
           fi
