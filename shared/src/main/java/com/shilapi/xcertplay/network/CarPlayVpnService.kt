@@ -305,7 +305,7 @@ class CarPlayVpnService : VpnService() {
             val cause = error.cause
             if (cause is Exception) throw cause
             throw error
-        } catch (error: ReflectiveOperationException) {
+        } catch (error: Exception) {
             throw IllegalStateException("VPN scoping APIs unavailable on API ${Build.VERSION.SDK_INT}", error)
         }
     }
