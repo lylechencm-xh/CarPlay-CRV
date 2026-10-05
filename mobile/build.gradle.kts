@@ -27,10 +27,6 @@ android {
 
     localAuthenticationAssets?.let { sourceSets.getByName("main").assets.srcDir(it) }
 
-    // The upstream debug HUD demos depend on BYD/HUD code intentionally excluded from the
-    // Android 4.2.2 CR-V runtime. Keep those debug-only sources out of this APK.
-    sourceSets.getByName("debug").kotlin.exclude("com/shilapi/xcertplay/hud/**")
-
     signingConfigs {
         create("crvTest") {
             storeFile = crvTestKeystorePath?.let(::file) ?: file("missing-crv-test.keystore")
@@ -125,4 +121,11 @@ tasks.register("assembleStandaloneDebug") {
     group = "build"
     description = "Build a standalone car-test APK with explicitly provisioned authentication."
     dependsOn(verifyStandaloneAuthentication, "assembleDebug")
+}
+
+
+tasks.configureEach {
+    if (name == "compileDebugKotlin") {
+        exclude("**/com/shilapi/xcertplay/hud/**")
+    }
 }
