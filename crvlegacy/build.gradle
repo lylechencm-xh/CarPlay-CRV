@@ -1,0 +1,63 @@
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    namespace = 'com.shilapi.xcertplay.crvlegacy'
+    compileSdk = 37
+
+    defaultConfig {
+        minSdk = 19
+        targetSdk = 28
+    }
+
+    sourceSets {
+        main {
+            manifest.srcFile '../shared/src/main/AndroidManifest.xml'
+            java.srcDir '../shared/src/main/java'
+        }
+    }
+
+    lint {
+        abortOnError true
+        disable 'ExpiredTargetSdkVersion'
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+}
+
+def crvExcludedKotlin = [
+    '**/com/shilapi/xcertplay/adb/**',
+    '**/com/shilapi/xcertplay/hud/**',
+    '**/com/shilapi/xcertplay/glance/**',
+    '**/com/shilapi/xcertplay/network/CarPlayBonjour.kt',
+    '**/com/shilapi/xcertplay/network/LocalOnlyHotspotManager.kt',
+    '**/com/shilapi/xcertplay/network/ManualHotspotInterfaces.kt',
+    '**/com/shilapi/xcertplay/network/WifiP2pGroupManager.kt',
+    '**/com/shilapi/xcertplay/network/CarHotspotSettings.kt',
+    '**/com/shilapi/xcertplay/network/CarHotspotTethering.kt',
+    '**/com/shilapi/xcertplay/network/HotspotJoinRepair.kt',
+    '**/com/shilapi/xcertplay/network/HotspotJoinRepairMain.kt',
+    '**/com/shilapi/xcertplay/network/ManualHotspotManager.kt',
+    '**/com/shilapi/xcertplay/network/WifiScanPause.kt',
+    '**/com/shilapi/xcertplay/orchestration/CarPlayController.kt',
+    '**/com/shilapi/xcertplay/shared/MyCarAppScreen.kt',
+    '**/com/shilapi/xcertplay/shared/MyCarAppService.kt',
+    '**/com/shilapi/xcertplay/shared/MyCarAppSession.kt',
+    '**/com/shilapi/xcertplay/media/AndroidMediaSink.kt',
+    '**/com/shilapi/xcertplay/mfi/RemoteMfiAuthenticationClient.kt',
+]
+
+tasks.configureEach { task ->
+    if (task.name.toLowerCase().contains('kotlin') && task.hasProperty('source')) {
+        task.exclude(crvExcludedKotlin)
+    }
+}
+
+dependencies {
+    implementation libs.bouncycastle
+    implementation libs.bctls
+}
