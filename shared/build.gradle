@@ -37,6 +37,12 @@ def crvExcludedKotlin = [
     '**/com/shilapi/xcertplay/shared/MyCarAppSession.kt',
     '**/com/shilapi/xcertplay/media/AndroidMediaSink.kt',
     '**/com/shilapi/xcertplay/mfi/RemoteMfiAuthenticationClient.kt',
+    '**/com/shilapi/xcertplay/glance/CarPlayGlance.kt',
+    '**/com/shilapi/xcertplay/network/CarHotspotSettings.kt',
+    '**/com/shilapi/xcertplay/network/CarHotspotTethering.kt',
+    '**/com/shilapi/xcertplay/network/HotspotJoinRepair.kt',
+    '**/com/shilapi/xcertplay/network/ManualHotspotManager.kt',
+    '**/com/shilapi/xcertplay/network/WifiScanPause.kt',
 ]
 
 tasks.configureEach { task ->
