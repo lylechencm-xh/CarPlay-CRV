@@ -258,7 +258,7 @@ class IphoneUsbHost(
                 ?: throw IphoneUsbException.Protocol("USBMUX interface exposes no bulk endpoint pair")
             Log.i(
                 IphoneCarPlayConfiguration.TAG,
-                "usbmux iface=${usbMux.id} alt=${usbMux.alternateSetting} " +
+                "usbmux iface=${usbMux.id} " +
                     "class=${usbMux.interfaceClass}/${usbMux.interfaceSubclass}/${usbMux.interfaceProtocol} " +
                     "endpoints=${usbMux.endpointCount} " +
                     "out=${describeUsbEndpoint(endpoints.first)} " +
