@@ -3,8 +3,8 @@ package com.shilapi.xcertplay.transport
 import android.util.Xml
 import java.io.Closeable
 import java.io.StringReader
-import java.nio.charset.Charset
-import org.bouncycastle.util.encoders.Base64
+import java.nio.charset.StandardCharsets
+import java.util.Base64
 import org.xmlpull.v1.XmlPullParser
 
 /** The small plist value set needed by Lockdown messages. */
@@ -100,7 +100,7 @@ class LockdownPlistChannel(
     }
 
     private fun sendLocked(message: LockdownPlistValue.Dictionary) {
-        val xml = encode(message).toByteArray(Charset.forName("UTF-8"))
+        val xml = encode(message).toByteArray(StandardCharsets.UTF_8)
         if (xml.isEmpty() || xml.size > maximumMessageBytes) {
             throw IphoneUsbException.Protocol("Lockdown plist message length ${xml.size} is outside 1..$maximumMessageBytes")
         }
@@ -147,7 +147,7 @@ class LockdownPlistChannel(
             val parser = Xml.newPullParser().apply {
                 setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, false)
                 setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
-                setInput(StringReader(xml.toString(Charset.forName("UTF-8"))))
+                setInput(StringReader(xml.toString(StandardCharsets.UTF_8)))
             }
             if (parser.nextTag() != XmlPullParser.START_TAG || parser.name != "plist") {
                 throw IphoneUsbException.Protocol("Lockdown plist root must be <plist>")
@@ -214,7 +214,7 @@ class LockdownPlistChannel(
             "data" -> {
                 val encoded = simpleText(parser, "data").filterNot(Char::isWhitespace)
                 try {
-                    LockdownPlistValue.Data(Base64.decode(encoded))
+                    LockdownPlistValue.Data(Base64.getDecoder().decode(encoded))
                 } catch (error: IllegalArgumentException) {
                     throw IphoneUsbException.Protocol("Invalid base64 Lockdown plist data")
                 }
@@ -249,7 +249,7 @@ class LockdownPlistChannel(
             is LockdownPlistValue.Integer -> append("<integer>").append(value.value).append("</integer>")
             is LockdownPlistValue.Boolean -> append(if (value.value) "<true/>" else "<false/>")
             is LockdownPlistValue.Data -> append("<data>")
-                .append(Base64.toBase64String(value.bytes))
+                .append(Base64.getEncoder().encodeToString(value.bytes))
                 .append("</data>")
         }
     }
