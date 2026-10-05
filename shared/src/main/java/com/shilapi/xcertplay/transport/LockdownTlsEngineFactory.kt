@@ -48,7 +48,8 @@ object LockdownTlsEngineFactory {
             }
             return context.createSSLEngine(PEER_HOST, PEER_PORT).apply {
                 useClientMode = true
-                sslParameters = sslParameters.apply { endpointIdentificationAlgorithm = null }
+                // SSLEngine has no hostname verification enabled by default. Avoid the
+                // SSLParameters endpoint-identification setter, which is API24 on Android.
             }
         } finally {
             password.fill('\u0000')
