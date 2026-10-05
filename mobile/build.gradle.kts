@@ -16,8 +16,8 @@ android {
         applicationId = "com.shihab.diplay"
         minSdk = 19
         targetSdk = 28
-        versionCode = 29
-        versionName = "0.2.10"
+        versionCode = 30
+        versionName = "0.2.11"
 
     }
 
@@ -25,6 +25,15 @@ android {
     localAuthenticationAssets?.let { sourceSets.getByName("main").assets.srcDir(it) }
 
     signingConfigs {
+        getByName("debug") {
+            // The Honda Android 4.4 package manager only understands JAR/V1 signing. Keeping the
+            // field-test APK V1-only also avoids vendor file managers rejecting newer APK signing
+            // blocks before the platform package installer gets a chance to parse the app.
+            enableV1Signing = true
+            enableV2Signing = false
+            enableV3Signing = false
+            enableV4Signing = false
+        }
         create("release") {
             storeFile = file(
                 providers.environmentVariable("ANDROID_KEYSTORE_PATH")
