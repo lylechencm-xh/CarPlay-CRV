@@ -123,9 +123,3 @@ tasks.register("assembleStandaloneDebug") {
     dependsOn(verifyStandaloneAuthentication, "assembleDebug")
 }
 
-
-tasks.configureEach {
-    if (name == "compileDebugKotlin") {
-        exclude("**/com/shilapi/xcertplay/hud/**")
-    }
-}
