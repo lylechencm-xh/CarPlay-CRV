@@ -43,6 +43,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private lateinit var video: TextureView
     private lateinit var status: TextView
     private lateinit var diagnostics: CrvDiagnostics
+    private lateinit var modeButton: TextView
+    private var connectionMode = CrvConnectionMode.WIRED
 
     private val io: ExecutorService = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -112,6 +114,36 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             }
         }
 
+        modeButton = TextView(this).apply {
+            text = "Mode: USB"
+            setTextColor(Color.WHITE)
+            setBackgroundColor(0x66000000)
+            setPadding(18, 12, 18, 12)
+            setOnClickListener {
+                connectionMode = if (connectionMode == CrvConnectionMode.WIRED) {
+                    CrvConnectionMode.WIFI_HANDOFF
+                } else {
+                    CrvConnectionMode.WIRED
+                }
+                text = if (connectionMode == CrvConnectionMode.WIFI_HANDOFF) "Mode: Wi-Fi" else "Mode: USB"
+                controller?.close()
+                controller = null
+                pendingUsbSession?.close()
+                pendingUsbSession = null
+                pendingDevice = null
+                reconnectAttempts = 0
+                reconnectGeneration++
+                reportStatus(
+                    if (connectionMode == CrvConnectionMode.WIFI_HANDOFF) {
+                        "Wi-Fi mode selected; connect iPhone by USB for handoff"
+                    } else {
+                        "USB mode selected"
+                    },
+                )
+                usbHost.discover().firstOrNull()?.let(::requestPermission)
+            }
+        }
+
         status = TextView(this).apply {
             text = getString(R.string.status_starting)
             setTextColor(Color.WHITE)
@@ -124,6 +156,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             setBackgroundColor(Color.BLACK)
             addView(video, FrameLayout.LayoutParams(-1, -1))
             addView(status, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+            addView(modeButton, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END))
         })
 
         diagnostics = CrvDiagnostics(this)
@@ -352,6 +385,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             displayWidth = surfaceWidth,
             displayHeight = surfaceHeight,
             report = ::reportStatus,
+            mode = connectionMode,
             onStopped = {
                 runOnUiThread {
                     controller = null
