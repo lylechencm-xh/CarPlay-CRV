@@ -9,9 +9,7 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.net.InetAddress
-import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.LockSupport
 
 /**
@@ -38,27 +36,9 @@ class Ipv6NcmBridge(
     private var loggedWaitingForPeer = false
     private var inboundLogBudget = 16
     private var outboundLogBudget = 24
-    data class Stats(
-        val ncmToTunPackets: Long,
-        val ncmToTunBytes: Long,
-        val tunToNcmPackets: Long,
-        val tunToNcmBytes: Long,
-    )
-
     private val running = AtomicBoolean(false)
-    private val ncmToTunPackets = AtomicLong(0L)
-    private val ncmToTunBytes = AtomicLong(0L)
-    private val tunToNcmPackets = AtomicLong(0L)
-    private val tunToNcmBytes = AtomicLong(0L)
     private lateinit var ncmToTunThread: Thread
     private lateinit var tunToNcmThread: Thread
-
-    fun stats(): Stats = Stats(
-        ncmToTunPackets = ncmToTunPackets.get(),
-        ncmToTunBytes = ncmToTunBytes.get(),
-        tunToNcmPackets = tunToNcmPackets.get(),
-        tunToNcmBytes = tunToNcmBytes.get(),
-    )
 
     fun start() {
         check(running.compareAndSet(false, true)) { "bridge is already started" }
@@ -99,9 +79,7 @@ class Ipv6NcmBridge(
                     inboundLogBudget--
                     Log.i(TAG, "ncm inbound ${frame.summary(ipv6.payloadOffset)}")
                 }
-                writeTun(output, frame, ipv6.payloadOffset, ipv6.payloadLength)
-                ncmToTunPackets.incrementAndGet()
-                ncmToTunBytes.addAndGet(ipv6.payloadLength.toLong())
+                output.write(frame, ipv6.payloadOffset, ipv6.payloadLength)
             }
         } catch (error: IOException) {
             if (running.get()) onError(error)
@@ -115,7 +93,7 @@ class Ipv6NcmBridge(
         val buffer = ByteArray(TUN_READ_BYTES)
         try {
             while (running.get()) {
-                val length = readTun(input, buffer) ?: return
+                val length = input.read(buffer)
                 if (length == -1) {
                     if (running.get()) onError(IOException("NCM IPv6 tunnel closed"))
                     return
@@ -153,42 +131,11 @@ class Ipv6NcmBridge(
                 }
                 val frame = EthernetIpv6Codec.build(hostMac, mac, ipv6)
                 ncm.send(frame, WRITE_TIMEOUT_MILLIS)
-                tunToNcmPackets.incrementAndGet()
-                tunToNcmBytes.addAndGet(ipv6.size.toLong())
             }
         } catch (error: IOException) {
             if (running.get()) onError(error)
         } catch (error: RuntimeException) {
             if (running.get()) onError(error)
-        }
-    }
-
-    private fun readTun(input: FileInputStream, buffer: ByteArray): Int? {
-        while (running.get()) {
-            try {
-                return input.read(buffer)
-            } catch (error: IOException) {
-                if (!TunIoCompatibility.isWouldBlock(error)) throw error
-                LockSupport.parkNanos(WOULD_BLOCK_BACKOFF_NANOS)
-            }
-        }
-        return null
-    }
-
-    private fun writeTun(
-        output: FileOutputStream,
-        buffer: ByteArray,
-        offset: Int,
-        length: Int,
-    ) {
-        while (running.get()) {
-            try {
-                output.write(buffer, offset, length)
-                return
-            } catch (error: IOException) {
-                if (!TunIoCompatibility.isWouldBlock(error)) throw error
-                LockSupport.parkNanos(WOULD_BLOCK_BACKOFF_NANOS)
-            }
         }
     }
 
@@ -229,37 +176,6 @@ class Ipv6NcmBridge(
         const val WRITE_TIMEOUT_MILLIS = 2_000
         const val TUN_READ_BYTES = 4_096
         const val ZERO_READ_BACKOFF_NANOS = 1_000_000L
-        const val WOULD_BLOCK_BACKOFF_NANOS = 2_000_000L
         const val JOIN_TIMEOUT_MILLIS = 2_000L
-    }
-}
-
-
-/**
- * Android 4.4 VpnService returns a non-blocking TUN descriptor and has no Builder.setBlocking().
- * libcore surfaces EAGAIN/EWOULDBLOCK as IOException text on KitKat. Treat only those conditions
- * as transient; every other I/O failure still tears the transport down.
- */
-internal object TunIoCompatibility {
-    fun isWouldBlock(error: IOException): Boolean {
-        var current: Throwable? = error
-        while (current != null) {
-            val item = current
-            val text = buildString {
-                append(item.javaClass.simpleName)
-                append(' ')
-                append(item.message.orEmpty())
-            }.lowercase(Locale.US)
-            if (
-                "eagain" in text ||
-                "ewouldblock" in text ||
-                "resource temporarily unavailable" in text ||
-                "try again" in text
-            ) {
-                return true
-            }
-            current = current.cause
-        }
-        return false
     }
 }
