@@ -1700,18 +1700,18 @@ class CarPlayController(
                 permissionPollGeneration++
                 when (phase) {
                     Phase.REENUMERATION, Phase.IPHONE -> {
-                        val configuration = IphoneCarPlayConfiguration.find(result.device)
+                        val carPlayLayoutReady =
+                            IphoneCarPlayConfiguration.hasActiveCarPlayLayout(result.device)
                         connectionDiagnostic(
-                            "USB configuration ready=${configuration != null} " +
-                                "configurationId=${configuration?.id ?: "none"} " +
+                            "USB configuration ready=$carPlayLayoutReady " +
                                 "reenumerationAttempts=$reenumerationAttempts " +
                                 "action=${when {
-                                    configuration != null -> "reuse-descriptors"
+                                    carPlayLayoutReady -> "reuse-descriptors"
                                     reenumerationAttempts < MAXIMUM_REENUMERATION_ATTEMPTS -> "request-transition"
                                     else -> "reject-missing-configuration"
                                 }}",
                         )
-                        if (configuration != null) {
+                        if (carPlayLayoutReady) {
                             openDataPaths(result.device)
                         } else if (reenumerationAttempts < MAXIMUM_REENUMERATION_ATTEMPTS) {
                             beginReenumeration(result.device)
@@ -1822,14 +1822,12 @@ class CarPlayController(
     }
 
     private fun openNcm(device: UsbDevice): NcmUsbBridge {
-        val configuration = IphoneCarPlayConfiguration.find(device)
+        val function = NcmFunctionDiscovery.find(device)
             ?: throw IphoneUsbException.Protocol(
-                "iPhone exposes no CarPlay configuration for NCM",
+                "Active iPhone USB layout does not expose an NCM function",
             )
-        val function = NcmFunctionDiscovery.find(configuration)
-            ?: throw IphoneUsbException.Protocol("iPhone configuration does not expose an NCM function")
         debugLog(
-            "ncm config=${configuration.id} control=${function.control.id}/${function.control.alternateSetting}" +
+            "ncm control=${function.control.id}/${function.control.alternateSetting}" +
                 " data=${function.data.id}/${function.data.alternateSetting}" +
                 " status=${function.statusIn?.address?.let { "0x${it.toString(16)}" } ?: "none"}" +
                 " in=0x${function.bulkIn.address.toString(16)} out=0x${function.bulkOut.address.toString(16)}",
