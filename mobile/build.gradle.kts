@@ -74,7 +74,7 @@ android {
 }
 
 dependencies {
-    implementation(project(":shared"))
+    implementation(project(":crvlegacy"))
 }
 
 // No implicit import. Only the two explicitly selected local runtime assets are allowed.
