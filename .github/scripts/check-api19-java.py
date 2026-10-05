@@ -3,6 +3,18 @@ from pathlib import Path
 import sys
 
 ROOTS = [Path("shared/src/main/java"), Path("mobile/src/main/java")]
+
+# Complete upstream DiPlay is kept in this repository, but the CR-V/API19 runtime does not
+# compile/use every upstream feature. Exclude upstream-only surfaces from the legacy runtime scan.
+EXCLUDED_PREFIXES = (
+    "shared/src/main/java/com/shilapi/xcertplay/adb/",
+    "shared/src/main/java/com/shilapi/xcertplay/hud/",
+)
+EXCLUDED_FILES = {
+    "shared/src/main/java/com/shilapi/xcertplay/media/AndroidMediaSink.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/mfi/RemoteMfiAuthenticationClient.kt",
+}
+
 FORBIDDEN = {
     "java.time.": "java.time is unavailable on Android 4.4",
     "java.util.Base64": "use android.util.Base64",
@@ -34,6 +46,9 @@ for root in ROOTS:
     if not root.exists():
         continue
     for source in sorted(root.rglob("*.kt")):
+        relative = source.as_posix()
+        if relative in EXCLUDED_FILES or relative.startswith(EXCLUDED_PREFIXES):
+            continue
         in_block = False
         for number, raw in enumerate(source.read_text(encoding="utf-8").splitlines(), 1):
             line = raw
