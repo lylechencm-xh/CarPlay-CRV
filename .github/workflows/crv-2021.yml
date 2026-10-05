@@ -24,22 +24,24 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '9.5.0'
-      - name: Prepare fixed CR-V test signing key
+      - name: Prepare fixed CR-V test signing key when configured
         env:
           CRV_TEST_KEYSTORE_BASE64: ${{ secrets.CRV_TEST_KEYSTORE_BASE64 }}
           CRV_TEST_STORE_PASSWORD_SECRET: ${{ secrets.CRV_TEST_STORE_PASSWORD }}
           CRV_TEST_KEY_ALIAS_SECRET: ${{ secrets.CRV_TEST_KEY_ALIAS }}
           CRV_TEST_KEY_PASSWORD_SECRET: ${{ secrets.CRV_TEST_KEY_PASSWORD }}
         run: |
-          test -n "$CRV_TEST_KEYSTORE_BASE64" || { echo "::error::CRV_TEST_KEYSTORE_BASE64 is not configured"; exit 1; }
-          test -n "$CRV_TEST_STORE_PASSWORD_SECRET" || { echo "::error::CRV_TEST_STORE_PASSWORD is not configured"; exit 1; }
-          test -n "$CRV_TEST_KEY_ALIAS_SECRET" || { echo "::error::CRV_TEST_KEY_ALIAS is not configured"; exit 1; }
-          test -n "$CRV_TEST_KEY_PASSWORD_SECRET" || { echo "::error::CRV_TEST_KEY_PASSWORD is not configured"; exit 1; }
-          printf '%s' "$CRV_TEST_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/crv-test.keystore"
-          echo "CRV_TEST_KEYSTORE_PATH=$RUNNER_TEMP/crv-test.keystore" >> "$GITHUB_ENV"
-          echo "CRV_TEST_STORE_PASSWORD=$CRV_TEST_STORE_PASSWORD_SECRET" >> "$GITHUB_ENV"
-          echo "CRV_TEST_KEY_ALIAS=$CRV_TEST_KEY_ALIAS_SECRET" >> "$GITHUB_ENV"
-          echo "CRV_TEST_KEY_PASSWORD=$CRV_TEST_KEY_PASSWORD_SECRET" >> "$GITHUB_ENV"
+          if [ -n "$CRV_TEST_KEYSTORE_BASE64" ] && [ -n "$CRV_TEST_STORE_PASSWORD_SECRET" ] && [ -n "$CRV_TEST_KEY_ALIAS_SECRET" ] && [ -n "$CRV_TEST_KEY_PASSWORD_SECRET" ]; then
+            printf '%s' "$CRV_TEST_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/crv-test.keystore"
+            echo "CRV_TEST_KEYSTORE_PATH=$RUNNER_TEMP/crv-test.keystore" >> "$GITHUB_ENV"
+            echo "CRV_TEST_STORE_PASSWORD=$CRV_TEST_STORE_PASSWORD_SECRET" >> "$GITHUB_ENV"
+            echo "CRV_TEST_KEY_ALIAS=$CRV_TEST_KEY_ALIAS_SECRET" >> "$GITHUB_ENV"
+            echo "CRV_TEST_KEY_PASSWORD=$CRV_TEST_KEY_PASSWORD_SECRET" >> "$GITHUB_ENV"
+            echo "CRV_FIXED_SIGNING=1" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Fixed signing secrets are not configured; building a recognition-test APK with the runner debug key."
+            echo "CRV_FIXED_SIGNING=0" >> "$GITHUB_ENV"
+          fi
       - name: Check Android 4.4 Java library surface
         run: python3 .github/scripts/check-api19-java.py
       - name: Run wired CarPlay core tests
@@ -62,12 +64,13 @@ jobs:
       - name: Build CR-V 2021 Android 4.4 APK
         run: ./gradlew :mobile:assembleDebug --stacktrace
       - name: Verify fixed CR-V APK signing certificate
+        if: env.CRV_FIXED_SIGNING == '1'
         run: |
           keytool -printcert -jarfile mobile/build/outputs/apk/debug/mobile-debug.apk | tee /tmp/crv-apk-cert.txt
           grep -F "SHA256: E4:E5:E2:47:FF:F3:AF:8E:BE:B1:0C:2A:C4:22:E9:E4:17:25:6A:29:50:A7:74:40:DB:F8:25:09:38:47:B9:FC" /tmp/crv-apk-cert.txt
       - name: Upload CR-V 2021 APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarPlay-CRV-2021-v0.2.11-api19-debug
+          name: CarPlay-CRV-2021-v0.2.11-api19-recognition-test
           path: mobile/build/outputs/apk/debug/mobile-debug.apk
           if-no-files-found: error
