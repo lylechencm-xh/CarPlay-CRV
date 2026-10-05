@@ -22,6 +22,34 @@ Debug application id:
 
 `com.shihab.diplay.crv2021`
 
+Current CR-V test version:
+
+`0.2.11-crv-2021-api19`
+
+## Stable test signing
+
+CR-V test APKs use a fixed test signing identity so later test builds can update the installed app
+without changing the Android package signature.
+
+The private test keystore is intentionally **not** committed to this public repository. GitHub Actions
+expects these repository secrets:
+
+```
+CRV_TEST_KEYSTORE_BASE64
+CRV_TEST_STORE_PASSWORD
+CRV_TEST_KEY_ALIAS
+CRV_TEST_KEY_PASSWORD
+```
+
+Expected APK signing certificate SHA-256:
+
+```
+E4:E5:E2:47:FF:F3:AF:8E:BE:B1:0C:2A:C4:22:E9:E4:17:25:6A:29:50:A7:74:40:DB:F8:25:09:38:47:B9:FC
+```
+
+The workflow fails instead of publishing an APK if the stable signing secrets are missing or the
+certificate fingerprint changes.
+
 ## First launch
 
 1. Start **CarPlay CR-V**.
