@@ -9,6 +9,8 @@ import java.security.KeyStore
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.spec.PKCS8EncodedKeySpec
+import org.bouncycastle.jce.provider.BouncyCastleProvider
+import org.bouncycastle.jsse.provider.BouncyCastleJsseProvider
 import org.bouncycastle.util.encoders.Base64
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
@@ -43,7 +45,13 @@ object LockdownTlsEngineFactory {
             val keyManagers = KeyManagerFactory.getInstance("PKIX").apply {
                 init(keyStore, password)
             }.keyManagers
-            val context = SSLContext.getInstance("TLS").apply {
+            // Android 4.2.2 / API17 platform SSLEngine only exposes TLSv1. Modern iOS
+            // Lockdown requires TLSv1.2+, so use a private BCJSSE provider instead of
+            // globally modifying the head unit's security-provider list.
+            val context = SSLContext.getInstance(
+                "TLS",
+                BouncyCastleJsseProvider(BouncyCastleProvider()),
+            ).apply {
                 init(keyManagers, arrayOf(UsbLockdownTrustManager), null)
             }
             return context.createSSLEngine(PEER_HOST, PEER_PORT).apply {
