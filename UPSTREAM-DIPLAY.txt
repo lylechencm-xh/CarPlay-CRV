@@ -1,0 +1,8 @@
+Upstream repository: shihabal3amri/DiPlay
+Upstream branch: main
+Upstream commit: fd9850c665feb5192ffb41e8b2b69e990b19558d
+
+Import policy:
+- All upstream files are mirrored unless the path is under .github/workflows/.
+- Existing CR-V/API19 modifications are preserved and are not overwritten by upstream import.
+- CR-V-specific workflows remain authoritative for legacy head-unit builds.
