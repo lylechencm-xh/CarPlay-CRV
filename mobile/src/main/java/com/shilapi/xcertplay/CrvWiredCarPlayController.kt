@@ -19,6 +19,10 @@ import com.shilapi.xcertplay.transport.Iap2UsbMuxHost
 import com.shilapi.xcertplay.transport.Iap2UsbSession
 import com.shilapi.xcertplay.transport.Iap2WiredCarPlayEndpoint
 import com.shilapi.xcertplay.transport.Iap2WiredControlClient
+import com.shilapi.xcertplay.transport.Iap2WirelessCarPlayEndpoint
+import com.shilapi.xcertplay.transport.Iap2WirelessControlClient
+import com.shilapi.xcertplay.transport.Iap2WirelessIdentification
+import com.shilapi.xcertplay.transport.Iap2WirelessSecurity
 import com.shilapi.xcertplay.transport.IphoneCarPlayConfiguration
 import com.shilapi.xcertplay.transport.IphoneUsbException
 import com.shilapi.xcertplay.transport.LockdownCarKitClient
@@ -36,7 +40,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Minimal wired-only CarPlay stack for the 2021 CR-V Android 4.4 head unit.
+ * Android 4.4 CarPlay stack for the 2021 CR-V, supporting wired media and Wi-Fi handoff.
  *
  * USBMUX -> Lockdown pairing -> com.apple.carkit.service -> iAP2/MFi ->
  * USB NCM -> VpnService/AirPlay -> MediaCodec/AudioTrack.
@@ -49,6 +53,7 @@ class CrvWiredCarPlayController(
     private val displayWidth: Int,
     private val displayHeight: Int,
     private val report: (String) -> Unit,
+    private val mode: CrvConnectionMode = CrvConnectionMode.WIRED,
     private val onStopped: () -> Unit = {},
 ) : Closeable {
     private val appContext = context.applicationContext
@@ -80,6 +85,8 @@ class CrvWiredCarPlayController(
     @Volatile private var csm: Iap2Session? = null
     @Volatile private var ncm: NcmUsbBridge? = null
     @Volatile private var vpnAttached = false
+    @Volatile private var wifiHotspot: CrvApi19WirelessHotspot? = null
+    @Volatile private var bonjour: CrvApi19BonjourAdvertiser? = null
 
     private val listener = object : AirPlaySessionListener {
         override fun onSessionActive(session: AirPlaySession) {
@@ -178,6 +185,11 @@ class CrvWiredCarPlayController(
         csm = session
         report("iAP2 carkit channel ready")
 
+        if (mode == CrvConnectionMode.WIFI_HANDOFF) {
+            runWirelessHandoff(session, mfi)
+            return
+        }
+
         val ncmBridge = openNcm(device)
         ncm = ncmBridge
         val hostMac = ncmBridge.hostMac ?: macBytes(deviceId)
@@ -243,6 +255,86 @@ class CrvWiredCarPlayController(
         )
     }
 
+    private fun runWirelessHandoff(session: Iap2Session, mfi: MfiAuthenticator) {
+        report("Starting Wi-Fi CarPlay handoff")
+        val hotspot = CrvApi19WirelessHotspot(appContext, report)
+        wifiHotspot = hotspot
+        val hotspotInfo = hotspot.start()
+
+        val airPlay = airPlayConfig(deviceId)
+        when (
+            val attached = vpn.attachWireless(
+                bindAddress = hotspotInfo.hostAddress,
+                config = airPlay,
+                identity = identity,
+                pairings = pairingStore,
+                mfi = mfi,
+                listener = listener,
+                media = media,
+            )
+        ) {
+            is CarPlayVpnService.AttachResult.Failed ->
+                throw IphoneUsbException.DeviceUnavailable(
+                    "Wi-Fi/AirPlay attach failed: ${attached.message}",
+                )
+            else -> vpnAttached = true
+        }
+
+        val airPlayPort = vpn.boundPort()
+            ?: throw IphoneUsbException.DeviceUnavailable("Wi-Fi AirPlay listener did not bind")
+
+        bonjour = CrvApi19BonjourAdvertiser(
+            context = appContext,
+            serviceName = "Honda CR-V",
+            port = airPlayPort,
+            report = report,
+        ).also { it.start() }
+
+        val identification = Iap2IdentificationConfig(
+            name = "Honda CR-V CarPlay",
+            modelIdentifier = "CR-V-2021",
+            manufacturer = "Honda",
+            serialNumber = "CRV-${deviceId.replace(":", "")}",
+            firmwareVersion = "1.0",
+            hardwareVersion = "2021",
+            wireless = Iap2WirelessIdentification(
+                bluetoothMac = deviceId,
+                ssid = hotspotInfo.ssid,
+            ),
+            locationInformationEnabled = false,
+            vehicleStatusEnabled = false,
+            vehicleSpeedEnabled = false,
+        )
+
+        val endpoint = Iap2WirelessCarPlayEndpoint(
+            ssid = hotspotInfo.ssid,
+            passphrase = hotspotInfo.passphrase,
+            channel = hotspotInfo.channel,
+            security = Iap2WirelessSecurity.WPA_WPA2,
+            ipAddresses = listOf(hotspotInfo.hostAddress.hostAddress),
+            airPlayPort = airPlayPort,
+            deviceIdentifier = deviceId,
+            publicKey = identity.publicKeyHex,
+            sourceVersion = SOURCE_VERSION,
+        )
+
+        report(
+            "Wi-Fi CarPlay endpoint ready ssid=${hotspotInfo.ssid} " +
+                "port=$airPlayPort",
+        )
+
+        Iap2WirelessControlClient(
+            session = session,
+            mfi = Iap2MfiAuthenticationClient(mfi),
+        ).run(
+            identification = identification,
+            endpoint = endpoint,
+            timeoutMillis = Iap2WirelessControlClient.NO_TIMEOUT_MILLIS,
+            onReady = { report("Wi-Fi CarPlay credentials ready") },
+            onProgress = { report(it) },
+        )
+    }
+
     private fun pairNew(host: Iap2UsbMuxHost): LockdownPairRecord {
         val paired = LockdownPairingClient(host).pair(
             label = LABEL,
@@ -304,6 +396,8 @@ class CrvWiredCarPlayController(
 
     private fun cleanupAfterFailure() {
         activeSession = null
+        runCatching { bonjour?.close() }
+        bonjour = null
         if (vpnAttached) {
             runCatching { vpn.detach() }
             vpnAttached = false
@@ -316,6 +410,8 @@ class CrvWiredCarPlayController(
         csm = null
         runCatching { mux?.close() }
         mux = null
+        runCatching { wifiHotspot?.close() }
+        wifiHotspot = null
     }
 
     override fun close() {
