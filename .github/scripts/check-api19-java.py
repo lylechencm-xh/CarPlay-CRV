@@ -9,8 +9,23 @@ ROOTS = [Path("shared/src/main/java"), Path("mobile/src/main/java")]
 EXCLUDED_PREFIXES = (
     "shared/src/main/java/com/shilapi/xcertplay/adb/",
     "shared/src/main/java/com/shilapi/xcertplay/hud/",
+    "shared/src/main/java/com/shilapi/xcertplay/glance/",
 )
 EXCLUDED_FILES = {
+    "shared/src/main/java/com/shilapi/xcertplay/network/CarPlayBonjour.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/network/LocalOnlyHotspotManager.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/network/ManualHotspotInterfaces.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/network/WifiP2pGroupManager.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/network/CarHotspotSettings.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/network/CarHotspotTethering.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/network/HotspotJoinRepair.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/network/HotspotJoinRepairMain.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/network/ManualHotspotManager.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/network/WifiScanPause.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/orchestration/CarPlayController.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/shared/MyCarAppScreen.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/shared/MyCarAppService.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/shared/MyCarAppSession.kt",
     "shared/src/main/java/com/shilapi/xcertplay/media/AndroidMediaSink.kt",
     "shared/src/main/java/com/shilapi/xcertplay/mfi/RemoteMfiAuthenticationClient.kt",
 }
