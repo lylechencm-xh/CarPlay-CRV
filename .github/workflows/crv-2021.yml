@@ -1,4 +1,4 @@
-name: CR-V 2021 Android 4.4 Build
+name: CR-V 2021 Android 4.2.2 Build
 
 on:
   push:
@@ -25,13 +25,13 @@ jobs:
         with:
           gradle-version: '9.5.0'
 
-      - name: Check Android 4.4 Java library surface
-        run: python3 .github/scripts/check-api19-java.py
+      - name: Check Android 4.2.2 Java library surface
+        run: python3 .github/scripts/check-api17-java.py
 
       - name: Run upstream shared tests
         run: ./gradlew :shared:testDebugUnitTest --stacktrace
 
-      - name: Compile CR-V Android 4.4 shared compatibility layer
+      - name: Compile CR-V Android 4.2.2 shared compatibility layer
         run: ./gradlew :crvlegacy:assembleDebug --stacktrace
 
       - name: Print failed unit-test details
@@ -39,7 +39,7 @@ jobs:
         run: |
           find shared/build/test-results/testDebugUnitTest -type f -name '*.xml' -print -exec cat {} \; || true
 
-      - name: Lint CR-V Android 4.4 path
+      - name: Lint CR-V Android 4.2.2 path
         continue-on-error: true
         run: ./gradlew :crvlegacy:lintDebug :mobile:lintDebug --stacktrace
 
@@ -76,7 +76,7 @@ jobs:
             echo "::warning::Fixed CR-V signing secrets are not configured. Building with the runner debug key; this APK is valid for compile/install testing but Honda native-installer recognition is not guaranteed."
           fi
 
-      - name: Build CR-V 2021 Android 4.4 APK
+      - name: Build CR-V 2021 Android 4.2.2 APK
         run: ./gradlew :mobile:assembleDebug --stacktrace
 
       - name: Verify APK legacy package identity
@@ -101,18 +101,18 @@ jobs:
       - name: Upload CR-V 2021 APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarPlay-CRV-2021-v0.2.12-api19-${{ steps.signing.outputs.label }}
+          name: CarPlay-CRV-2021-v0.2.12-api17-${{ steps.signing.outputs.label }}
           path: mobile/build/outputs/apk/debug/mobile-debug.apk
           if-no-files-found: error
 
       - name: Commit APK to repository release folder
         run: |
           mkdir -p release
-          cp mobile/build/outputs/apk/debug/mobile-debug.apk release/CarPlay-CRV-2021-v0.2.12-api19.apk
+          cp mobile/build/outputs/apk/debug/mobile-debug.apk release/CarPlay-CRV-2021-v0.2.12-api17.apk
           {
             echo "version=0.2.12"
             echo "package=com.shihab.diplay"
-            echo "minSdk=19"
+            echo "minSdk=17"
             echo "signing=${{ steps.signing.outputs.label }}"
             echo "source_commit=${GITHUB_SHA}"
             if [ -f UPSTREAM-DIPLAY.txt ]; then
@@ -121,11 +121,11 @@ jobs:
           } > release/BUILD-INFO.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add release/CarPlay-CRV-2021-v0.2.12-api19.apk release/BUILD-INFO.txt
+          git add release/CarPlay-CRV-2021-v0.2.12-api17.apk release/BUILD-INFO.txt
           if git diff --cached --quiet; then
             echo "release APK unchanged; nothing to commit."
           else
-            git commit -m "chore(release): update CR-V 2021 API19 APK [skip ci]"
+            git commit -m "chore(release): update CR-V 2021 API17 APK [skip ci]"
             for attempt in 1 2 3; do
               git fetch origin crv-2021-integrated
               git rebase origin/crv-2021-integrated
