@@ -46,9 +46,9 @@ class CrvDiagnostics(context: Context) {
      * Best-effort export to a removable USB mass-storage mount.
      * Returns the exported directory, or null when no writable removable mount is visible.
      */
-    fun exportToRemovableStorage(): File? = synchronized(lock) {
+    fun exportToRemovableStorage(mountedRoot: File? = null): File? = synchronized(lock) {
         try {
-            val root = findWritableRemovableRoot() ?: return@synchronized null
+            val root = findWritableRemovableRoot(mountedRoot) ?: return@synchronized null
             val output = File(root, "CarPlay-CRV/logs")
             if (!output.exists() && !output.mkdirs()) return@synchronized null
             if (!output.isDirectory || !output.canWrite()) return@synchronized null
@@ -70,7 +70,7 @@ class CrvDiagnostics(context: Context) {
         }
     }
 
-    private fun findWritableRemovableRoot(): File? {
+    private fun findWritableRemovableRoot(mountedRoot: File?): File? {
         val internalRoots = HashSet<String>()
         fun remember(file: File?) {
             if (file == null) return
@@ -82,20 +82,29 @@ class CrvDiagnostics(context: Context) {
 
         // Honda/Android 4.x vendors use several mount roots. We inspect their children instead of
         // hard-coding one USB path, and reject the app/internal storage roots above.
-        val parents = listOf(File("/storage"), File("/mnt"), File("/media"))
         val candidates = ArrayList<File>()
-        for (parent in parents) {
-            val children = try { parent.listFiles() } catch (_: Exception) { null } ?: continue
-            for (child in children) {
-                if (child.isDirectory) candidates.add(child)
-                val grandchildren = try { child.listFiles() } catch (_: Exception) { null }
-                grandchildren?.filterTo(candidates) { it.isDirectory }
+        if (mountedRoot != null) {
+            candidates.add(mountedRoot)
+        } else {
+            val parents = listOf(File("/storage"), File("/mnt"), File("/media"))
+            for (parent in parents) {
+                val children = try { parent.listFiles() } catch (_: Exception) { null } ?: continue
+                for (child in children) {
+                    if (child.isDirectory) candidates.add(child)
+                    val grandchildren = try { child.listFiles() } catch (_: Exception) { null }
+                    grandchildren?.filterTo(candidates) { it.isDirectory }
+                }
             }
         }
 
         return candidates.firstOrNull { candidate ->
             val canonical = try { candidate.canonicalPath } catch (_: Exception) { return@firstOrNull false }
-            if (internalRoots.any { canonical == it || canonical.startsWith("$it/") }) return@firstOrNull false
+            if (internalRoots.any { internal ->
+                    canonical == internal ||
+                        canonical.startsWith("$internal/") ||
+                        internal.startsWith("$canonical/")
+                }
+            ) return@firstOrNull false
             if (!candidate.canWrite()) return@firstOrNull false
             val probe = File(candidate, ".carplay-crv-write-test")
             try {

@@ -227,7 +227,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         diagnostics.log(
             "USB descriptors vid=0x" + device.vendorId.toString(16) +
                 " pid=0x" + device.productId.toString(16) +
-                " configs=" + device.configurationCount +
+                " interfaces=" + device.interfaceCount +
                 " carPlayReady=" + carPlayReady +
                 " transitionAttempts=" + usbReenumerationAttempts
         )

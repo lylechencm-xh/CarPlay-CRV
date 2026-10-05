@@ -106,6 +106,17 @@ Previous rotated log:
 
 The exact base directory can vary by ROM/storage mount.
 
+After testing, unplug the iPhone and insert a writable USB flash drive or USB hard disk. Android
+4.4 automatically exports the retained files to:
+
+```
+CarPlay-CRV/logs/
+```
+
+The export is triggered by the storage mount event and retries briefly while the volume becomes
+writable. USB mass-storage devices are ignored by the iPhone connection path; only devices with
+Apple vendor ID `0x05ac` are eligible for CarPlay USB handling.
+
 ## What to capture from a failed test
 
 Record:
