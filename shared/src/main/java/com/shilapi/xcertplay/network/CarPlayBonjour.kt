@@ -198,11 +198,9 @@ class CarPlayBonjour(
             val info = event.info
             // Use the registry address, not deprecated getInterface(), which can return
             // another address family of the same Android interface.
-            val address: InetAddress? = info.inetAddresses.firstOrNull {
+            val address = info.inetAddresses.firstOrNull {
                 (it is Inet4Address) == (event.dns.inetAddress is Inet4Address)
-            }?.let { candidate ->
-                applyLocalScope(candidate) as? InetAddress
-            }
+            }?.let(::applyLocalScope)
             if (address == null || info.port !in 1..65535) {
                 discoveryEvents.offer(CarPlayBonjourEvent.Discovery(
                     if (address == null) CarPlayBonjourEvent.Discovery.Stage.NO_MATCHING_ADDRESS
