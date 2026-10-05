@@ -17,12 +17,22 @@ class CrvDiagnostics(context: Context) {
     private val directory = context.getExternalFilesDir(null) ?: context.filesDir
     private val file = File(directory, "carplay-crv.log")
     private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+    private var lastLine: String? = null
+    private var lastLineAtMillis: Long = 0L
 
     fun path(): String = file.absolutePath
+
+    fun log(stage: CrvConnectionStage, message: String) {
+        log("[${stage.name}] $message")
+    }
 
     fun log(message: String) {
         val safe = sanitize(message)
         synchronized(lock) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (safe == lastLine && now - lastLineAtMillis < DEDUPE_WINDOW_MILLIS) return
+            lastLine = safe
+            lastLineAtMillis = now
             try {
                 rotateIfNeeded()
                 file.parentFile?.mkdirs()
@@ -59,5 +69,6 @@ class CrvDiagnostics(context: Context) {
     companion object {
         private const val MAX_BYTES = 256 * 1024L
         private const val MAX_LINE = 1024
+        private const val DEDUPE_WINDOW_MILLIS = 1_000L
     }
 }
