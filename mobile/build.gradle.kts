@@ -6,6 +6,11 @@ plugins {
 val localAuthenticationAssets = providers.environmentVariable("DIPLAY_AUTH_ASSETS_DIR")
     .orNull?.let { file(it).canonicalFile }
 
+val crvTestKeystorePath = providers.environmentVariable("CRV_TEST_KEYSTORE_PATH").orNull
+val crvTestStorePassword = providers.environmentVariable("CRV_TEST_STORE_PASSWORD").orNull
+val crvTestKeyAlias = providers.environmentVariable("CRV_TEST_KEY_ALIAS").orNull
+val crvTestKeyPassword = providers.environmentVariable("CRV_TEST_KEY_PASSWORD").orNull
+
 android {
     namespace = "com.shilapi.xcertplay"
     compileSdk {
@@ -16,8 +21,8 @@ android {
         applicationId = "com.shihab.diplay"
         minSdk = 19
         targetSdk = 28
-        versionCode = 29
-        versionName = "0.2.10"
+        versionCode = 30
+        versionName = "0.2.11"
 
     }
 
@@ -25,6 +30,12 @@ android {
     localAuthenticationAssets?.let { sourceSets.getByName("main").assets.srcDir(it) }
 
     signingConfigs {
+        create("crvTest") {
+            storeFile = crvTestKeystorePath?.let(::file) ?: file("missing-crv-test.keystore")
+            storePassword = crvTestStorePassword.orEmpty()
+            keyAlias = crvTestKeyAlias.orEmpty()
+            keyPassword = crvTestKeyPassword.orEmpty()
+        }
         create("release") {
             storeFile = file(
                 providers.environmentVariable("ANDROID_KEYSTORE_PATH")
@@ -40,6 +51,9 @@ android {
         debug {
             applicationIdSuffix = ".crv2021"
             versionNameSuffix = "-crv-2021-api19"
+            if (crvTestKeystorePath != null) {
+                signingConfig = signingConfigs.getByName("crvTest")
+            }
         }
         release {
             optimization {
