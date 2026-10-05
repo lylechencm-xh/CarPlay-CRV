@@ -21,11 +21,9 @@ android {
         applicationId = "com.shihab.diplay"
         minSdk = 19
         targetSdk = 28
-        versionCode = 30
-        versionName = "0.2.11"
-
+        versionCode = 31
+        versionName = "0.2.12"
     }
-
 
     localAuthenticationAssets?.let { sourceSets.getByName("main").assets.srcDir(it) }
 
@@ -49,7 +47,9 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix = ".crv"
+            // Honda head-unit installer recognition depends on the legacy package identity.
+            // Do not append an applicationIdSuffix here: the final APK must remain
+            // exactly com.shihab.diplay.
             versionNameSuffix = "-crv"
             if (crvTestKeystorePath != null) {
                 signingConfig = signingConfigs.getByName("crvTest")
