@@ -156,16 +156,10 @@ class CarPlayVpnService : VpnService() {
         }
     }
 
-    /**
-     * API21 added per-app VPN scoping and explicit blocking mode. Guard the direct calls so
-     * Android 4.2.2/API17 never resolves or executes them, while API21+ keeps the strict
-     * "scope before establish" transaction required by the upstream tests.
-     */
-    @android.annotation.TargetApi(21)
+    /** API21 features are isolated so the Android 4.2.2 service class contains no direct calls. */
     private fun configureOptionalBuilderFeatures(builder: Builder) {
         if (!useScopedVpnBuilder(android.os.Build.VERSION.SDK_INT)) return
-        builder.setBlocking(true)
-        builder.addAllowedApplication(packageName)
+        VpnBuilderApi21.configure(builder, packageName)
     }
 
     /** Releases the active AirPlay listener and whichever VPN/NCM transport resources are active. */
