@@ -1,6 +1,5 @@
 package com.shilapi.xcertplay.transport
 
-import android.hardware.usb.UsbConfiguration
 import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
@@ -33,9 +32,6 @@ object NcmFunctionDiscovery {
         return findCdcNcm(interfaces)
     }
 
-    fun find(configuration: UsbConfiguration): NcmFunction? {
-        return findCdcNcm(interfaces(configuration))
-    }
 
     private fun findCdcNcm(interfaces: List<UsbInterface>): NcmFunction? {
         val control = interfaces.firstOrNull {
@@ -55,8 +51,6 @@ object NcmFunctionDiscovery {
         return NcmFunction(control, data, statusIn, endpoints.first, endpoints.second)
     }
 
-    private fun interfaces(configuration: UsbConfiguration): List<UsbInterface> =
-        (0 until configuration.interfaceCount).map(configuration::getInterface)
 
     private fun bulkEndpoints(usbInterface: UsbInterface): Pair<UsbEndpoint, UsbEndpoint>? {
         val endpoints = (0 until usbInterface.endpointCount).map(usbInterface::getEndpoint)
