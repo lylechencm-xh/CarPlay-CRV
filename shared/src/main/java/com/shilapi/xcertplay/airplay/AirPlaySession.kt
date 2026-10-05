@@ -798,11 +798,17 @@ internal fun teardownStreamTypes(body: Any?): List<Int>? {
     return entries.filterNot { (type, streamId) -> type == 130 && streamId != null && streamId != 1L }.map { it.first }
 }
 
-internal fun safeClose(closeable: Closeable?) {
+internal fun safeClose(resource: Any?) {
     try {
-        closeable?.close()
+        when (resource) {
+            is Socket -> resource.close()
+            is ServerSocket -> resource.close()
+            is DatagramSocket -> resource.close()
+            is Closeable -> resource.close()
+        }
     } catch (_: Exception) {
-        // Best-effort close.
+        // Best-effort close. Socket/ServerSocket only implement Closeable from API 19
+        // in Android's library surface, so handle their concrete API-1 close() methods first.
     }
 }
 
