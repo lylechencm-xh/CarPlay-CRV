@@ -11,6 +11,7 @@ import java.io.IOException
 import java.net.InetAddress
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.LockSupport
 
 /**
@@ -37,9 +38,27 @@ class Ipv6NcmBridge(
     private var loggedWaitingForPeer = false
     private var inboundLogBudget = 16
     private var outboundLogBudget = 24
+    data class Stats(
+        val ncmToTunPackets: Long,
+        val ncmToTunBytes: Long,
+        val tunToNcmPackets: Long,
+        val tunToNcmBytes: Long,
+    )
+
     private val running = AtomicBoolean(false)
+    private val ncmToTunPackets = AtomicLong(0L)
+    private val ncmToTunBytes = AtomicLong(0L)
+    private val tunToNcmPackets = AtomicLong(0L)
+    private val tunToNcmBytes = AtomicLong(0L)
     private lateinit var ncmToTunThread: Thread
     private lateinit var tunToNcmThread: Thread
+
+    fun stats(): Stats = Stats(
+        ncmToTunPackets = ncmToTunPackets.get(),
+        ncmToTunBytes = ncmToTunBytes.get(),
+        tunToNcmPackets = tunToNcmPackets.get(),
+        tunToNcmBytes = tunToNcmBytes.get(),
+    )
 
     fun start() {
         check(running.compareAndSet(false, true)) { "bridge is already started" }
@@ -81,6 +100,8 @@ class Ipv6NcmBridge(
                     Log.i(TAG, "ncm inbound ${frame.summary(ipv6.payloadOffset)}")
                 }
                 writeTun(output, frame, ipv6.payloadOffset, ipv6.payloadLength)
+                ncmToTunPackets.incrementAndGet()
+                ncmToTunBytes.addAndGet(ipv6.payloadLength.toLong())
             }
         } catch (error: IOException) {
             if (running.get()) onError(error)
@@ -132,6 +153,8 @@ class Ipv6NcmBridge(
                 }
                 val frame = EthernetIpv6Codec.build(hostMac, mac, ipv6)
                 ncm.send(frame, WRITE_TIMEOUT_MILLIS)
+                tunToNcmPackets.incrementAndGet()
+                tunToNcmBytes.addAndGet(ipv6.size.toLong())
             }
         } catch (error: IOException) {
             if (running.get()) onError(error)
