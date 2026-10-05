@@ -246,16 +246,10 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             when (result) {
                 is IphoneUsbHost.TransitionResult.ReenumerationRequested -> {
                     reportStatus("Waiting for iPhone CarPlay USB mode")
-                    mainHandler.postDelayed({
-                        if (
-                            !destroyed &&
-                            awaitingCarPlayReattach &&
-                            generation == usbTransitionGeneration.get()
-                        ) {
-                            awaitingCarPlayReattach = false
-                            reportStatus("CarPlay USB mode switch timed out; reconnect iPhone")
-                        }
-                    }, USB_REENUMERATION_TIMEOUT_MILLIS)
+                    // Honda Android 4.4 head units can suppress the USB ATTACHED broadcast
+                    // after Apple's 0x52 mode switch. Poll UsbManager as a fallback instead
+                    // of waiting only for the broadcast.
+                    pollCarPlayReenumeration(generation, System.currentTimeMillis())
                 }
                 is IphoneUsbHost.TransitionResult.Failed -> {
                     awaitingCarPlayReattach = false
@@ -264,6 +258,35 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 }
             }
         }
+    }
+
+    private fun pollCarPlayReenumeration(generation: Int, startedAtMillis: Long) {
+        mainHandler.postDelayed(object : Runnable {
+            override fun run() {
+                if (
+                    destroyed ||
+                    !awaitingCarPlayReattach ||
+                    generation != usbTransitionGeneration.get()
+                ) return
+
+                val device = usbHost.discover().firstOrNull()
+                if (device != null && IphoneCarPlayConfiguration.hasActiveCarPlayLayout(device)) {
+                    diagnostics.log("CarPlay USB mode detected by polling fallback")
+                    awaitingCarPlayReattach = false
+                    usbTransitionGeneration.incrementAndGet()
+                    requestPermissionForCarPlay(device)
+                    return
+                }
+
+                if (System.currentTimeMillis() - startedAtMillis >= USB_REENUMERATION_TIMEOUT_MILLIS) {
+                    awaitingCarPlayReattach = false
+                    reportStatus("CarPlay USB mode switch timed out; reconnect iPhone")
+                    return
+                }
+
+                mainHandler.postDelayed(this, USB_REENUMERATION_POLL_MILLIS)
+            }
+        }, USB_REENUMERATION_POLL_MILLIS)
     }
 
     private fun openCarPlayUsb(device: UsbDevice) {
@@ -443,7 +466,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     companion object {
         private const val REQUEST_VPN = 1001
-        private const val USB_REENUMERATION_TIMEOUT_MILLIS = 15_000L
+        private const val USB_REENUMERATION_TIMEOUT_MILLIS = 30_000L
+        private const val USB_REENUMERATION_POLL_MILLIS = 500L
         private const val AUTOMATIC_RECONNECT_DELAY_MILLIS = 2_000L
         private const val MAX_AUTOMATIC_RECONNECTS = 3
     }
