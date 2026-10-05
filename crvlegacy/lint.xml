@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!--
+      This upstream location provider is excluded from the CR-V Kotlin compilation surface.
+      Keep MissingPermission strict everywhere else; ignore only this non-runtime source file.
+    -->
+    <issue id="MissingPermission">
+        <ignore regexp="shared/src/main/java/com/shilapi/xcertplay/location/AndroidCarPlayLocationProvider\.kt$" />
+    </issue>
+</lint>
