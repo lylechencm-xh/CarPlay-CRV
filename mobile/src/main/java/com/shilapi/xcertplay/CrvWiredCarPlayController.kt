@@ -307,14 +307,10 @@ class CrvWiredCarPlayController(
             serialNumber = "CRV-${deviceId.replace(":", "")}",
             firmwareVersion = "1.0",
             hardwareVersion = "2021",
-            carPlayUsbInterfaceNumber = 0,
             wireless = Iap2WirelessIdentification(
                 bluetoothMac = bluetoothMac,
                 ssid = hotspotInfo.ssid,
             ),
-            locationInformationEnabled = false,
-            vehicleStatusEnabled = false,
-            vehicleSpeedEnabled = false,
         )
 
         val endpoint = Iap2WirelessCarPlayEndpoint(
