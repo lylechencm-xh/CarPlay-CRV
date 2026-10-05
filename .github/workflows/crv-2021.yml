@@ -25,6 +25,9 @@ jobs:
         with:
           gradle-version: '9.5.0'
 
+      - name: Enforce CR-V Android 4.2.2 / API17 baseline
+        run: python3 .github/scripts/check-crv-baseline.py
+
       - name: Check Android 4.2.2 Java library surface
         run: python3 .github/scripts/check-api17-java.py
 
@@ -40,7 +43,6 @@ jobs:
           find shared/build/test-results/testDebugUnitTest -type f -name '*.xml' -print -exec cat {} \; || true
 
       - name: Lint CR-V Android 4.2.2 path
-        continue-on-error: true
         run: ./gradlew :crvlegacy:lintDebug :mobile:lintDebug --stacktrace
 
       - name: Print lint details
@@ -84,6 +86,7 @@ jobs:
           AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
           "$AAPT" dump badging mobile/build/outputs/apk/debug/mobile-debug.apk | tee /tmp/crv-badging.txt
           grep -F "package: name='com.shihab.diplay'" /tmp/crv-badging.txt
+          grep -E "sdkVersion:'17'|sdkVersion:'17\\b" /tmp/crv-badging.txt
           if grep -F "package: name='com.shihab.diplay.crv'" /tmp/crv-badging.txt; then
             echo "::error::Unexpected .crv package suffix found in APK."
             exit 1
