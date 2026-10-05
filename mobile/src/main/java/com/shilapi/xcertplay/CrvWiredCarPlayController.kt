@@ -297,6 +297,7 @@ class CrvWiredCarPlayController(
             serialNumber = "CRV-${deviceId.replace(":", "")}",
             firmwareVersion = "1.0",
             hardwareVersion = "2021",
+            carPlayUsbInterfaceNumber = 0,
             wireless = Iap2WirelessIdentification(
                 bluetoothMac = deviceId,
                 ssid = hotspotInfo.ssid,
