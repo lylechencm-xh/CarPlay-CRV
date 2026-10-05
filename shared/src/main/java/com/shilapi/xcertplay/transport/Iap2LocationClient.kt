@@ -1,5 +1,7 @@
 package com.shilapi.xcertplay.transport
 
+import java.io.Closeable
+
 import com.shilapi.xcertplay.iap2.message.Iap2ControlMessages
 import com.shilapi.xcertplay.iap2.wire.Iap2Frame
 import java.util.Locale
@@ -28,7 +30,7 @@ data class CarPlayLocationFix(
 }
 
 /** Supplies location data only while the phone has subscribed to iAP2 LocationInformation. */
-interface Iap2LocationProvider : AutoCloseable {
+interface Iap2LocationProvider : Closeable {
     /** The 0xFFFA parameter ids, i.e. the sentence types the iPhone asked for; called before [start]. */
     fun onRequested(components: Set<Int>) = Unit
 
