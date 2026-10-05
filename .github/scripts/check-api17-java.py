@@ -34,6 +34,7 @@ FORBIDDEN = {
     "java.time.": "java.time is unavailable on Android 4.2",
     "java.util.Base64": "use android.util.Base64",
     "java.nio.file.": "java.nio.file is unavailable on Android 4.2",
+    "java.nio.charset.StandardCharsets": "StandardCharsets requires API19; use Charset.forName on API17",
     "java.util.stream.": "Java streams are unavailable on Android 4.2",
     "java.util.Optional": "java.util.Optional is unavailable on Android 4.2",
     "java.util.function.": "java.util.function is unavailable on Android 4.2",
