@@ -111,5 +111,16 @@ jobs:
             echo "release APK unchanged; nothing to commit."
           else
             git commit -m "chore(release): update CR-V 2021 API19 APK [skip ci]"
-            git push origin HEAD:crv-2021-integrated
+            for attempt in 1 2 3; do
+              git fetch origin crv-2021-integrated
+              git rebase origin/crv-2021-integrated
+              if git push origin HEAD:crv-2021-integrated; then
+                break
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "::error::Failed to publish release APK after 3 retries."
+                exit 1
+              fi
+              sleep 2
+            done
           fi
