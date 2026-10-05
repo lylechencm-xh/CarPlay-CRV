@@ -5,7 +5,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.hardware.usb.UsbConfiguration
 import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
@@ -316,8 +315,8 @@ class IphoneUsbHost(
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) = onReceive(intent)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            appContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        if (Build.VERSION.SDK_INT >= 33) {
+            AndroidApi33UsbCompat.registerNotExported(appContext, receiver, filter)
         } else {
             appContext.registerReceiver(receiver, filter)
         }
@@ -327,8 +326,8 @@ class IphoneUsbHost(
         }
     }
 
-    private fun Intent.usbDevice(): UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+    private fun Intent.usbDevice(): UsbDevice? = if (Build.VERSION.SDK_INT >= 33) {
+        AndroidApi33UsbCompat.usbDevice(this)
     } else {
         @Suppress("DEPRECATION")
         getParcelableExtra(UsbManager.EXTRA_DEVICE)
