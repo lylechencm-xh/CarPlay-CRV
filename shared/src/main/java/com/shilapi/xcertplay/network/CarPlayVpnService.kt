@@ -31,6 +31,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * The wired path also owns the Android VPN tunnel and NCM IPv6 bridge. VPN consent is requested
  * with [prepare] before binding.
  */
+internal fun useScopedVpnBuilder(apiLevel: Int): Boolean = apiLevel >= 21
+
 class CarPlayVpnService : VpnService() {
     inner class LocalBinder : Binder() {
         val service: CarPlayVpnService get() = this@CarPlayVpnService
@@ -160,6 +162,7 @@ class CarPlayVpnService : VpnService() {
      * to the CarPlay link-local IPv6 prefix, avoiding a device-wide default route.
      */
     private fun configureOptionalBuilderFeatures(builder: Builder) {
+        if (!useScopedVpnBuilder(android.os.Build.VERSION.SDK_INT)) return
         val type = builder.javaClass
         runCatching {
             type.getMethod("setBlocking", java.lang.Boolean.TYPE).invoke(builder, true)
