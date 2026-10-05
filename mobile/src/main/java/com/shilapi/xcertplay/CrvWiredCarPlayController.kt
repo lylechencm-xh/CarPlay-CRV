@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay
 
+import android.bluetooth.BluetoothAdapter
 import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
@@ -149,6 +150,7 @@ class CrvWiredCarPlayController(
     private fun runWired(device: UsbDevice, usbSession: Iap2UsbSession) {
         check(!closed.get()) { "controller is closed" }
 
+        report(CrvMfiAssets.status(appContext))
         val mfi = loadMfi()
         report("MFi identity ready")
 
@@ -220,6 +222,9 @@ class CrvWiredCarPlayController(
         val usbMuxInterfaceNumber = IphoneCarPlayConfiguration.usbMuxInterface(device)?.id
             ?: throw IphoneUsbException.Protocol("CarPlay USB layout exposes no USBMUX interface")
         report("CarPlay USBMUX interface=$usbMuxInterfaceNumber")
+
+        val bluetoothMac = bluetoothTransportIdentifier()
+        report("Wi-Fi Bluetooth transport id source=" + if (bluetoothMac == deviceId) "derived" else "adapter")
 
         val identification = Iap2IdentificationConfig(
             name = "Honda CR-V CarPlay",
@@ -299,7 +304,7 @@ class CrvWiredCarPlayController(
             hardwareVersion = "2021",
             carPlayUsbInterfaceNumber = 0,
             wireless = Iap2WirelessIdentification(
-                bluetoothMac = deviceId,
+                bluetoothMac = bluetoothMac,
                 ssid = hotspotInfo.ssid,
             ),
             locationInformationEnabled = false,
@@ -374,6 +379,21 @@ class CrvWiredCarPlayController(
     }
 
     private fun loadMfi(): MfiAuthenticator = CrvMfiAssets.load(appContext)
+
+    private fun bluetoothTransportIdentifier(): String {
+        val value = runCatching { BluetoothAdapter.getDefaultAdapter()?.address }
+            .getOrNull()
+            ?.uppercase(Locale.US)
+        return if (
+            value != null &&
+            value.matches(Regex("[0-9A-F]{2}(:[0-9A-F]{2}){5}")) &&
+            value != "02:00:00:00:00:00"
+        ) {
+            value
+        } else {
+            deviceId
+        }
+    }
 
     private fun airPlayConfig(id: String): AirPlayConfig = AirPlayConfig(
         deviceName = "Honda CR-V",
