@@ -25,3 +25,4 @@ dependencyResolutionManagement {
 rootProject.name = "xcertplay"
 include(":mobile")
 include(":shared")
+include(":crvlegacy")
