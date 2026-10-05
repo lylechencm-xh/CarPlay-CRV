@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.transport
 
+import java.io.Closeable
 import java.io.IOException
 import java.util.ArrayDeque
 import kotlin.math.min
@@ -21,7 +22,7 @@ class Iap2LinkChannel private constructor(
     private val linkConfig: Iap2LinkConfig,
     private val initiateNegotiation: Boolean,
     private val onArtwork: (Iap2ArtworkTransfer) -> Unit,
-) : AutoCloseable {
+) : Closeable {
     private data class Command(val sessionId: Int, val payload: ByteArray)
 
     private val lock = Object()
