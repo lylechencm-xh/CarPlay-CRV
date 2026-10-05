@@ -49,8 +49,8 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix = ".crv2021"
-            versionNameSuffix = "-crv-2021-api19"
+            applicationIdSuffix = ".crv"
+            versionNameSuffix = "-crv"
             if (crvTestKeystorePath != null) {
                 signingConfig = signingConfigs.getByName("crvTest")
             }
