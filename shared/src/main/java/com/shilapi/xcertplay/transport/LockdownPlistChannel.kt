@@ -4,7 +4,7 @@ import android.util.Xml
 import java.io.Closeable
 import java.io.StringReader
 import java.nio.charset.Charset
-import android.util.Base64
+import org.bouncycastle.util.encoders.Base64
 import org.xmlpull.v1.XmlPullParser
 
 /** The small plist value set needed by Lockdown messages. */
@@ -214,7 +214,7 @@ class LockdownPlistChannel(
             "data" -> {
                 val encoded = simpleText(parser, "data").filterNot(Char::isWhitespace)
                 try {
-                    LockdownPlistValue.Data(Base64.decode(encoded, Base64.DEFAULT))
+                    LockdownPlistValue.Data(Base64.decode(encoded))
                 } catch (error: IllegalArgumentException) {
                     throw IphoneUsbException.Protocol("Invalid base64 Lockdown plist data")
                 }
@@ -249,7 +249,7 @@ class LockdownPlistChannel(
             is LockdownPlistValue.Integer -> append("<integer>").append(value.value).append("</integer>")
             is LockdownPlistValue.Boolean -> append(if (value.value) "<true/>" else "<false/>")
             is LockdownPlistValue.Data -> append("<data>")
-                .append(Base64.encodeToString(value.bytes, Base64.NO_WRAP))
+                .append(Base64.toBase64String(value.bytes))
                 .append("</data>")
         }
     }
