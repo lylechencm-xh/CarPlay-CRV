@@ -25,23 +25,6 @@ jobs:
         with:
           gradle-version: '9.5.0'
 
-      - name: Require fixed CR-V test signing key
-        env:
-          CRV_TEST_KEYSTORE_BASE64: ${{ secrets.CRV_TEST_KEYSTORE_BASE64 }}
-          CRV_TEST_STORE_PASSWORD_SECRET: ${{ secrets.CRV_TEST_STORE_PASSWORD }}
-          CRV_TEST_KEY_ALIAS_SECRET: ${{ secrets.CRV_TEST_KEY_ALIAS }}
-          CRV_TEST_KEY_PASSWORD_SECRET: ${{ secrets.CRV_TEST_KEY_PASSWORD }}
-        run: |
-          if [ -z "$CRV_TEST_KEYSTORE_BASE64" ] || [ -z "$CRV_TEST_STORE_PASSWORD_SECRET" ] || [ -z "$CRV_TEST_KEY_ALIAS_SECRET" ] || [ -z "$CRV_TEST_KEY_PASSWORD_SECRET" ]; then
-            echo "::error::Fixed CR-V signing secrets are required. Refusing to build a recognition-test APK with an ephemeral runner debug key."
-            exit 1
-          fi
-          printf '%s' "$CRV_TEST_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/crv-test.keystore"
-          echo "CRV_TEST_KEYSTORE_PATH=$RUNNER_TEMP/crv-test.keystore" >> "$GITHUB_ENV"
-          echo "CRV_TEST_STORE_PASSWORD=$CRV_TEST_STORE_PASSWORD_SECRET" >> "$GITHUB_ENV"
-          echo "CRV_TEST_KEY_ALIAS=$CRV_TEST_KEY_ALIAS_SECRET" >> "$GITHUB_ENV"
-          echo "CRV_TEST_KEY_PASSWORD=$CRV_TEST_KEY_PASSWORD_SECRET" >> "$GITHUB_ENV"
-
       - name: Check Android 4.4 Java library surface
         run: python3 .github/scripts/check-api19-java.py
 
@@ -65,6 +48,23 @@ jobs:
               grep -n -E "Error:|Warning:" "$report" || true
             fi
           done
+
+      - name: Require fixed CR-V test signing key
+        env:
+          CRV_TEST_KEYSTORE_BASE64: ${{ secrets.CRV_TEST_KEYSTORE_BASE64 }}
+          CRV_TEST_STORE_PASSWORD_SECRET: ${{ secrets.CRV_TEST_STORE_PASSWORD }}
+          CRV_TEST_KEY_ALIAS_SECRET: ${{ secrets.CRV_TEST_KEY_ALIAS }}
+          CRV_TEST_KEY_PASSWORD_SECRET: ${{ secrets.CRV_TEST_KEY_PASSWORD }}
+        run: |
+          if [ -z "$CRV_TEST_KEYSTORE_BASE64" ] || [ -z "$CRV_TEST_STORE_PASSWORD_SECRET" ] || [ -z "$CRV_TEST_KEY_ALIAS_SECRET" ] || [ -z "$CRV_TEST_KEY_PASSWORD_SECRET" ]; then
+            echo "::error::Fixed CR-V signing secrets are required. Refusing to build a recognition-test APK with an ephemeral runner debug key."
+            exit 1
+          fi
+          printf '%s' "$CRV_TEST_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/crv-test.keystore"
+          echo "CRV_TEST_KEYSTORE_PATH=$RUNNER_TEMP/crv-test.keystore" >> "$GITHUB_ENV"
+          echo "CRV_TEST_STORE_PASSWORD=$CRV_TEST_STORE_PASSWORD_SECRET" >> "$GITHUB_ENV"
+          echo "CRV_TEST_KEY_ALIAS=$CRV_TEST_KEY_ALIAS_SECRET" >> "$GITHUB_ENV"
+          echo "CRV_TEST_KEY_PASSWORD=$CRV_TEST_KEY_PASSWORD_SECRET" >> "$GITHUB_ENV"
 
       - name: Build CR-V 2021 Android 4.4 APK
         run: ./gradlew :mobile:assembleDebug --stacktrace
