@@ -4,15 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 
-/** Only the shell (DUMP permission) can provision this temporary test bridge. */
+/** No-op in the CR-V Android 4.2.2 build; BYD starter bridge support is excluded. */
 class StarterBridgeReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {
-        when (intent.action) {
-            "byd.hud.STARTER_CONFIG" -> {
-                BydStarterBridge.configure(context, intent.getStringExtra("token") ?: return)
-                resultData = "Starter configured"
-            }
-            "byd.hud.STARTER_DEMO" -> BydStarterBridge.demonstrate(context)
-        }
-    }
+    override fun onReceive(context: Context, intent: Intent) = Unit
 }
