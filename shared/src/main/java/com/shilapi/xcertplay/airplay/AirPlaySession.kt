@@ -133,7 +133,7 @@ class AirPlaySession(
         if (!closed.compareAndSet(false, true)) return
         mainScreenToken = null
         clearClusterContent()
-        safeClose(socket)
+        try { socket.close() } catch (_: Exception) { }
         try {
             media.onSessionClosed(this)
         } catch (error: Exception) {
