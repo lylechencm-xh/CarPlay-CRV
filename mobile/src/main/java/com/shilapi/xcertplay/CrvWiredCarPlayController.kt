@@ -409,6 +409,7 @@ class CrvWiredCarPlayController(
         rightHandDrive = false,
         hevc = false,
         microphone = true,
+        opus = false,
         manufacturer = "Honda",
         model = "CR-V 2021",
         oemLabel = "Honda",
