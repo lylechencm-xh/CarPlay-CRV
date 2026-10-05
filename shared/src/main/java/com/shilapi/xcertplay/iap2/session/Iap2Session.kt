@@ -10,6 +10,7 @@ import com.shilapi.xcertplay.iap2.wire.Iap2Frame
 import com.shilapi.xcertplay.transport.BlockingDuplexByteStream
 import com.shilapi.xcertplay.transport.Iap2CsmChannel
 import com.shilapi.xcertplay.transport.Iap2ArtworkTransfer
+import java.io.Closeable
 
 /**
  * One immediately readable and writable iAP2 CSM session.
@@ -22,7 +23,7 @@ class Iap2Session private constructor(
     private val channel: Iap2CsmChannel,
     private val traceContext: String,
     private val onTrace: (String) -> Unit,
-) : AutoCloseable {
+) : Closeable {
     val isClosed: Boolean get() = channel.isClosed
 
     fun awaitReady(timeoutMillis: Long): Boolean {
