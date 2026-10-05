@@ -92,6 +92,7 @@ class CrvWiredCarPlayController(
     private val listener = object : AirPlaySessionListener {
         override fun onSessionActive(session: AirPlaySession) {
             activeSession = session
+            report(vpn.diagnosticSummary())
             report("CarPlay active")
         }
 
@@ -101,6 +102,7 @@ class CrvWiredCarPlayController(
         }
 
         override fun onTransportError(message: String) {
+            report(vpn.diagnosticSummary())
             report("CarPlay transport error: $message")
             // Break the blocking wired control loop so the worker can tear the complete stack down.
             runCatching { csm?.close() }
