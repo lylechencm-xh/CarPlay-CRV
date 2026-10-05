@@ -265,7 +265,7 @@ class NcmUsbBridge internal constructor(
                 val firstClaimed = connection.claimInterface(first, true)
                 Log.i(
                     IphoneCarPlayConfiguration.TAG,
-                    "claim iface=${first.id}/${first.alternateSetting} class=${first.interfaceClass}" +
+                    "claim iface=${first.id} class=${first.interfaceClass}" +
                         " subclass=${first.interfaceSubclass} proto=${first.interfaceProtocol} ok=$firstClaimed",
                 )
                 if (!firstClaimed) {
@@ -278,7 +278,7 @@ class NcmUsbBridge internal constructor(
                     val dataClaimed = connection.claimInterface(function.data, true)
                     Log.i(
                         IphoneCarPlayConfiguration.TAG,
-                        "claim iface=${function.data.id}/${function.data.alternateSetting}" +
+                        "claim iface=${function.data.id}" +
                             " class=${function.data.interfaceClass} ok=$dataClaimed",
                     )
                     if (!dataClaimed) {
@@ -291,7 +291,7 @@ class NcmUsbBridge internal constructor(
                 val altSelected = selectInterface(connection, function.data)
                 Log.i(
                     IphoneCarPlayConfiguration.TAG,
-                    "setInterface iface=${function.data.id}/${function.data.alternateSetting} ok=$altSelected",
+                    "setInterface iface=${function.data.id}/${NcmFunctionDiscovery.DATA_ALTERNATE_SETTING} ok=$altSelected",
                 )
                 if (!altSelected) {
                     throw IphoneUsbException.DeviceUnavailable(
@@ -329,13 +329,13 @@ class NcmUsbBridge internal constructor(
          * setting with the USB standard SET_INTERFACE control request on endpoint zero.
          */
         private fun selectInterface(connection: UsbDeviceConnection, usbInterface: UsbInterface): Boolean {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                return connection.setInterface(usbInterface)
+            if (android.os.Build.VERSION.SDK_INT >= 21) {
+                return UsbInterfaceApi21.select(connection, usbInterface)
             }
             val result = connection.controlTransfer(
                 UsbConstants.USB_DIR_OUT or UsbConstants.USB_TYPE_STANDARD or USB_RECIP_INTERFACE,
                 USB_REQUEST_SET_INTERFACE,
-                usbInterface.alternateSetting,
+                NcmFunctionDiscovery.DATA_ALTERNATE_SETTING,
                 usbInterface.id,
                 null,
                 0,
