@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay
 
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.content.Context
 import android.hardware.usb.UsbDevice
@@ -381,6 +382,7 @@ class CrvWiredCarPlayController(
 
     private fun loadMfi(): MfiAuthenticator = CrvMfiAssets.load(appContext)
 
+    @SuppressLint("MissingPermission", "HardwareIds")
     private fun bluetoothTransportIdentifier(): String {
         val value = runCatching { BluetoothAdapter.getDefaultAdapter()?.address }
             .getOrNull()
