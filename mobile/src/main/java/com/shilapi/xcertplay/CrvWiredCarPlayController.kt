@@ -225,9 +225,6 @@ class CrvWiredCarPlayController(
             ?: throw IphoneUsbException.Protocol("CarPlay USB layout exposes no USBMUX interface")
         report("CarPlay USBMUX interface=$usbMuxInterfaceNumber")
 
-        val bluetoothMac = bluetoothTransportIdentifier()
-        report("Wi-Fi Bluetooth transport id source=" + if (bluetoothMac == deviceId) "derived" else "adapter")
-
         val identification = Iap2IdentificationConfig(
             name = "Honda CR-V CarPlay",
             modelIdentifier = "CR-V-2021",
@@ -296,6 +293,12 @@ class CrvWiredCarPlayController(
             port = airPlayPort,
             report = report,
         ).also { it.start() }
+
+        val bluetoothMac = bluetoothTransportIdentifier()
+        report(
+            "Wi-Fi Bluetooth transport id source=" +
+                if (bluetoothMac == deviceId) "derived" else "adapter",
+        )
 
         val identification = Iap2IdentificationConfig(
             name = "Honda CR-V CarPlay",
