@@ -250,7 +250,9 @@ class CarPlayMediaEngine(
      */
     private fun videoDataStream(session: AirPlaySession, uuid: String, stream: Map<String, Any?>): Map<String, Any?>? {
         if (uuid in VideoInCar.REMOTE_CONTROL_UUIDS && (stream["controlType"] as? Number)?.toInt() == 1) {
-            return linkedMapOf("type" to STREAM_TYPE_DATA, "streamID" to nextRemoteControlStreamId++)
+            val streamId = nextRemoteControlStreamId++
+            session.logTrace("video remote-control stream accepted uuid=$uuid streamID=$streamId")
+            return linkedMapOf("type" to STREAM_TYPE_DATA, "streamID" to streamId)
         }
         if (uuid != VideoInCar.SETTINGS_CHANNEL_UUID) return null
         val shared = session.sharedSecret ?: return null
@@ -261,6 +263,7 @@ class CarPlayMediaEngine(
         val channel = VideoSettingsChannel(key(DATASTREAM_OUTPUT_KEY), key(DATASTREAM_INPUT_KEY)) { session.logDebug(it) }
         val port = channel.listen(session.localAddress ?: InetAddress.getByName("::"))
         videoSettingsChannels.put(session, channel)?.close()
+        session.logTrace("video settings stream listening port=$port")
         return linkedMapOf<String, Any?>("type" to STREAM_TYPE_DATA, "streamID" to VIDEO_SETTINGS_STREAM_ID, "dataPort" to port)
             .apply {
                 stream["streamConnectionID"]?.let { connectionId ->
@@ -436,23 +439,16 @@ class CarPlayMediaEngine(
 }
 
 internal fun unsignedPlistDecimal(value: Any?): String? = when (value) {
-    is Long -> unsignedLong(value).toString()
-    is Int -> (value.toLong() and 0xffff_ffffL).toString()
+    is Long -> java.lang.Long.toUnsignedString(value)
+    is Int -> Integer.toUnsignedString(value)
     is Short -> (value.toInt() and 0xffff).toString()
     is Byte -> (value.toInt() and 0xff).toString()
     is BigInteger -> if (value.signum() >= 0) value.toString() else null
-    else -> (value as? Number)?.toLong()?.let { unsignedLong(it).toString() }
+    else -> (value as? Number)?.toLong()?.let(java.lang.Long::toUnsignedString)
 }
 
 internal fun unsignedPlistInteger(value: Any?): Any = when (value) {
-    is Long -> if (value < 0) unsignedLong(value) else value
-    is Int -> if (value < 0) BigInteger.valueOf(value.toLong() and 0xffff_ffffL) else value
+    is Long -> if (value < 0) BigInteger(java.lang.Long.toUnsignedString(value)) else value
+    is Int -> if (value < 0) BigInteger(Integer.toUnsignedString(value)) else value
     else -> value ?: 0L
 }
-
-private fun unsignedLong(value: Long): BigInteger =
-    if (value >= 0) {
-        BigInteger.valueOf(value)
-    } else {
-        BigInteger.valueOf(value and Long.MAX_VALUE).setBit(63)
-    }
