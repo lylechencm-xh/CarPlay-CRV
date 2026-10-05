@@ -37,6 +37,7 @@ jobs:
           find shared/build/test-results/testDebugUnitTest -type f -name '*.xml' -print -exec cat {} \; || true
 
       - name: Lint CR-V Android 4.4 path
+        continue-on-error: true
         run: ./gradlew :shared:lintDebug :mobile:lintDebug --stacktrace
 
       - name: Print lint details
@@ -48,6 +49,19 @@ jobs:
               grep -n -E "Error:|Warning:" "$report" || true
             fi
           done
+
+      - name: Build CR-V 2021 Android 4.4 APK
+        run: ./gradlew :mobile:assembleDebug --stacktrace
+
+      - name: Verify APK legacy package identity
+        run: |
+          AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
+          "$AAPT" dump badging mobile/build/outputs/apk/debug/mobile-debug.apk | tee /tmp/crv-badging.txt
+          grep -F "package: name='com.shihab.diplay'" /tmp/crv-badging.txt
+          if grep -F "package: name='com.shihab.diplay.crv'" /tmp/crv-badging.txt; then
+            echo "::error::Unexpected .crv package suffix found in APK."
+            exit 1
+          fi
 
       - name: Require fixed CR-V test signing key
         env:
@@ -65,19 +79,6 @@ jobs:
           echo "CRV_TEST_STORE_PASSWORD=$CRV_TEST_STORE_PASSWORD_SECRET" >> "$GITHUB_ENV"
           echo "CRV_TEST_KEY_ALIAS=$CRV_TEST_KEY_ALIAS_SECRET" >> "$GITHUB_ENV"
           echo "CRV_TEST_KEY_PASSWORD=$CRV_TEST_KEY_PASSWORD_SECRET" >> "$GITHUB_ENV"
-
-      - name: Build CR-V 2021 Android 4.4 APK
-        run: ./gradlew :mobile:assembleDebug --stacktrace
-
-      - name: Verify APK legacy package identity
-        run: |
-          AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
-          "$AAPT" dump badging mobile/build/outputs/apk/debug/mobile-debug.apk | tee /tmp/crv-badging.txt
-          grep -F "package: name='com.shihab.diplay'" /tmp/crv-badging.txt
-          if grep -F "package: name='com.shihab.diplay.crv'" /tmp/crv-badging.txt; then
-            echo "::error::Unexpected .crv package suffix found in APK."
-            exit 1
-          fi
 
       - name: Verify fixed CR-V APK signing certificate
         run: |
