@@ -3,6 +3,33 @@ from pathlib import Path
 import sys
 
 ROOTS = [Path("shared/src/main/java"), Path("mobile/src/main/java")]
+
+# Complete upstream DiPlay remains intact. API17 validation follows the exact CR-V legacy
+# compilation surface defined in crvlegacy/build.gradle.
+EXCLUDED_PREFIXES = (
+    "shared/src/main/java/com/shilapi/xcertplay/adb/",
+    "shared/src/main/java/com/shilapi/xcertplay/hud/",
+    "shared/src/main/java/com/shilapi/xcertplay/glance/",
+)
+EXCLUDED_FILES = {
+    "shared/src/main/java/com/shilapi/xcertplay/network/CarPlayBonjour.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/network/LocalOnlyHotspotManager.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/network/ManualHotspotInterfaces.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/network/WifiP2pGroupManager.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/network/CarHotspotSettings.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/network/CarHotspotTethering.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/network/HotspotJoinRepair.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/network/HotspotJoinRepairMain.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/network/ManualHotspotManager.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/network/WifiScanPause.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/orchestration/CarPlayController.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/shared/MyCarAppScreen.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/shared/MyCarAppService.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/shared/MyCarAppSession.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/media/AndroidMediaSink.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/mfi/RemoteMfiAuthenticationClient.kt",
+}
+
 FORBIDDEN = {
     "java.time.": "java.time is unavailable on Android 4.2",
     "java.util.Base64": "use android.util.Base64",
@@ -34,6 +61,9 @@ for root in ROOTS:
     if not root.exists():
         continue
     for source in sorted(root.rglob("*.kt")):
+        relative = source.as_posix()
+        if relative in EXCLUDED_FILES or relative.startswith(EXCLUDED_PREFIXES):
+            continue
         in_block = False
         for number, raw in enumerate(source.read_text(encoding="utf-8").splitlines(), 1):
             line = raw
