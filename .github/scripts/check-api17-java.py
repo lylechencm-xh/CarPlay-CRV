@@ -66,6 +66,7 @@ FORBIDDEN = {
     "java.util.function.": "java.util.function is unavailable on Android 4.2",
     "CompletableFuture": "CompletableFuture is unavailable on Android 4.2",
     "ProcessHandle": "ProcessHandle is unavailable on Android 4.2",
+    "AutoCloseable": "AutoCloseable requires API19; use java.io.Closeable on API17",
     "Long.toUnsignedString(": "Java 8 unsigned helper is unavailable on Jelly Bean",
     "Integer.toUnsignedString(": "Java 8 unsigned helper is unavailable on Jelly Bean",
     "Long.parseUnsignedLong(": "Java 8 unsigned helper is unavailable on Jelly Bean",
