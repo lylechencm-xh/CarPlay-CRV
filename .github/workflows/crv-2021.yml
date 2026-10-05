@@ -28,8 +28,11 @@ jobs:
       - name: Check Android 4.4 Java library surface
         run: python3 .github/scripts/check-api19-java.py
 
-      - name: Run wired CarPlay core tests
+      - name: Run upstream shared tests
         run: ./gradlew :shared:testDebugUnitTest --stacktrace
+
+      - name: Compile CR-V Android 4.4 shared compatibility layer
+        run: ./gradlew :crvlegacy:assembleDebug --stacktrace
 
       - name: Print failed unit-test details
         if: failure()
@@ -38,7 +41,7 @@ jobs:
 
       - name: Lint CR-V Android 4.4 path
         continue-on-error: true
-        run: ./gradlew :shared:lintDebug :mobile:lintDebug --stacktrace
+        run: ./gradlew :crvlegacy:lintDebug :mobile:lintDebug --stacktrace
 
       - name: Print lint details
         if: always()
