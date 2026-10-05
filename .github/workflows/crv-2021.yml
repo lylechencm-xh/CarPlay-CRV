@@ -2,11 +2,11 @@ name: CR-V 2021 Android 4.2.2 Build
 
 on:
   push:
-    branches: [crv-2021-integrated]
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: crv-2021-integrated
+  group: crv-main-api17
   cancel-in-progress: true
 
 permissions:
@@ -130,9 +130,9 @@ jobs:
           else
             git commit -m "chore(release): update CR-V 2021 API17 APK [skip ci]"
             for attempt in 1 2 3; do
-              git fetch origin crv-2021-integrated
-              git rebase origin/crv-2021-integrated
-              if git push origin HEAD:crv-2021-integrated; then
+              git fetch origin main
+              git rebase origin/main
+              if git push origin HEAD:main; then
                 break
               fi
               if [ "$attempt" -eq 3 ]; then
