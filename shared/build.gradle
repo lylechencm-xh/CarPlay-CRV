@@ -59,24 +59,42 @@ dependencies {
     testImplementation libs.robolectric
 }
 
+/*
+ * CR-V/API19 unit-test surface.
+ *
+ * Use an allow-list instead of chasing upstream-only tests one by one. The repository keeps the
+ * complete upstream test tree, but this legacy build compiles only protocol/transport/runtime
+ * tests exercised by the Honda CR-V path. New upstream HUD, Android Auto, cluster, hotspot or
+ * experimental wireless tests therefore cannot break this build unless they are explicitly
+ * promoted into the CR-V surface.
+ */
+def crvCoreUnitTests = [
+    '**/com/shilapi/xcertplay/iap2/Iap2ProtocolTest.kt',
 
-def crvExcludedTests = [
-    '**/com/shilapi/xcertplay/glance/**',
-    '**/com/shilapi/xcertplay/media/AndroidMediaSinkStateTest.kt',
-    '**/com/shilapi/xcertplay/media/AudioTrackAttributesCompatibilityTest.kt',
-    '**/com/shilapi/xcertplay/media/TelephonyMicrophoneTest.kt',
-    '**/com/shilapi/xcertplay/network/CarHotspotTetheringTest.kt',
-    '**/com/shilapi/xcertplay/network/CarPlayBonjourTest.kt',
-    '**/com/shilapi/xcertplay/network/HotspotJoinRepairTest.kt',
-    '**/com/shilapi/xcertplay/network/ManualHotspotReadinessTest.kt',
-    '**/com/shilapi/xcertplay/network/WifiScanPauseTest.kt',
-    '**/com/shilapi/xcertplay/orchestration/DashboardMapEligibilityTest.kt',
-    '**/com/shilapi/xcertplay/orchestration/WirelessHandoffTest.kt',
-    '**/com/shilapi/xcertplay/transport/Iap2WirelessLinkRoleTest.kt',
+    '**/com/shilapi/xcertplay/mfi/LocalMfiAuthenticationClientTest.kt',
+    '**/com/shilapi/xcertplay/mfi/MfiAuthenticationClientTest.kt',
+    '**/com/shilapi/xcertplay/mfi/MfiSelfCheckTest.kt',
+
+    '**/com/shilapi/xcertplay/network/AirPlayPortSelectorTest.kt',
+    '**/com/shilapi/xcertplay/network/CarPlayVpnApiLevelTest.kt',
+    '**/com/shilapi/xcertplay/network/CarPlayVpnScopeTest.kt',
+    '**/com/shilapi/xcertplay/network/TunIoCompatibilityTest.kt',
+    '**/com/shilapi/xcertplay/network/WirelessHostAddressTest.kt',
+
+    '**/com/shilapi/xcertplay/transport/EthernetIpv6CodecTest.kt',
+    '**/com/shilapi/xcertplay/transport/Iap2ControlDeadlineTest.kt',
+    '**/com/shilapi/xcertplay/transport/Iap2FileTransferReceiverTest.kt',
+    '**/com/shilapi/xcertplay/transport/Iap2LinkEngineFileTransferTest.kt',
+    '**/com/shilapi/xcertplay/transport/Iap2WiredControlClientTest.kt',
+    '**/com/shilapi/xcertplay/transport/LockdownTlsEngineFactoryTest.kt',
+    '**/com/shilapi/xcertplay/transport/LockdownTlsProviderTest.kt',
+    '**/com/shilapi/xcertplay/transport/Ntb16CodecTest.kt',
+    '**/com/shilapi/xcertplay/transport/UsbMuxFrameBufferTest.kt',
+    '**/com/shilapi/xcertplay/transport/UsbMuxIssue100RegressionTest.kt',
 ]
 
 tasks.configureEach { task ->
     if (task.name.toLowerCase().contains('unittestkotlin') && task.hasProperty('source')) {
-        task.exclude(crvExcludedTests)
+        task.include(crvCoreUnitTests)
     }
 }
