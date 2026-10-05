@@ -49,6 +49,16 @@ object IphoneCarPlayConfiguration {
                 "x${usbInterface.endpointCount}"
         }
 
+    fun usbMuxInterface(device: UsbDevice): UsbInterface? =
+        (0 until device.interfaceCount).map(device::getInterface).firstOrNull {
+            it.interfaceClass == USBMUX_CLASS &&
+                it.interfaceSubclass == USBMUX_SUBCLASS &&
+                it.interfaceProtocol == USBMUX_PROTOCOL
+        }
+
+    fun hasActiveCarPlayLayout(device: UsbDevice): Boolean =
+        usbMuxInterface(device) != null && NcmFunctionDiscovery.find(device) != null
+
     fun usbMuxInterface(configuration: UsbConfiguration): UsbInterface? =
         (0 until configuration.interfaceCount).map(configuration::getInterface).firstOrNull {
             it.interfaceClass == USBMUX_CLASS &&
