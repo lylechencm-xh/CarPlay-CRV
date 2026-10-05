@@ -1,0 +1,103 @@
+name: Import complete upstream DiPlay tree
+
+on:
+  push:
+    branches: [crv-2021-integrated]
+    paths:
+      - '.github/workflows/import-complete-diplay.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  import-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout CR-V repository
+        uses: actions/checkout@v4
+        with:
+          ref: crv-2021-integrated
+          fetch-depth: 0
+
+      - name: Checkout upstream DiPlay
+        uses: actions/checkout@v4
+        with:
+          repository: shihabal3amri/DiPlay
+          ref: main
+          path: _upstream
+          fetch-depth: 1
+
+      - name: Copy all missing upstream files without overwriting CR-V changes
+        run: |
+          rsync -a --ignore-existing \
+            --exclude '.git/' \
+            --exclude '.github/workflows/' \
+            _upstream/ ./
+
+      - name: Record imported upstream revision
+        run: |
+          UPSTREAM_SHA="$(git -C _upstream rev-parse HEAD)"
+          {
+            echo "Upstream repository: shihabal3amri/DiPlay"
+            echo "Upstream branch: main"
+            echo "Upstream commit: $UPSTREAM_SHA"
+            echo
+            echo "Import policy:"
+            echo "- All upstream files are mirrored unless the path is under .github/workflows/."
+            echo "- Existing CR-V/API19 modifications are preserved and are not overwritten by upstream import."
+            echo "- CR-V-specific workflows remain authoritative for legacy head-unit builds."
+          } > UPSTREAM-DIPLAY.txt
+
+      - name: Verify all upstream non-workflow files are present
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path(".")
+          upstream = root / "_upstream"
+
+          missing = []
+          for src in upstream.rglob("*"):
+              if not src.is_file():
+                  continue
+              rel = src.relative_to(upstream)
+              if ".git" in rel.parts:
+                  continue
+              if len(rel.parts) >= 2 and rel.parts[0] == ".github" and rel.parts[1] == "workflows":
+                  continue
+              if not (root / rel).exists():
+                  missing.append(str(rel))
+
+          if missing:
+              print("Missing upstream files:")
+              for path in missing[:200]:
+                  print(path)
+              raise SystemExit(1)
+
+          print("All upstream non-workflow files are present.")
+          PY
+          rm -rf _upstream
+
+      - name: Commit imported upstream files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No missing upstream files."
+          else
+            git commit -m "chore(upstream): import complete DiPlay tree while preserving CR-V changes [skip ci]"
+            for attempt in 1 2 3; do
+              git fetch origin crv-2021-integrated
+              git rebase origin/crv-2021-integrated
+              if git push origin HEAD:crv-2021-integrated; then
+                break
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "::error::Failed to publish upstream import after 3 retries."
+                exit 1
+              fi
+              sleep 2
+            done
+          fi

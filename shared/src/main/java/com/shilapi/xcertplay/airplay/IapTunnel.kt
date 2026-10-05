@@ -62,7 +62,7 @@ class IapTunnel(
                     "${secondary.localSocketAddress}",
             )
         }.onFailure { error ->
-            safeClose(secondary)
+            closeServerSocket(secondary)
             listener.onDebug(
                 "AirPlay iAP tunnel secondary listener failed address=" +
                     "$secondaryAddress port=${bound.localPort}: ${error.message}",
@@ -85,8 +85,8 @@ class IapTunnel(
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
-        safeClose(socket)
-        servers.toList().forEach(::safeClose)
+        closeSocket(socket)
+        servers.toList().forEach(::closeServerSocket)
         servers.clear()
         threads.toList().forEach(Thread::interrupt)
         threads.clear()
@@ -116,7 +116,7 @@ class IapTunnel(
                 return
             }
             if (closed.get()) {
-                safeClose(accepted)
+                closeSocket(accepted)
                 return
             }
             accepted.setSoLinger(true, 0)
@@ -156,7 +156,7 @@ class IapTunnel(
             failure = error
         } finally {
             if (socket === sock) socket = null
-            safeClose(sock)
+            closeSocket(sock)
             if (!closed.get() && failure != null) listener.onClosed(failure)
         }
     }
@@ -196,6 +196,14 @@ class IapTunnel(
             offset += size
         }
         return buffer.copyOfRange(offset, buffer.size)
+    }
+
+    private fun closeSocket(value: Socket?) {
+        try { value?.close() } catch (_: Exception) { }
+    }
+
+    private fun closeServerSocket(value: ServerSocket?) {
+        try { value?.close() } catch (_: Exception) { }
     }
 
     private fun readU16Le(source: ByteArray, offset: Int): Int =

@@ -207,12 +207,7 @@ class NcmUsbBridge internal constructor(
         checkOpen()
         val timeout = timeoutMillis.coerceAtMost(Int.MAX_VALUE.toLong()).coerceAtLeast(1L).toInt()
         val transferred = try {
-            connection.bulkTransfer(
-                inEndpoint,
-                readBuffer,
-                readBuffer.size,
-                timeout,
-            )
+            connection.bulkTransfer(inEndpoint, readBuffer, readBuffer.size, timeout)
         } catch (error: RuntimeException) {
             throw failSession("NCM read failed", error)
         }
@@ -246,10 +241,7 @@ class NcmUsbBridge internal constructor(
             ((source[offset + 3].toInt() and 0xff) shl 24)
 
     companion object {
-        // Android USB bulk transfers were capped at 16 KiB before Android P.
-        // Keep each KitKat read explicitly within that limit instead of relying on platform truncation.
-        private const val LEGACY_USB_TRANSFER_LIMIT = 16 * 1024
-        private const val READ_CHUNK_BYTES = LEGACY_USB_TRANSFER_LIMIT
+        private const val READ_CHUNK_BYTES = 32 * 1024
         private const val USB_PACKET_SIZE = 512
         private const val STATUS_POLL_TIMEOUT_MILLIS = 20
         private const val STATUS_POLL_INTERVAL_MILLIS = 500L
@@ -286,7 +278,8 @@ class NcmUsbBridge internal constructor(
                     val dataClaimed = connection.claimInterface(function.data, true)
                     Log.i(
                         IphoneCarPlayConfiguration.TAG,
-                        "claim iface=${function.data.id} class=${function.data.interfaceClass} ok=$dataClaimed",
+                        "claim iface=${function.data.id}" +
+                            " class=${function.data.interfaceClass} ok=$dataClaimed",
                     )
                     if (!dataClaimed) {
                         throw IphoneUsbException.DeviceUnavailable(
@@ -295,22 +288,14 @@ class NcmUsbBridge internal constructor(
                     }
                     claimed.add(function.data)
                 }
-                val altSelected = connection.controlTransfer(
-                    UsbConstants.USB_DIR_OUT or UsbConstants.USB_TYPE_STANDARD or USB_RECIP_INTERFACE,
-                    USB_REQUEST_SET_INTERFACE,
-                    function.dataAlternateSetting,
-                    function.data.id,
-                    null,
-                    0,
-                    USB_CONTROL_TIMEOUT_MILLIS,
-                ) >= 0
+                val altSelected = selectInterface(connection, function.data)
                 Log.i(
                     IphoneCarPlayConfiguration.TAG,
-                    "SET_INTERFACE iface=${function.data.id} alt=${function.dataAlternateSetting} ok=$altSelected",
+                    "setInterface iface=${function.data.id}/${NcmFunctionDiscovery.DATA_ALTERNATE_SETTING} ok=$altSelected",
                 )
                 if (!altSelected) {
                     throw IphoneUsbException.DeviceUnavailable(
-                        "Android 4.4 could not select the NCM data alternate setting",
+                        "Android could not select the NCM data alternate setting",
                     )
                 }
                 Log.i(
@@ -337,6 +322,26 @@ class NcmUsbBridge internal constructor(
                 if (error is IphoneUsbException) throw error
                 throw IphoneUsbException.DeviceUnavailable("Android NCM open failed", error)
             }
+        }
+
+        /**
+         * UsbDeviceConnection.setInterface() is API21. Android 4.2.2 can select an alternate
+         * setting with the USB standard SET_INTERFACE control request on endpoint zero.
+         */
+        private fun selectInterface(connection: UsbDeviceConnection, usbInterface: UsbInterface): Boolean {
+            if (android.os.Build.VERSION.SDK_INT >= 21) {
+                return UsbInterfaceApi21.select(connection, usbInterface)
+            }
+            val result = connection.controlTransfer(
+                UsbConstants.USB_DIR_OUT or UsbConstants.USB_TYPE_STANDARD or USB_RECIP_INTERFACE,
+                USB_REQUEST_SET_INTERFACE,
+                NcmFunctionDiscovery.DATA_ALTERNATE_SETTING,
+                usbInterface.id,
+                null,
+                0,
+                USB_CONTROL_TIMEOUT_MILLIS,
+            )
+            return result >= 0
         }
 
         private fun readNcmHostMac(connection: UsbDeviceConnection, controlInterfaceId: Int): ByteArray? {

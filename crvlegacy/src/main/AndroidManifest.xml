@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+      CR-V compatibility library only. Runtime components and permissions are declared by mobile.
+      Keep upstream BYD/Car App components out of the Android 4.2.2 APK.
+    -->
+</manifest>

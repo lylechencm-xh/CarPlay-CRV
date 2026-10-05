@@ -44,13 +44,7 @@ internal class VideoDecodeQueue(
     }
 
     @Synchronized fun discardFrames() {
-        val iterator = jobs.iterator()
-        while (iterator.hasNext()) {
-            when (iterator.next()) {
-                is VideoJob.Frame, VideoJob.Resync -> iterator.remove()
-                else -> Unit
-            }
-        }
+        jobs.removeIf { it is VideoJob.Frame || it is VideoJob.Resync }
     }
 
     fun poll(timeoutMillis: Long): VideoJob? = jobs.poll(timeoutMillis, TimeUnit.MILLISECONDS)

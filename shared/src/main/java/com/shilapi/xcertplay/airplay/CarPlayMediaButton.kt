@@ -23,15 +23,11 @@ object CarPlayMediaButton {
     const val KEYCODE_BYD_AUTO_MEDIA_VOICE = 304
     const val KEYCODE_BYD_AUTO_MEDIA_VOICE_LONG = 312
 
-    // Android defines KEYCODE_VOICE_ASSIST as 231 from API21. Use the stable wire value so
-    // API19 can recognize the key without linking the newer framework field.
-    private const val KEYCODE_VOICE_ASSIST_COMPAT = 231
-
     /**
      * Whether [keyCode] is a voice key that opens Siri. The BYD wheel sends each press as an
      * instant down/up pair, so a long press arrives as its own key rather than as a held one.
      */
-    fun opensSiri(keyCode: Int): Boolean = keyCode == KEYCODE_VOICE_ASSIST_COMPAT ||
+    fun opensSiri(keyCode: Int): Boolean = keyCode == KeyEvent.KEYCODE_VOICE_ASSIST ||
         keyCode == KEYCODE_BYD_AUTO_MEDIA_VOICE || keyCode == KEYCODE_BYD_AUTO_MEDIA_VOICE_LONG
 
     /** The CarPlay press for [keyCode], or null when the key is not a media key CarPlay handles. */

@@ -47,8 +47,8 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
-        safeClose(socket)
-        safeClose(server)
+        closeSocket(socket)
+        closeServerSocket(server)
         thread?.interrupt()
     }
 
@@ -82,7 +82,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         } finally {
             stats.flush(ended = true)
             if (socket === sock) socket = null
-            safeClose(sock)
+            closeSocket(sock)
             if (!closed.get()) listener.onClosed(failure)
         }
     }
@@ -112,6 +112,14 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
                 listener.onConfig(codecData)
             }
         }
+    }
+
+    private fun closeSocket(value: Socket?) {
+        try { value?.close() } catch (_: Exception) { }
+    }
+
+    private fun closeServerSocket(value: ServerSocket?) {
+        try { value?.close() } catch (_: Exception) { }
     }
 
     private fun readFully(input: InputStream, length: Int): ByteArray? {

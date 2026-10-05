@@ -1,6 +1,5 @@
 package com.shilapi.xcertplay.iap2.session
 
-import java.io.Closeable
 import com.shilapi.xcertplay.iap2.body.Iap2BodyBuilder
 import com.shilapi.xcertplay.iap2.body.Iap2BodyReader
 import com.shilapi.xcertplay.iap2.catalog.Iap2Endpoint
@@ -11,6 +10,7 @@ import com.shilapi.xcertplay.iap2.wire.Iap2Frame
 import com.shilapi.xcertplay.transport.BlockingDuplexByteStream
 import com.shilapi.xcertplay.transport.Iap2CsmChannel
 import com.shilapi.xcertplay.transport.Iap2ArtworkTransfer
+import java.io.Closeable
 
 /**
  * One immediately readable and writable iAP2 CSM session.

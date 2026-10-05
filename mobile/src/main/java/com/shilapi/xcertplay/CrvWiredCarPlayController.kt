@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay
 
+import android.bluetooth.BluetoothAdapter
 import android.content.Context
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
@@ -19,6 +20,10 @@ import com.shilapi.xcertplay.transport.Iap2UsbMuxHost
 import com.shilapi.xcertplay.transport.Iap2UsbSession
 import com.shilapi.xcertplay.transport.Iap2WiredCarPlayEndpoint
 import com.shilapi.xcertplay.transport.Iap2WiredControlClient
+import com.shilapi.xcertplay.transport.Iap2WirelessCarPlayEndpoint
+import com.shilapi.xcertplay.transport.Iap2WirelessControlClient
+import com.shilapi.xcertplay.transport.Iap2WirelessIdentification
+import com.shilapi.xcertplay.transport.Iap2WirelessSecurity
 import com.shilapi.xcertplay.transport.IphoneCarPlayConfiguration
 import com.shilapi.xcertplay.transport.IphoneUsbException
 import com.shilapi.xcertplay.transport.LockdownCarKitClient
@@ -36,7 +41,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Minimal wired-only CarPlay stack for the 2021 CR-V Android 4.4 head unit.
+ * Android 4.4 CarPlay stack for the 2021 CR-V, supporting wired media and Wi-Fi handoff.
  *
  * USBMUX -> Lockdown pairing -> com.apple.carkit.service -> iAP2/MFi ->
  * USB NCM -> VpnService/AirPlay -> MediaCodec/AudioTrack.
@@ -49,6 +54,7 @@ class CrvWiredCarPlayController(
     private val displayWidth: Int,
     private val displayHeight: Int,
     private val report: (String) -> Unit,
+    private val mode: CrvConnectionMode = CrvConnectionMode.WIRED,
     private val onStopped: () -> Unit = {},
 ) : Closeable {
     private val appContext = context.applicationContext
@@ -80,10 +86,13 @@ class CrvWiredCarPlayController(
     @Volatile private var csm: Iap2Session? = null
     @Volatile private var ncm: NcmUsbBridge? = null
     @Volatile private var vpnAttached = false
+    @Volatile private var wifiHotspot: CrvApi19WirelessHotspot? = null
+    @Volatile private var bonjour: CrvApi19BonjourAdvertiser? = null
 
     private val listener = object : AirPlaySessionListener {
         override fun onSessionActive(session: AirPlaySession) {
             activeSession = session
+            report("AirPlay transport attached=${vpn.isAttached()} port=${vpn.boundPort() ?: 0}")
             report("CarPlay active")
         }
 
@@ -93,6 +102,7 @@ class CrvWiredCarPlayController(
         }
 
         override fun onTransportError(message: String) {
+            report("AirPlay transport attached=${vpn.isAttached()} port=${vpn.boundPort() ?: 0}")
             report("CarPlay transport error: $message")
             // Break the blocking wired control loop so the worker can tear the complete stack down.
             runCatching { csm?.close() }
@@ -142,6 +152,7 @@ class CrvWiredCarPlayController(
     private fun runWired(device: UsbDevice, usbSession: Iap2UsbSession) {
         check(!closed.get()) { "controller is closed" }
 
+        report(CrvMfiAssets.status(appContext))
         val mfi = loadMfi()
         report("MFi identity ready")
 
@@ -177,6 +188,11 @@ class CrvWiredCarPlayController(
         )
         csm = session
         report("iAP2 carkit channel ready")
+
+        if (mode == CrvConnectionMode.WIFI_HANDOFF) {
+            runWirelessHandoff(session, mfi)
+            return
+        }
 
         val ncmBridge = openNcm(device)
         ncm = ncmBridge
@@ -243,6 +259,89 @@ class CrvWiredCarPlayController(
         )
     }
 
+    private fun runWirelessHandoff(session: Iap2Session, mfi: MfiAuthenticator) {
+        report("Starting Wi-Fi CarPlay handoff")
+        val hotspot = CrvApi19WirelessHotspot(appContext, report)
+        wifiHotspot = hotspot
+        val hotspotInfo = hotspot.start()
+
+        val airPlay = airPlayConfig(deviceId)
+        when (
+            val attached = vpn.attachWireless(
+                bindAddress = hotspotInfo.hostAddress,
+                config = airPlay,
+                identity = identity,
+                pairings = pairingStore,
+                mfi = mfi,
+                listener = listener,
+                media = media,
+            )
+        ) {
+            is CarPlayVpnService.AttachResult.Failed ->
+                throw IphoneUsbException.DeviceUnavailable(
+                    "Wi-Fi/AirPlay attach failed: ${attached.message}",
+                )
+            else -> vpnAttached = true
+        }
+
+        val airPlayPort = vpn.boundPort()
+            ?: throw IphoneUsbException.DeviceUnavailable("Wi-Fi AirPlay listener did not bind")
+
+        bonjour = CrvApi19BonjourAdvertiser(
+            context = appContext,
+            serviceName = "Honda CR-V",
+            port = airPlayPort,
+            report = report,
+        ).also { it.start() }
+
+        val bluetoothMac = bluetoothTransportIdentifier()
+        report(
+            "Wi-Fi Bluetooth transport id source=" +
+                if (bluetoothMac == deviceId) "derived" else "adapter",
+        )
+
+        val identification = Iap2IdentificationConfig(
+            name = "Honda CR-V CarPlay",
+            modelIdentifier = "CR-V-2021",
+            manufacturer = "Honda",
+            serialNumber = "CRV-${deviceId.replace(":", "")}",
+            firmwareVersion = "1.0",
+            hardwareVersion = "2021",
+            wireless = Iap2WirelessIdentification(
+                bluetoothMac = bluetoothMac,
+                ssid = hotspotInfo.ssid,
+            ),
+        )
+
+        val endpoint = Iap2WirelessCarPlayEndpoint(
+            ssid = hotspotInfo.ssid,
+            passphrase = hotspotInfo.passphrase,
+            channel = hotspotInfo.channel,
+            security = Iap2WirelessSecurity.WPA_WPA2,
+            ipAddresses = listOf(hotspotInfo.hostAddress.hostAddress),
+            airPlayPort = airPlayPort,
+            deviceIdentifier = deviceId,
+            publicKey = identity.publicKeyHex,
+            sourceVersion = SOURCE_VERSION,
+        )
+
+        report(
+            "Wi-Fi CarPlay endpoint ready ssid=${hotspotInfo.ssid} " +
+                "port=$airPlayPort",
+        )
+
+        Iap2WirelessControlClient(
+            session = session,
+            mfi = Iap2MfiAuthenticationClient(mfi),
+        ).run(
+            identification = identification,
+            endpoint = endpoint,
+            timeoutMillis = Iap2WirelessControlClient.NO_TIMEOUT_MILLIS,
+            onReady = { report("Wi-Fi CarPlay credentials ready") },
+            onProgress = { report(it) },
+        )
+    }
+
     private fun pairNew(host: Iap2UsbMuxHost): LockdownPairRecord {
         val paired = LockdownPairingClient(host).pair(
             label = LABEL,
@@ -282,6 +381,21 @@ class CrvWiredCarPlayController(
 
     private fun loadMfi(): MfiAuthenticator = CrvMfiAssets.load(appContext)
 
+    private fun bluetoothTransportIdentifier(): String {
+        val value = runCatching { BluetoothAdapter.getDefaultAdapter()?.address }
+            .getOrNull()
+            ?.uppercase(Locale.US)
+        return if (
+            value != null &&
+            value.matches(Regex("[0-9A-F]{2}(:[0-9A-F]{2}){5}")) &&
+            value != "02:00:00:00:00:00"
+        ) {
+            value
+        } else {
+            deviceId
+        }
+    }
+
     private fun airPlayConfig(id: String): AirPlayConfig = AirPlayConfig(
         deviceName = "Honda CR-V",
         deviceId = id,
@@ -295,7 +409,6 @@ class CrvWiredCarPlayController(
         rightHandDrive = false,
         hevc = false,
         microphone = true,
-        opusAudioOutput = false,
         manufacturer = "Honda",
         model = "CR-V 2021",
         oemLabel = "Honda",
@@ -304,6 +417,8 @@ class CrvWiredCarPlayController(
 
     private fun cleanupAfterFailure() {
         activeSession = null
+        runCatching { bonjour?.close() }
+        bonjour = null
         if (vpnAttached) {
             runCatching { vpn.detach() }
             vpnAttached = false
@@ -316,6 +431,8 @@ class CrvWiredCarPlayController(
         csm = null
         runCatching { mux?.close() }
         mux = null
+        runCatching { wifiHotspot?.close() }
+        wifiHotspot = null
     }
 
     override fun close() {

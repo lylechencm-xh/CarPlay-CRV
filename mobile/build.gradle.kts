@@ -6,6 +6,11 @@ plugins {
 val localAuthenticationAssets = providers.environmentVariable("DIPLAY_AUTH_ASSETS_DIR")
     .orNull?.let { file(it).canonicalFile }
 
+val crvTestKeystorePath = providers.environmentVariable("CRV_TEST_KEYSTORE_PATH").orNull
+val crvTestStorePassword = providers.environmentVariable("CRV_TEST_STORE_PASSWORD").orNull
+val crvTestKeyAlias = providers.environmentVariable("CRV_TEST_KEY_ALIAS").orNull
+val crvTestKeyPassword = providers.environmentVariable("CRV_TEST_KEY_PASSWORD").orNull
+
 android {
     namespace = "com.shilapi.xcertplay"
     compileSdk {
@@ -16,15 +21,19 @@ android {
         applicationId = "com.shihab.diplay"
         minSdk = 17
         targetSdk = 28
-        versionCode = 29
-        versionName = "0.2.10"
-
+        versionCode = 31
+        versionName = "0.2.12"
     }
-
 
     localAuthenticationAssets?.let { sourceSets.getByName("main").assets.srcDir(it) }
 
     signingConfigs {
+        create("crvTest") {
+            storeFile = crvTestKeystorePath?.let(::file) ?: file("missing-crv-test.keystore")
+            storePassword = crvTestStorePassword.orEmpty()
+            keyAlias = crvTestKeyAlias.orEmpty()
+            keyPassword = crvTestKeyPassword.orEmpty()
+        }
         create("release") {
             storeFile = file(
                 providers.environmentVariable("ANDROID_KEYSTORE_PATH")
@@ -38,8 +47,13 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix = ".crvapi17"
-            versionNameSuffix = "-crv-api17"
+            // Honda head-unit installer recognition depends on the legacy package identity.
+            // Do not append an applicationIdSuffix here: the final APK must remain
+            // exactly com.shihab.diplay.
+            versionNameSuffix = "-crv"
+            if (crvTestKeystorePath != null) {
+                signingConfig = signingConfigs.getByName("crvTest")
+            }
         }
         release {
             optimization {
@@ -60,7 +74,7 @@ android {
 }
 
 dependencies {
-    implementation(project(":shared"))
+    implementation(project(":crvlegacy"))
 }
 
 // No implicit import. Only the two explicitly selected local runtime assets are allowed.
@@ -108,3 +122,4 @@ tasks.register("assembleStandaloneDebug") {
     description = "Build a standalone car-test APK with explicitly provisioned authentication."
     dependsOn(verifyStandaloneAuthentication, "assembleDebug")
 }
+

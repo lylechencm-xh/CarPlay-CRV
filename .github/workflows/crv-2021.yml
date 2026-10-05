@@ -1,0 +1,144 @@
+name: CR-V 2021 Android 4.2.2 Build
+
+on:
+  push:
+    branches: [crv-2021-integrated]
+  workflow_dispatch:
+
+concurrency:
+  group: crv-2021-integrated
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: '9.5.0'
+
+      - name: Enforce CR-V Android 4.2.2 / API17 baseline
+        run: python3 .github/scripts/check-crv-baseline.py
+
+      - name: Check Android 4.2.2 Java library surface
+        run: python3 .github/scripts/check-api17-java.py
+
+      - name: Run upstream shared tests
+        run: ./gradlew :shared:testDebugUnitTest --stacktrace
+
+      - name: Compile CR-V Android 4.2.2 shared compatibility layer
+        run: ./gradlew :crvlegacy:assembleDebug --stacktrace
+
+      - name: Print failed unit-test details
+        if: failure()
+        run: |
+          find shared/build/test-results/testDebugUnitTest -type f -name '*.xml' -print -exec cat {} \; || true
+
+      - name: Lint CR-V Android 4.2.2 path
+        run: ./gradlew :crvlegacy:lintDebug :mobile:lintDebug --stacktrace
+
+      - name: Print lint details
+        if: always()
+        run: |
+          for report in shared/build/reports/lint-results-debug.txt mobile/build/reports/lint-results-debug.txt; do
+            if [ -f "$report" ]; then
+              echo "===== $report ====="
+              grep -n -E "Error:|Warning:" "$report" || true
+            fi
+          done
+
+      - name: Prepare optional fixed CR-V signing key
+        id: signing
+        env:
+          CRV_TEST_KEYSTORE_BASE64: ${{ secrets.CRV_TEST_KEYSTORE_BASE64 }}
+          CRV_TEST_STORE_PASSWORD_SECRET: ${{ secrets.CRV_TEST_STORE_PASSWORD }}
+          CRV_TEST_KEY_ALIAS_SECRET: ${{ secrets.CRV_TEST_KEY_ALIAS }}
+          CRV_TEST_KEY_PASSWORD_SECRET: ${{ secrets.CRV_TEST_KEY_PASSWORD }}
+        run: |
+          if [ -n "$CRV_TEST_KEYSTORE_BASE64" ] && [ -n "$CRV_TEST_STORE_PASSWORD_SECRET" ] && [ -n "$CRV_TEST_KEY_ALIAS_SECRET" ] && [ -n "$CRV_TEST_KEY_PASSWORD_SECRET" ]; then
+            printf '%s' "$CRV_TEST_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/crv-test.keystore"
+            echo "CRV_TEST_KEYSTORE_PATH=$RUNNER_TEMP/crv-test.keystore" >> "$GITHUB_ENV"
+            echo "CRV_TEST_STORE_PASSWORD=$CRV_TEST_STORE_PASSWORD_SECRET" >> "$GITHUB_ENV"
+            echo "CRV_TEST_KEY_ALIAS=$CRV_TEST_KEY_ALIAS_SECRET" >> "$GITHUB_ENV"
+            echo "CRV_TEST_KEY_PASSWORD=$CRV_TEST_KEY_PASSWORD_SECRET" >> "$GITHUB_ENV"
+            echo "fixed=true" >> "$GITHUB_OUTPUT"
+            echo "label=fixed-signed" >> "$GITHUB_OUTPUT"
+            echo "Fixed CR-V signing key loaded."
+          else
+            echo "fixed=false" >> "$GITHUB_OUTPUT"
+            echo "label=debug-signed" >> "$GITHUB_OUTPUT"
+            echo "::warning::Fixed CR-V signing secrets are not configured. Building with the runner debug key; this APK is valid for compile/install testing but Honda native-installer recognition is not guaranteed."
+          fi
+
+      - name: Build CR-V 2021 Android 4.2.2 APK
+        run: ./gradlew :mobile:assembleDebug --stacktrace
+
+      - name: Verify APK legacy package identity
+        run: |
+          AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt | sort -V | tail -1)"
+          "$AAPT" dump badging mobile/build/outputs/apk/debug/mobile-debug.apk | tee /tmp/crv-badging.txt
+          grep -F "package: name='com.shihab.diplay'" /tmp/crv-badging.txt
+          grep -E "sdkVersion:'17'|sdkVersion:'17\\b" /tmp/crv-badging.txt
+          if grep -F "package: name='com.shihab.diplay.crv'" /tmp/crv-badging.txt; then
+            echo "::error::Unexpected .crv package suffix found in APK."
+            exit 1
+          fi
+
+      - name: Print APK signing certificate
+        run: |
+          keytool -printcert -jarfile mobile/build/outputs/apk/debug/mobile-debug.apk | tee /tmp/crv-apk-cert.txt
+
+      - name: Verify fixed CR-V APK signing certificate
+        if: steps.signing.outputs.fixed == 'true'
+        run: |
+          grep -F "SHA256: E4:E5:E2:47:FF:F3:AF:8E:BE:B1:0C:2A:C4:22:E9:E4:17:25:6A:29:50:A7:74:40:DB:F8:25:09:38:47:B9:FC" /tmp/crv-apk-cert.txt
+
+      - name: Upload CR-V 2021 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CarPlay-CRV-2021-v0.2.12-api17-${{ steps.signing.outputs.label }}
+          path: mobile/build/outputs/apk/debug/mobile-debug.apk
+          if-no-files-found: error
+
+      - name: Commit APK to repository release folder
+        run: |
+          mkdir -p release
+          cp mobile/build/outputs/apk/debug/mobile-debug.apk release/CarPlay-CRV-2021-v0.2.12-api17.apk
+          {
+            echo "version=0.2.12"
+            echo "package=com.shihab.diplay"
+            echo "minSdk=17"
+            echo "signing=${{ steps.signing.outputs.label }}"
+            echo "source_commit=${GITHUB_SHA}"
+            if [ -f UPSTREAM-DIPLAY.txt ]; then
+              grep '^Upstream commit:' UPSTREAM-DIPLAY.txt || true
+            fi
+          } > release/BUILD-INFO.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add release/CarPlay-CRV-2021-v0.2.12-api17.apk release/BUILD-INFO.txt
+          if git diff --cached --quiet; then
+            echo "release APK unchanged; nothing to commit."
+          else
+            git commit -m "chore(release): update CR-V 2021 API17 APK [skip ci]"
+            for attempt in 1 2 3; do
+              git fetch origin crv-2021-integrated
+              git rebase origin/crv-2021-integrated
+              if git push origin HEAD:crv-2021-integrated; then
+                break
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "::error::Failed to publish release APK after 3 retries."
+                exit 1
+              fi
+              sleep 2
+            done
+          fi

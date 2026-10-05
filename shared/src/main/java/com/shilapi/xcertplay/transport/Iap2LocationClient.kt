@@ -1,6 +1,7 @@
 package com.shilapi.xcertplay.transport
 
 import java.io.Closeable
+
 import com.shilapi.xcertplay.iap2.message.Iap2ControlMessages
 import com.shilapi.xcertplay.iap2.wire.Iap2Frame
 import java.util.Locale
@@ -120,7 +121,7 @@ object NmeaLocationEncoder {
     private data class NmeaCoordinate(val value: String, val hemisphere: String)
 
     private class Timestamp(millis: Long) {
-        private val fields = java.util.GregorianCalendar(
+        private val fields = java.util.Calendar.getInstance(
             java.util.TimeZone.getTimeZone("UTC"),
             Locale.US,
         ).apply {
@@ -226,7 +227,7 @@ object Iap2LocationMessages {
 
     /** The parameter ids of a 0xFFFA request (the sentence types asked for), or none if unreadable. */
     fun requestedComponents(frame: Iap2Frame): Set<Int> =
-        runCatching { frame.body().asList().map { it.id }.toSortedSet() }.getOrElse { emptySet() }
+        runCatching { frame.body().asList().map { it.id }.toSortedSet() }.getOrDefault(emptySet())
 
     fun locationInformation(nmeaSentence: String): Iap2Frame {
         require(nmeaSentence.isNotEmpty()) { "NMEA sentence must not be empty" }

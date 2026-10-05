@@ -1,15 +1,14 @@
 package com.shilapi.xcertplay.network
 
+import android.os.Build
 import java.net.Socket
 
-/** API19-safe TCP liveness for the CR-V wired build. */
+/** Detect a vanished peer, without treating a legitimately idle CarPlay screen as a failure. */
 internal object TcpLiveness {
     fun configure(socket: Socket, diagnostic: (String) -> Unit) {
-        try {
-            socket.keepAlive = true
-            diagnostic("TCP keepalive enabled (API19 compatibility mode)")
-        } catch (error: Exception) {
-            diagnostic("TCP keepalive unavailable: ${error.javaClass.simpleName}")
+        socket.keepAlive = true
+        if (Build.VERSION.SDK_INT >= 29) {
+            TcpLivenessApi29.configure(socket, diagnostic)
         }
     }
 }

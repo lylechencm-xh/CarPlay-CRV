@@ -16,11 +16,39 @@ This branch targets the 2021 Honda CR-V Android head unit on Android 4.4 / API 1
 
 ## APK
 
-Install the debug APK built by the `API19 Legacy Build` workflow.
+Install the debug APK built by the `CR-V 2021 Android 4.4 Build` workflow.
 
 Debug application id:
 
-`com.shihab.diplay.crvapi19`
+`com.shihab.diplay.crv2021`
+
+Current CR-V test version:
+
+`0.2.11-crv-2021-api19`
+
+## Stable test signing
+
+CR-V test APKs use a fixed test signing identity so later test builds can update the installed app
+without changing the Android package signature.
+
+The private test keystore is intentionally **not** committed to this public repository. GitHub Actions
+expects these repository secrets:
+
+```
+CRV_TEST_KEYSTORE_BASE64
+CRV_TEST_STORE_PASSWORD
+CRV_TEST_KEY_ALIAS
+CRV_TEST_KEY_PASSWORD
+```
+
+Expected APK signing certificate SHA-256:
+
+```
+E4:E5:E2:47:FF:F3:AF:8E:BE:B1:0C:2A:C4:22:E9:E4:17:25:6A:29:50:A7:74:40:DB:F8:25:09:38:47:B9:FC
+```
+
+The workflow fails instead of publishing an APK if the stable signing secrets are missing or the
+certificate fingerprint changes.
 
 ## First launch
 
@@ -42,7 +70,7 @@ offline-mfi/certificate.p7b
 Typical KitKat debug-package path:
 
 ```
-/sdcard/Android/data/com.shihab.diplay.crvapi19/files/offline-mfi/
+/sdcard/Android/data/com.shihab.diplay.crv2021/files/offline-mfi/
 ```
 
 The actual path is reported by the app if it differs.
@@ -95,13 +123,13 @@ The app records stage/status diagnostics only. Raw MFi keys, certificates, chall
 Current log:
 
 ```
-/sdcard/Android/data/com.shihab.diplay.crvapi19/files/carplay-crv.log
+/sdcard/Android/data/com.shihab.diplay.crv2021/files/carplay-crv.log
 ```
 
 Previous rotated log:
 
 ```
-/sdcard/Android/data/com.shihab.diplay.crvapi19/files/carplay-crv.previous.log
+/sdcard/Android/data/com.shihab.diplay.crv2021/files/carplay-crv.previous.log
 ```
 
 The exact base directory can vary by ROM/storage mount.

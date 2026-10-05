@@ -48,6 +48,33 @@ object CrvMfiAssets {
         )
     }
 
+    fun status(context: Context): String {
+        val privateDirectory = File(context.filesDir, LocalMfiAuthenticationClient.DIRECTORY)
+        if (hasCompleteIdentity(privateDirectory)) {
+            return if (runCatching { LocalMfiAuthenticationClient.load(privateDirectory) }.isSuccess) {
+                "MFi identity valid source=private"
+            } else {
+                "MFi identity invalid source=private"
+            }
+        }
+
+        val externalDirectory = context.getExternalFilesDir(null)
+            ?.let { File(it, LocalMfiAuthenticationClient.DIRECTORY) }
+        if (externalDirectory != null && hasCompleteIdentity(externalDirectory)) {
+            return if (runCatching { LocalMfiAuthenticationClient.load(externalDirectory) }.isSuccess) {
+                "MFi identity valid source=external"
+            } else {
+                "MFi identity invalid source=external"
+            }
+        }
+
+        return if (assetsContainIdentity(context)) {
+            "MFi identity present source=apk-assets"
+        } else {
+            "MFi identity missing"
+        }
+    }
+
     fun provisioningDirectory(context: Context): String =
         context.getExternalFilesDir(null)
             ?.let { File(it, LocalMfiAuthenticationClient.DIRECTORY).absolutePath }
