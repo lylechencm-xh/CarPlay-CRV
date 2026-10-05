@@ -35,6 +35,20 @@ jobs:
             --exclude '.github/workflows/' \
             _upstream/ ./
 
+      - name: Record imported upstream revision
+        run: |
+          UPSTREAM_SHA="$(git -C _upstream rev-parse HEAD)"
+          {
+            echo "Upstream repository: shihabal3amri/DiPlay"
+            echo "Upstream branch: main"
+            echo "Upstream commit: $UPSTREAM_SHA"
+            echo
+            echo "Import policy:"
+            echo "- All upstream files are mirrored unless the path is under .github/workflows/."
+            echo "- Existing CR-V/API19 modifications are preserved and are not overwritten by upstream import."
+            echo "- CR-V-specific workflows remain authoritative for legacy head-unit builds."
+          } > UPSTREAM-DIPLAY.txt
+
       - name: Verify all upstream non-workflow files are present
         run: |
           python3 - <<'PY'
