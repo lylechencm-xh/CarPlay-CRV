@@ -32,7 +32,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * 2021 Honda CR-V / Android 4.4 wired CarPlay entry point.
+ * 2021 Honda CR-V / Android 4.2.2 (API17) wired CarPlay entry point.
  *
  * Platform-only UI:
  * iPhone USB -> USBMUX -> Lockdown/iAP2/MFi -> NCM/VPN -> AirPlay -> MediaCodec/AudioTrack.
@@ -167,7 +167,9 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             setBackgroundColor(Color.BLACK)
             addView(video, FrameLayout.LayoutParams(-1, -1))
             addView(status, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
-            addView(modeButton, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END))
+            if (!Crv2021Config.WIRED_ONLY) {
+                addView(modeButton, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END))
+            }
         })
 
         diagnostics = CrvDiagnostics(this)
