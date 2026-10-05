@@ -16,11 +16,11 @@ This branch targets the 2021 Honda CR-V Android head unit on Android 4.4 / API 1
 
 ## APK
 
-Install the debug APK built by the `API19 Legacy Build` workflow.
+Install the debug APK built by the `CR-V 2021 Android 4.4 Build` workflow.
 
 Debug application id:
 
-`com.shihab.diplay.crvapi19`
+`com.shihab.diplay.crv2021`
 
 ## First launch
 
@@ -42,7 +42,7 @@ offline-mfi/certificate.p7b
 Typical KitKat debug-package path:
 
 ```
-/sdcard/Android/data/com.shihab.diplay.crvapi19/files/offline-mfi/
+/sdcard/Android/data/com.shihab.diplay.crv2021/files/offline-mfi/
 ```
 
 The actual path is reported by the app if it differs.
@@ -95,13 +95,13 @@ The app records stage/status diagnostics only. Raw MFi keys, certificates, chall
 Current log:
 
 ```
-/sdcard/Android/data/com.shihab.diplay.crvapi19/files/carplay-crv.log
+/sdcard/Android/data/com.shihab.diplay.crv2021/files/carplay-crv.log
 ```
 
 Previous rotated log:
 
 ```
-/sdcard/Android/data/com.shihab.diplay.crvapi19/files/carplay-crv.previous.log
+/sdcard/Android/data/com.shihab.diplay.crv2021/files/carplay-crv.previous.log
 ```
 
 The exact base directory can vary by ROM/storage mount.
