@@ -53,6 +53,7 @@ EXCLUDED_FILES = {
     "shared/src/main/java/com/shilapi/xcertplay/shared/MyCarAppSession.kt",
     "shared/src/main/java/com/shilapi/xcertplay/media/AndroidMediaSink.kt",
     "shared/src/main/java/com/shilapi/xcertplay/media/MicrophoneUplink.kt",
+    "shared/src/main/java/com/shilapi/xcertplay/media/OpusEncoder.kt",
     "shared/src/main/java/com/shilapi/xcertplay/mfi/RemoteMfiAuthenticationClient.kt",
 }
 
