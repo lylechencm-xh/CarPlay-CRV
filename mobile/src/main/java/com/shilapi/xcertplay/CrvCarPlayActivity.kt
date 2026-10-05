@@ -126,7 +126,11 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 } else {
                     CrvConnectionMode.WIRED
                 }
-                text = if (connectionMode == CrvConnectionMode.WIFI_HANDOFF) "Mode: Wi-Fi" else "Mode: USB"
+                text = if (connectionMode == CrvConnectionMode.WIFI_HANDOFF) {
+                    "Mode: Wi-Fi handoff"
+                } else {
+                    "Mode: USB"
+                }
                 controller?.close()
                 controller = null
                 pendingUsbSession?.close()
