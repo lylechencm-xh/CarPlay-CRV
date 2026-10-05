@@ -14,7 +14,7 @@ android {
 
     defaultConfig {
         applicationId = "com.shihab.diplay"
-        minSdk = 17
+        minSdk = 19
         targetSdk = 28
         versionCode = 29
         versionName = "0.2.10"
@@ -38,8 +38,8 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix = ".crvapi17"
-            versionNameSuffix = "-crv-api17"
+            applicationIdSuffix = ".crv2021"
+            versionNameSuffix = "-crv-2021-api19"
         }
         release {
             optimization {
