@@ -192,11 +192,22 @@ class CrvWiredCarPlayController(
         // accessory-authentication boundary. This does not bypass MFi: authentication is loaded
         // immediately before iAP2 identification and installed into the AirPlay listener first.
         // NCM is opened before Lockdown/iAP2 so the iPhone sees both CarPlay interfaces active.
-        val ncmBridge = if (mode == CrvConnectionMode.WIRED) {
+        val kernelNcm = if (mode == CrvConnectionMode.WIRED) {
             report("Opening CDC-NCM data path")
+            CrvUsbKernelProbe.waitForKernelNcm(KERNEL_NCM_WAIT_MILLIS)?.also { network ->
+                report(
+                    "Honda kernel CDC-NCM ready interface=${network.interfaceName} " +
+                        "ipv6=${network.linkLocal.hostAddress}",
+                )
+            }
+        } else {
+            null
+        }
+        val ncmBridge = if (mode == CrvConnectionMode.WIRED && kernelNcm == null) {
+            report("Honda kernel CDC-NCM unavailable; using userspace NCM fallback")
             openNcm(device).also {
                 ncm = it
-                report("CDC-NCM ready")
+                report("CDC-NCM ready backend=userspace")
             }
         } else {
             null
@@ -243,18 +254,35 @@ class CrvWiredCarPlayController(
             return
         }
 
-        val wiredNcm = ncmBridge
-            ?: throw IphoneUsbException.DeviceUnavailable("CDC-NCM data path is unavailable")
-        val hostMac = wiredNcm.hostMac ?: macBytes(deviceId)
+        val hostMac = kernelNcm?.hardwareAddress
+            ?.takeIf { it.size == 6 }
+            ?: ncmBridge?.hostMac
+            ?: macBytes(deviceId)
+        val advertisedLinkLocal = kernelNcm?.linkLocal?.hostAddress
+            ?.substringBefore('%')
+            ?: LINK_LOCAL
         val airPlay = airPlayConfig(deviceId)
         val vpn = awaitVpnService()
-            ?: throw IphoneUsbException.DeviceUnavailable("CarPlay VPN service did not bind")
+            ?: throw IphoneUsbException.DeviceUnavailable("CarPlay network service did not bind")
         report("CarPlay network service ready")
 
-        when (
-            val attached = vpn.attach(
+        val attached = if (kernelNcm != null) {
+            report("Using Honda kernel CDC-NCM backend interface=${kernelNcm.interfaceName}")
+            vpn.attachKernelNetwork(
+                bindAddress = kernelNcm.linkLocal,
+                config = airPlay,
+                identity = identity,
+                pairings = pairingStore,
+                mfi = null,
+                listener = listener,
+                media = media,
+            )
+        } else {
+            val wiredNcm = ncmBridge
+                ?: throw IphoneUsbException.DeviceUnavailable("CDC-NCM data path is unavailable")
+            vpn.attach(
                 ncm = wiredNcm,
-                linkLocal = LINK_LOCAL,
+                linkLocal = advertisedLinkLocal,
                 hostMac = hostMac,
                 config = airPlay,
                 identity = identity,
@@ -263,15 +291,21 @@ class CrvWiredCarPlayController(
                 listener = listener,
                 media = media,
             )
-        ) {
+        }
+        when (attached) {
             is CarPlayVpnService.AttachResult.Failed ->
-                throw IphoneUsbException.DeviceUnavailable("NCM/AirPlay attach failed: ${attached.message}")
+                throw IphoneUsbException.DeviceUnavailable(
+                    "NCM/AirPlay attach failed: ${attached.message}",
+                )
             else -> vpnAttached = true
         }
 
         val airPlayPort = vpn.boundPort()
             ?: throw IphoneUsbException.DeviceUnavailable("AirPlay listener did not bind")
-        report("AirPlay listening on $LINK_LOCAL:$airPlayPort")
+        report(
+            "AirPlay listening on $advertisedLinkLocal:$airPlayPort " +
+                "backend=${if (kernelNcm != null) "kernel" else "userspace"}",
+        )
 
         val usbMuxInterfaceNumber = usbSession.usbMuxInterfaceNumber
         report("CarPlay USBMUX interface=$usbMuxInterfaceNumber (claimed)")
@@ -290,7 +324,7 @@ class CrvWiredCarPlayController(
         )
 
         val endpoint = Iap2WiredCarPlayEndpoint(
-            ipv6Addresses = listOf(LINK_LOCAL),
+            ipv6Addresses = listOf(advertisedLinkLocal),
             airPlayPort = airPlayPort,
             publicKey = identity.publicKeyHex,
             sourceVersion = SOURCE_VERSION,
@@ -642,5 +676,6 @@ class CrvWiredCarPlayController(
         private const val AVAILABLE_CURRENT_MA = 1500
         private const val PAIR_TIMEOUT_MILLIS = 5 * 60_000L
         private const val VPN_CONNECT_TIMEOUT_MILLIS = 5_000L
+        private const val KERNEL_NCM_WAIT_MILLIS = 2_500L
     }
 }
