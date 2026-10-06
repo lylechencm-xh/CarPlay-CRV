@@ -68,7 +68,7 @@ android {
             // reflection and the protocol stack remain stable while unused library code is removed.
             isMinifyEnabled = true
             proguardFiles(
-                getDefaultProguardFile("proguard-android.txt"),
+                getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-crv-api17.pro",
             )
             if (crvTestKeystorePath != null) {
