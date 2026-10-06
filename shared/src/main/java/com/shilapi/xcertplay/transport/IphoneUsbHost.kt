@@ -93,7 +93,14 @@ class IphoneUsbHost(
     }
 
     fun discover(): List<UsbDevice> =
-        usbManager.deviceList.values.filter { matcher.matches(it.vendorId, it.productId) }
+        usbManager.deviceList.values
+            .filter { matcher.matches(it.vendorId, it.productId) }
+            .sortedWith(
+                compareBy<UsbDevice> {
+                    if (IphoneCarPlayConfiguration.usbMuxInterface(it) != null) 0 else 1
+                }.thenBy { it.productId }
+                    .thenBy { it.deviceId },
+            )
 
     @Throws(IphoneUsbException::class)
     fun requestPermission(device: UsbDevice): PermissionRequest {
