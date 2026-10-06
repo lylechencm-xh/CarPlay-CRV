@@ -261,13 +261,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         val connection = runCatching { usbManager.openDevice(device) }.getOrNull()
             ?: return IphoneCarPlayConfiguration.hasActiveCarPlayLayout(device)
         return try {
-            val activeConfiguration = com.shilapi.xcertplay.transport.UsbActiveConfiguration
-                .readValue(connection)
-            IphoneCarPlayConfiguration.hasActiveCarPlayLayout(
-                device,
-                connection.rawDescriptors,
-                activeConfiguration,
-            )
+            val rawDescriptors = connection.rawDescriptors
+            IphoneCarPlayConfiguration.carPlayConfigurationValue(rawDescriptors) != null
         } catch (_: RuntimeException) {
             IphoneCarPlayConfiguration.hasActiveCarPlayLayout(device)
         } finally {
