@@ -98,5 +98,4 @@ tasks.configureEach { task ->
 
 dependencies {
     implementation libs.bouncycastle
-    implementation libs.bctls
 }
