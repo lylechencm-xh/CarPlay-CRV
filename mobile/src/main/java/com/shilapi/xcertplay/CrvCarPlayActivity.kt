@@ -60,6 +60,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private val usbTransitionGeneration = AtomicInteger(0)
     private var reconnectGeneration = 0
     private var reconnectAttempts = 0
+    private var reconnectBlockedForMfi = false
     private var destroyed = false
     private var pendingDevice: UsbDevice? = null
     private var pendingUsbSession: Iap2UsbSession? = null
@@ -120,6 +121,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 pendingUsbSession = null
                 pendingDevice = null
                 reconnectAttempts = 0
+                reconnectBlockedForMfi = false
                 reconnectGeneration++
                 val selected = usbHost.discover().firstOrNull()
                 if (selected != null) {
@@ -186,6 +188,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
         attachReceiver = usbHost.registerAttachReceiver { device ->
             reconnectAttempts = 0
+            reconnectBlockedForMfi = false
             reconnectGeneration++
             beginConnectionStatus("iPhone attached")
             if (awaitingCarPlayReattach) {
@@ -415,6 +418,13 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     private fun reportStatus(message: String) {
         val stage = stageFor(message)
+        val normalized = message.lowercase(java.util.Locale.US)
+        if (
+            "mfi identity missing" in normalized ||
+            "mfi identity invalid" in normalized
+        ) {
+            reconnectBlockedForMfi = true
+        }
         if (message == "CarPlay active") {
             diagnostics.log(CrvConnectionStage.CARPLAY_ACTIVE, message)
             connectionStatus(message)
@@ -439,6 +449,16 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     private fun scheduleReconnect() {
         if (destroyed || videoSurface == null) return
+        if (reconnectBlockedForMfi) {
+            diagnostics.log(
+                CrvConnectionStage.MFI,
+                "automatic reconnect suppressed until MFi identity is provisioned",
+            )
+            connectionStatus(
+                "Waiting for MFi provisioning; reconnect iPhone after installing identity",
+            )
+            return
+        }
         if (reconnectAttempts >= MAX_AUTOMATIC_RECONNECTS) {
             connectionError("CarPlay stopped; reconnect iPhone to retry")
             return
