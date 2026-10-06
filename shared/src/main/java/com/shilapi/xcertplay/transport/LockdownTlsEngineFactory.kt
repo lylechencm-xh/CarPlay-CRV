@@ -9,12 +9,11 @@ import java.security.KeyStore
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.spec.PKCS8EncodedKeySpec
-import org.bouncycastle.jce.provider.BouncyCastleProvider
-import org.bouncycastle.jsse.provider.BouncyCastleJsseProvider
 import org.bouncycastle.util.encoders.Base64
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLEngine
+import javax.net.ssl.SSLSocket
 import javax.net.ssl.X509TrustManager
 
 /**
@@ -43,16 +42,7 @@ object LockdownTlsEngineFactory {
                 setKeyEntry(KEY_ALIAS, privateKey, password, arrayOf(certificate))
             }
             val keyManagers = createKeyManagers(keyStore, password)
-            // Android 4.2.2 / API17 platform SSLEngine only exposes TLSv1. Modern iOS
-            // Lockdown requires TLSv1.2+, so use a private BCJSSE provider instead of
-            // globally modifying the head unit's security-provider list.
-            val context = SSLContext.getInstance(
-                "TLS",
-                BouncyCastleJsseProvider(BouncyCastleProvider()),
-            ).apply {
-                init(keyManagers, arrayOf(UsbLockdownTrustManager), null)
-            }
-            return context.createSSLEngine(PEER_HOST, PEER_PORT).apply {
+            return createContext(keyManagers).createSSLEngine(PEER_HOST, PEER_PORT).apply {
                 useClientMode = true
                 // SSLEngine has no hostname verification enabled by default. Avoid the
                 // SSLParameters endpoint-identification setter, which is API24 on Android.
@@ -64,6 +54,46 @@ object LockdownTlsEngineFactory {
             privateKeyDer?.fill(0)
         }
     }
+
+    @Throws(GeneralSecurityException::class)
+    fun createContext(pairRecord: LockdownPairRecord): SSLContext {
+        val password = charArrayOf('l', 'o', 'c', 'k', 'd', 'o', 'w', 'n')
+        val privateKeyPem = pairRecord.rootPrivateKeyPem
+        val certificatePem = pairRecord.rootCertificatePem
+        var privateKeyDer: ByteArray? = null
+        try {
+            privateKeyDer = decodePkcs8Pem(privateKeyPem)
+            val privateKey = KeyFactory.getInstance("RSA")
+                .generatePrivate(PKCS8EncodedKeySpec(privateKeyDer))
+            val certificate = CertificateFactory.getInstance("X.509")
+                .generateCertificate(ByteArrayInputStream(certificatePem)) as X509Certificate
+            val keyStore = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
+                load(null, password)
+                setKeyEntry(KEY_ALIAS, privateKey, password, arrayOf(certificate))
+            }
+            return createContext(createKeyManagers(keyStore, password))
+        } finally {
+            password.fill('\u0000')
+            privateKeyPem.fill(0)
+            certificatePem.fill(0)
+            privateKeyDer?.fill(0)
+        }
+    }
+
+    @Throws(GeneralSecurityException::class)
+    fun supportedSocketProtocols(pairRecord: LockdownPairRecord): Array<String> {
+        val socket = createContext(pairRecord).socketFactory.createSocket() as SSLSocket
+        return try {
+            socket.supportedProtocols.copyOf()
+        } finally {
+            try { socket.close() } catch (_: Exception) { }
+        }
+    }
+
+    private fun createContext(keyManagers: Array<javax.net.ssl.KeyManager>): SSLContext =
+        SSLContext.getInstance("TLS").apply {
+            init(keyManagers, arrayOf(UsbLockdownTrustManager), null)
+        }
 
     private fun createKeyManagers(
         keyStore: KeyStore,
