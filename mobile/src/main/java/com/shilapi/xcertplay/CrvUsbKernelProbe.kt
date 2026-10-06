@@ -79,6 +79,48 @@ internal object CrvUsbKernelProbe {
             }
     }
 
+    fun findConfigurationConflict(expected: ExpectedUsbNcm): String? {
+        val networkNames = runCatching {
+            File("/sys/class/net").listFiles().orEmpty().map { it.name }
+        }.getOrElse { emptyList() }
+        for (name in networkNames.sorted()) {
+            val interfacePath = runCatching {
+                File("/sys/class/net/$name/device").canonicalFile
+            }.getOrNull()?.takeIf { it.exists() } ?: continue
+            val driverName = runCatching {
+                File(interfacePath, "driver").canonicalFile.name
+            }.getOrNull() ?: continue
+            if (driverName != "cdc_ncm") continue
+
+            val usbDevice = findUsbDeviceParent(interfacePath) ?: continue
+            val vendor = readHex(File(usbDevice, "idVendor")) ?: continue
+            val product = readHex(File(usbDevice, "idProduct")) ?: continue
+            val bus = readInt(File(usbDevice, "busnum"))
+            val dev = readInt(File(usbDevice, "devnum"))
+            if (vendor != expected.vendorId || product != expected.productId) continue
+            if (expected.busNumber != null && bus != null && bus != expected.busNumber) continue
+            if (expected.deviceNumber != null && dev != null && dev != expected.deviceNumber) continue
+
+            val parsed = parseUsbInterfaceName(interfacePath.name)
+            val kernelConfiguration = readInt(File(usbDevice, "bConfigurationValue"))
+            val sysfsConfiguration = parsed?.first
+            val interfaceNumber = parsed?.second
+            val matches = kernelConfiguration == expected.configurationValue &&
+                sysfsConfiguration == expected.configurationValue &&
+                interfaceNumber in expected.interfaceNumbers
+            if (!matches) {
+                return "net=$name driver=$driverName sysfs=${interfacePath.name} " +
+                    "kernelCfg=${kernelConfiguration ?: -1} " +
+                    "sysfsCfg=${sysfsConfiguration ?: -1} " +
+                    "iface=${interfaceNumber ?: -1} " +
+                    "expectedCfg=${expected.configurationValue} " +
+                    "expectedIfaces=${expected.interfaceNumbers.sorted()} " +
+                    "usb=${hex4(vendor)}:${hex4(product)} bus=${bus ?: -1} dev=${dev ?: -1}"
+            }
+        }
+        return null
+    }
+
     fun describeExpected(expected: ExpectedUsbNcm): String =
         "expected cfg=${expected.configurationValue} ifaces=${expected.interfaceNumbers.sorted()} " +
             "usb=${hex4(expected.vendorId)}:${hex4(expected.productId)} " +
