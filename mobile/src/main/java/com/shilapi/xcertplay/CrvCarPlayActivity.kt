@@ -250,6 +250,21 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         }
     }
 
+    private fun hasActiveCarPlayLayout(device: UsbDevice): Boolean {
+        if (!usbManager.hasPermission(device)) {
+            return IphoneCarPlayConfiguration.hasActiveCarPlayLayout(device)
+        }
+        val connection = runCatching { usbManager.openDevice(device) }.getOrNull()
+            ?: return IphoneCarPlayConfiguration.hasActiveCarPlayLayout(device)
+        return try {
+            IphoneCarPlayConfiguration.hasActiveCarPlayLayout(device, connection.rawDescriptors)
+        } catch (_: RuntimeException) {
+            IphoneCarPlayConfiguration.hasActiveCarPlayLayout(device)
+        } finally {
+            connection.close()
+        }
+    }
+
     private fun requestPermission(device: UsbDevice) {
         openCarPlayAfterPermission = false
         when (usbHost.requestPermission(device)) {
@@ -260,7 +275,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     private fun routeGrantedDevice(device: UsbDevice) {
-        if (IphoneCarPlayConfiguration.hasActiveCarPlayLayout(device)) {
+        if (hasActiveCarPlayLayout(device)) {
             awaitingCarPlayReattach = false
             usbTransitionGeneration.incrementAndGet()
             reportStatus("iPhone already in CarPlay USB mode")
@@ -318,7 +333,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         }
 
         val activeDevice = usbHost.discover().firstOrNull {
-            IphoneCarPlayConfiguration.hasActiveCarPlayLayout(it)
+            hasActiveCarPlayLayout(it)
         }
         if (activeDevice != null) {
             awaitingCarPlayReattach = false
@@ -488,7 +503,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 connectionError("iPhone not detected; reconnect USB to retry")
                 return@postDelayed
             }
-            if (IphoneCarPlayConfiguration.hasActiveCarPlayLayout(device)) {
+            if (hasActiveCarPlayLayout(device)) {
                 awaitingCarPlayReattach = false
                 requestPermissionForCarPlay(device)
             } else {
@@ -587,7 +602,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             val device = usbHost.discover().firstOrNull()
             if (device != null) {
                 beginConnectionStatus("Display ready; reconnecting CarPlay")
-                if (IphoneCarPlayConfiguration.hasActiveCarPlayLayout(device)) {
+                if (hasActiveCarPlayLayout(device)) {
                     awaitingCarPlayReattach = false
                     requestPermissionForCarPlay(device)
                 } else {
