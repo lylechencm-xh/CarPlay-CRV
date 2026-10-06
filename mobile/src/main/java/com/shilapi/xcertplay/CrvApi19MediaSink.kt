@@ -30,11 +30,13 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class CrvApi19MediaSink(
     context: Context,
-    private val surface: Surface,
+    surface: Surface,
     private val videoWidth: Int,
     private val videoHeight: Int,
     private val report: (String) -> Unit = {},
 ) : MediaSink, Closeable {
+    @Volatile private var outputSurface: Surface? = surface
+
     private val audioManager =
         context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val audioFocusHeld = AtomicBoolean(false)
@@ -73,11 +75,23 @@ class CrvApi19MediaSink(
     override fun onVideoConfig(type: Int, codecData: ByteArray) {
         val codec = videoCodecs[type] ?: VideoCodec.H264
         videoConfigs[type] = codecData.copyOf()
-        decoder(type).configure(codec, codecData)
+        decoder(type)?.configure(codec, codecData)
     }
 
     override fun onVideoFrame(type: Int, naluBytes: ByteArray) {
-        decoder(type).submit(naluBytes)
+        decoder(type)?.submit(naluBytes)
+    }
+
+    fun updateSurface(surface: Surface?) {
+        outputSurface = surface
+        videoDecoders.values.toList().forEach { it.close() }
+        videoDecoders.clear()
+        if (surface != null) {
+            report("Video surface attached")
+            recoveryHandlers.values.toList().forEach { runCatching(it) }
+        } else {
+            report("Video surface detached; transport kept alive")
+        }
     }
 
     override fun onScreenStreamActive(type: Int, active: Boolean) {
@@ -151,8 +165,9 @@ class CrvApi19MediaSink(
         runCatching { audioManager.abandonAudioFocus(audioFocusListener) }
     }
 
-    private fun decoder(type: Int): LegacyVideoDecoder =
-        videoDecoders[type] ?: synchronized(videoDecoders) {
+    private fun decoder(type: Int): LegacyVideoDecoder? {
+        val surface = outputSurface ?: return null
+        return videoDecoders[type] ?: synchronized(videoDecoders) {
             videoDecoders[type] ?: LegacyVideoDecoder(
                 surface = surface,
                 width = videoWidth,
@@ -169,6 +184,7 @@ class CrvApi19MediaSink(
                 }
             }
         }
+    }
 
     private class LegacyVideoDecoder(
         private val surface: Surface,
@@ -210,6 +226,13 @@ class CrvApi19MediaSink(
         override fun close() {
             if (!running.compareAndSet(true, false)) return
             thread.interrupt()
+            if (thread !== Thread.currentThread()) {
+                try {
+                    thread.join(WORKER_CLOSE_JOIN_MILLIS)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+            }
         }
 
         private fun run() {
@@ -391,6 +414,13 @@ class CrvApi19MediaSink(
         override fun close() {
             if (!running.compareAndSet(true, false)) return
             thread.interrupt()
+            if (thread !== Thread.currentThread()) {
+                try {
+                    thread.join(WORKER_CLOSE_JOIN_MILLIS)
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+            }
         }
 
         private fun run() {
@@ -629,6 +659,7 @@ class CrvApi19MediaSink(
         const val RTP_HEADER_BYTES = 12
         const val AAC_LC_OBJECT_TYPE = 2
         const val KEYFRAME_INTERVAL_NS = 1_000_000_000L
+        const val WORKER_CLOSE_JOIN_MILLIS = 750L
         val START_CODE = byteArrayOf(0x00, 0x00, 0x00, 0x01)
     }
 }
