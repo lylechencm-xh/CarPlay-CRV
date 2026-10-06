@@ -192,16 +192,23 @@ class CrvWiredCarPlayController(
         // accessory-authentication boundary. This does not bypass MFi: authentication is loaded
         // immediately before iAP2 identification and installed into the AirPlay listener first.
         // NCM is opened before Lockdown/iAP2 so the iPhone sees both CarPlay interfaces active.
-        val kernelNcm = if (mode == CrvConnectionMode.WIRED) {
+        val expectedKernelNcm = if (mode == CrvConnectionMode.WIRED) {
             report("Opening CDC-NCM data path")
-            CrvUsbKernelProbe.waitForKernelNcm(KERNEL_NCM_WAIT_MILLIS)?.also { network ->
-                report(
-                    "Honda kernel CDC-NCM ready interface=${network.interfaceName} " +
-                        "ipv6=${network.linkLocal.hostAddress}",
-                )
+            inspectExpectedKernelNcm(device).also { expected ->
+                report("Kernel NCM identity " + CrvUsbKernelProbe.describeExpected(expected))
             }
         } else {
             null
+        }
+        val kernelNcm = expectedKernelNcm?.let { expected ->
+            CrvUsbKernelProbe.waitForKernelNcm(expected, KERNEL_NCM_WAIT_MILLIS)?.also { network ->
+                report(
+                    "Honda kernel CDC-NCM ready interface=${network.interfaceName} " +
+                        "ipv6=${network.linkLocal.hostAddress} " +
+                        "kernelCfg=${network.kernelConfigurationValue} " +
+                        "usbIface=${network.usbInterfaceNumber} sysfs=${network.sysfsInterfaceName}",
+                )
+            }
         }
         val ncmBridge = if (mode == CrvConnectionMode.WIRED && kernelNcm == null) {
             report("Honda kernel CDC-NCM unavailable; using userspace NCM fallback")
@@ -303,7 +310,12 @@ class CrvWiredCarPlayController(
                 "Kernel CDC-NCM AirPlay bind failed: ${attached.message}; " +
                     "rechecking Honda kernel link before fallback",
             )
-            val refreshed = CrvUsbKernelProbe.waitForKernelNcm(KERNEL_NCM_RETRY_WAIT_MILLIS)
+            val expected = expectedKernelNcm
+                ?: throw IphoneUsbException.DeviceUnavailable("Kernel NCM identity is unavailable")
+            val refreshed = CrvUsbKernelProbe.waitForKernelNcm(
+                expected,
+                KERNEL_NCM_RETRY_WAIT_MILLIS,
+            )
             if (refreshed != null) {
                 activeKernelNcm = refreshed
                 activeHostMac = refreshed.hardwareAddress
@@ -585,6 +597,52 @@ class CrvWiredCarPlayController(
         vpnBound = false
         runCatching { appContext.unbindService(vpnConnection) }
         vpnService = null
+    }
+
+    private fun inspectExpectedKernelNcm(device: UsbDevice): CrvUsbKernelProbe.ExpectedUsbNcm {
+        val connection = usbManager.openDevice(device)
+            ?: throw IphoneUsbException.DeviceUnavailable(
+                "Could not open iPhone USB connection for kernel NCM identity",
+            )
+        try {
+            val activeConfiguration = UsbActiveConfiguration.readValue(connection)
+                ?: throw IphoneUsbException.Protocol(
+                    "Could not read active iPhone USB configuration for kernel NCM identity",
+                )
+            val rawDescriptors = connection.rawDescriptors
+            val function = NcmFunctionDiscovery.find(
+                device,
+                rawDescriptors,
+                activeConfiguration,
+            ) ?: throw IphoneUsbException.Protocol(
+                "Active USB configuration $activeConfiguration exposes no CDC-NCM function",
+            )
+            val numbers = parseUsbBusAndDevice(device.deviceName)
+            report(
+                "Device/kernel NCM expected activeCfg=$activeConfiguration " +
+                    "ctrl=${function.control.id} data=${function.data.id} " +
+                    "device=${device.deviceName}",
+            )
+            CrvUsbKernelProbe.collect().forEach(report)
+            return CrvUsbKernelProbe.ExpectedUsbNcm(
+                configurationValue = activeConfiguration,
+                interfaceNumbers = setOf(function.control.id, function.data.id),
+                vendorId = device.vendorId,
+                productId = device.productId,
+                busNumber = numbers?.first,
+                deviceNumber = numbers?.second,
+            )
+        } finally {
+            connection.close()
+        }
+    }
+
+    private fun parseUsbBusAndDevice(deviceName: String): Pair<Int, Int>? {
+        val parts = deviceName.split('/').filter { it.isNotEmpty() }
+        if (parts.size < 2) return null
+        val bus = parts[parts.size - 2].toIntOrNull() ?: return null
+        val dev = parts.last().toIntOrNull() ?: return null
+        return bus to dev
     }
 
     private fun openNcm(device: UsbDevice): NcmUsbBridge {
