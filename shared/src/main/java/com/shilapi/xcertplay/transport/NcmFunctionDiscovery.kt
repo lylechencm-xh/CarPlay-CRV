@@ -38,7 +38,8 @@ object NcmFunctionDiscovery {
             it.interfaceClass == CONTROL_CLASS && it.interfaceSubclass == CONTROL_SUBCLASS
         } ?: return null
         val data = interfaces
-            .firstOrNull { it.interfaceClass == DATA_CLASS && bulkEndpoints(it) != null }
+            .filter { it.interfaceClass == DATA_CLASS && bulkEndpoints(it) != null }
+            .minByOrNull { if (it.alternateSetting == DATA_ALTERNATE_SETTING) 0 else 1 }
             ?: return null
         val endpoints = bulkEndpoints(data) ?: return null
         val statusIn = (0 until control.endpointCount)
