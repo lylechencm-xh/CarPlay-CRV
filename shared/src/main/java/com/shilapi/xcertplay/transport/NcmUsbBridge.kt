@@ -288,10 +288,14 @@ class NcmUsbBridge internal constructor(
                     }
                     claimed.add(function.data)
                 }
-                val altSelected = selectInterface(connection, function.data)
+                val altSelected = selectInterface(
+                    connection,
+                    function.data,
+                    function.dataAlternateSetting,
+                )
                 Log.i(
                     IphoneCarPlayConfiguration.TAG,
-                    "setInterface iface=${function.data.id}/${function.data.alternateSetting} ok=$altSelected",
+                    "setInterface iface=${function.data.id}/${function.dataAlternateSetting} ok=$altSelected",
                 )
                 if (!altSelected) {
                     throw IphoneUsbException.DeviceUnavailable(
@@ -328,14 +332,18 @@ class NcmUsbBridge internal constructor(
          * UsbDeviceConnection.setInterface() is API21. Android 4.2.2 can select an alternate
          * setting with the USB standard SET_INTERFACE control request on endpoint zero.
          */
-        private fun selectInterface(connection: UsbDeviceConnection, usbInterface: UsbInterface): Boolean {
+        private fun selectInterface(
+            connection: UsbDeviceConnection,
+            usbInterface: UsbInterface,
+            alternateSetting: Int = DATA_ALT_SETTING_FALLBACK,
+        ): Boolean {
             if (android.os.Build.VERSION.SDK_INT >= 21) {
                 return UsbInterfaceApi21.select(connection, usbInterface)
             }
             val result = connection.controlTransfer(
                 UsbConstants.USB_DIR_OUT or UsbConstants.USB_TYPE_STANDARD or USB_RECIP_INTERFACE,
                 USB_REQUEST_SET_INTERFACE,
-                usbInterface.alternateSetting,
+                alternateSetting,
                 usbInterface.id,
                 null,
                 0,
@@ -399,5 +407,6 @@ class NcmUsbBridge internal constructor(
         private const val CDC_ETHERNET_SUBTYPE = 0x0f
         private const val USB_ENGLISH_US = 0x0409
         private const val USB_CONTROL_TIMEOUT_MILLIS = 1_000
+        private const val DATA_ALT_SETTING_FALLBACK = 1
     }
 }
