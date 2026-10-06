@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * Android 4.4-safe CarPlay microphone uplink.
  *
- * The CR-V API19 profile advertises PCM input only, so this path deliberately has no Opus,
+ * The CR-V API17 profile advertises PCM input only, so this path deliberately has no Opus,
  * AudioRecord.Builder, routing APIs, or API23 runtime-permission calls.
  */
 internal class CrvApi19MicrophoneUplink(
@@ -33,7 +33,7 @@ internal class CrvApi19MicrophoneUplink(
     @SuppressLint("MissingPermission")
     fun start(): Boolean {
         if (config.codec != AudioCodecKind.LPCM) {
-            report("Microphone: unsupported API19 codec=${config.codec}")
+            report("Microphone: unsupported API17 codec=${config.codec}")
             return false
         }
         if (!running.compareAndSet(false, true)) return true
@@ -103,7 +103,7 @@ internal class CrvApi19MicrophoneUplink(
                 throw IllegalStateException("AudioRecord did not enter recording state")
             }
             report(
-                "Microphone: API19 PCM ready type=${config.audioType} " +
+                "Microphone: API17 PCM ready type=${config.audioType} " +
                     "rate=${config.sampleRate} channels=${config.channels}",
             )
             thread = Thread(
