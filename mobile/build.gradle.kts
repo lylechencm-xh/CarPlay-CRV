@@ -21,8 +21,8 @@ android {
         applicationId = "com.shihab.diplay"
         minSdk = 17
         targetSdk = 28
-        versionCode = 33
-        versionName = "0.2.14"
+        versionCode = 34
+        versionName = "0.2.15"
     }
 
     localAuthenticationAssets?.let { sourceSets.getByName("main").assets.srcDir(it) }
