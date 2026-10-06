@@ -11,7 +11,7 @@ appAutomotive = "1.7.0"
 app = "1.4.0"
 junit = "4.13.2"
 robolectric = "4.17"
-bouncycastle = "1.79"
+bouncycastle = "1.70"
 jmdns = "3.6.3"
 media3 = "1.11.1"
 
@@ -32,8 +32,8 @@ androidx-app-automotive = { group = "androidx.car.app", name = "app-automotive",
 androidx-app = { group = "androidx.car.app", name = "app", version.ref = "app" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
-bouncycastle = { group = "org.bouncycastle", name = "bcprov-jdk15to18", version.ref = "bouncycastle" }
-bctls = { group = "org.bouncycastle", name = "bctls-jdk15to18", version.ref = "bouncycastle" }
+bouncycastle = { group = "org.bouncycastle", name = "bcprov-jdk15on", version.ref = "bouncycastle" }
+bctls = { group = "org.bouncycastle", name = "bctls-jdk15on", version.ref = "bouncycastle" }
 jmdns = { group = "org.jmdns", name = "jmdns", version.ref = "jmdns" }
 androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
 androidx-media3-exoplayer-hls = { group = "androidx.media3", name = "media3-exoplayer-hls", version.ref = "media3" }
