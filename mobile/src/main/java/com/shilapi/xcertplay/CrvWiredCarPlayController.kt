@@ -266,10 +266,15 @@ class CrvWiredCarPlayController(
             ?: throw IphoneUsbException.DeviceUnavailable("CarPlay network service did not bind")
         report("CarPlay network service ready")
 
-        val attached = if (kernelNcm != null) {
-            report("Using Honda kernel CDC-NCM backend interface=${kernelNcm.interfaceName}")
+        var activeKernelNcm = kernelNcm
+        var activeNcmBridge = ncmBridge
+        var activeHostMac = hostMac
+        var activeLinkLocal = advertisedLinkLocal
+
+        var attached = if (activeKernelNcm != null) {
+            report("Using Honda kernel CDC-NCM backend interface=${activeKernelNcm.interfaceName}")
             vpn.attachKernelNetwork(
-                bindAddress = kernelNcm.linkLocal,
+                bindAddress = activeKernelNcm.linkLocal,
                 config = airPlay,
                 identity = identity,
                 pairings = pairingStore,
@@ -278,12 +283,12 @@ class CrvWiredCarPlayController(
                 media = media,
             )
         } else {
-            val wiredNcm = ncmBridge
+            val wiredNcm = activeNcmBridge
                 ?: throw IphoneUsbException.DeviceUnavailable("CDC-NCM data path is unavailable")
             vpn.attach(
                 ncm = wiredNcm,
-                linkLocal = advertisedLinkLocal,
-                hostMac = hostMac,
+                linkLocal = activeLinkLocal,
+                hostMac = activeHostMac,
                 config = airPlay,
                 identity = identity,
                 pairings = pairingStore,
@@ -292,6 +297,31 @@ class CrvWiredCarPlayController(
                 media = media,
             )
         }
+
+        if (attached is CarPlayVpnService.AttachResult.Failed && activeKernelNcm != null) {
+            report(
+                "Kernel CDC-NCM AirPlay bind failed: ${attached.message}; " +
+                    "trying userspace NCM fallback",
+            )
+            activeKernelNcm = null
+            val fallback = openNcm(device)
+            ncm = fallback
+            activeNcmBridge = fallback
+            activeHostMac = fallback.hostMac ?: macBytes(deviceId)
+            activeLinkLocal = LINK_LOCAL
+            attached = vpn.attach(
+                ncm = fallback,
+                linkLocal = activeLinkLocal,
+                hostMac = activeHostMac,
+                config = airPlay,
+                identity = identity,
+                pairings = pairingStore,
+                mfi = null,
+                listener = listener,
+                media = media,
+            )
+        }
+
         when (attached) {
             is CarPlayVpnService.AttachResult.Failed ->
                 throw IphoneUsbException.DeviceUnavailable(
@@ -303,8 +333,8 @@ class CrvWiredCarPlayController(
         val airPlayPort = vpn.boundPort()
             ?: throw IphoneUsbException.DeviceUnavailable("AirPlay listener did not bind")
         report(
-            "AirPlay listening on $advertisedLinkLocal:$airPlayPort " +
-                "backend=${if (kernelNcm != null) "kernel" else "userspace"}",
+            "AirPlay listening on $activeLinkLocal:$airPlayPort " +
+                "backend=${if (activeKernelNcm != null) "kernel" else "userspace"}",
         )
 
         val usbMuxInterfaceNumber = usbSession.usbMuxInterfaceNumber
@@ -324,11 +354,11 @@ class CrvWiredCarPlayController(
         )
 
         val endpoint = Iap2WiredCarPlayEndpoint(
-            ipv6Addresses = listOf(advertisedLinkLocal),
+            ipv6Addresses = listOf(activeLinkLocal),
             airPlayPort = airPlayPort,
             publicKey = identity.publicKeyHex,
             sourceVersion = SOURCE_VERSION,
-            deviceIdentifier = hostMac.macString(),
+            deviceIdentifier = activeHostMac.macString(),
         )
 
         report("Transport pre-auth ready")
