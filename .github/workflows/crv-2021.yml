@@ -119,10 +119,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v0.2.12-crv-api17"
-          ASSET="mobile/build/outputs/apk/debug/mobile-debug.apk"
-          RELEASE_ASSET="CarPlay-CRV-2021-v0.2.12-api17.apk"
+          SOURCE_APK="mobile/build/outputs/apk/debug/mobile-debug.apk"
+          RELEASE_NAME="CarPlay-CRV-2021-v0.2.12-api17.apk"
+          RELEASE_APK="$RUNNER_TEMP/$RELEASE_NAME"
           TITLE="CarPlay CR-V 2021 v0.2.12 (Android 4.2.2 / API17)"
           NOTES_FILE="$RUNNER_TEMP/crv-release-notes.txt"
+          cp "$SOURCE_APK" "$RELEASE_APK"
           cat > "$NOTES_FILE" <<EOF
           Android 4.2.2 / API17 compatibility build for 2021 Honda CR-V.
 
@@ -131,53 +133,17 @@ jobs:
           - Android 4.2.2 compatible v1/JAR signature verified by CI
           - Signing: ${{ steps.signing.outputs.label }}
           - Wired CarPlay path is the production target
+          - External CH341 authentication is disabled for the CR-V target
           - CarPlay/MFi authentication assets are not bundled; this build validates installability and the pre-auth transport path only
           - Source commit: ${GITHUB_SHA}
           EOF
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$ASSET#$RELEASE_ASSET" --clobber
-            gh release edit "$TAG" --title "$TITLE" --notes-file "$NOTES_FILE"
+            gh release delete-asset "$TAG" "mobile-debug.apk" -y >/dev/null 2>&1 || true
+            gh release upload "$TAG" "$RELEASE_APK" --clobber
+            gh release edit "$TAG" --title "$TITLE" --notes-file "$NOTES_FILE" --target "$GITHUB_SHA"
           else
-            gh release create "$TAG" "$ASSET#$RELEASE_ASSET" \
+            gh release create "$TAG" "$RELEASE_APK" \
               --target "$GITHUB_SHA" \
               --title "$TITLE" \
               --notes-file "$NOTES_FILE"
-          fi
-
-      - name: Commit APK to repository release folder
-        run: |
-          mkdir -p release
-          cp mobile/build/outputs/apk/debug/mobile-debug.apk release/CarPlay-CRV-2021-v0.2.12-api17.apk
-          {
-            echo "version=0.2.12"
-            echo "package=com.shihab.diplay"
-            echo "minSdk=17"
-            echo "signing=${{ steps.signing.outputs.label }}"
-            echo "carplay_authentication=not-bundled"
-            echo "test_scope=install-and-transport-preauth"
-            echo "source_commit=${GITHUB_SHA}"
-            if [ -f UPSTREAM-DIPLAY.txt ]; then
-              grep '^Upstream commit:' UPSTREAM-DIPLAY.txt || true
-            fi
-          } > release/BUILD-INFO.txt
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add release/BUILD-INFO.txt
-          git add -f release/CarPlay-CRV-2021-v0.2.12-api17.apk
-          if git diff --cached --quiet; then
-            echo "release APK unchanged; nothing to commit."
-          else
-            git commit -m "chore(release): update CR-V 2021 API17 APK [skip ci]"
-            for attempt in 1 2 3; do
-              git fetch origin main
-              git rebase origin/main
-              if git push origin HEAD:main; then
-                break
-              fi
-              if [ "$attempt" -eq 3 ]; then
-                echo "::error::Failed to publish release APK after 3 retries."
-                exit 1
-              fi
-              sleep 2
-            done
           fi
