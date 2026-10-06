@@ -29,6 +29,38 @@ import org.robolectric.util.ReflectionHelpers.ClassParameter
 class UsbMuxIssue100RegressionTest {
     @Before fun resetReplay() { UsbEvidenceReplay.reset() }
 
+    @Test fun api17BulkWritesAreChunkedAt16KiBWithoutDataLoss() {
+        for (size in listOf(16_384, 16_385, 16_420, 32_768 + 123)) {
+            UsbEvidenceReplay.reset()
+            val expected = ByteArray(size) { ((it * 31 + 7) and 0xff).toByte() }
+
+            pipe().use { it.write(expected, 1_000) }
+
+            val chunks = UsbEvidenceReplay.writes.toList()
+            assertTrue("size=$size must emit at least one USB bulk write", chunks.isNotEmpty())
+            assertTrue(
+                "size=$size emitted an API17 bulk write larger than 16 KiB: ${chunks.map { it.size }}",
+                chunks.all { it.size <= 16_384 },
+            )
+            assertEquals(
+                "size=$size total written bytes",
+                size,
+                chunks.sumOf { it.size },
+            )
+            val actual = ByteArray(size)
+            var offset = 0
+            for (chunk in chunks) {
+                chunk.copyInto(actual, offset)
+                offset += chunk.size
+            }
+            assertArrayEquals("size=$size payload changed across chunk boundaries", expected, actual)
+        }
+
+        UsbEvidenceReplay.reset()
+        pipe().use { it.write(ByteArray(16_420), 1_000) }
+        assertEquals(listOf(16_384, 36), UsbEvidenceReplay.writes.map { it.size })
+    }
+
     @Test fun fullHostHandshakeAndReaderAcceptBothCapturedPaddingReplies() {
         UsbEvidenceReplay.transfers.add(versionReplyWithPadding)
         UsbEvidenceReplay.transfers.add(capturedSynAckWithPadding)
