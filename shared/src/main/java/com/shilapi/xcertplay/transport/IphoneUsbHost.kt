@@ -403,11 +403,29 @@ class Iap2UsbSession internal constructor(
         checkOpen()
         require(timeoutMillis > 0) { "timeoutMillis must be positive" }
         if (data.isEmpty()) return@synchronized
-        val transferred = connection.bulkTransfer(outEndpoint, data, data.size, timeoutMillis)
-        if (transferred != data.size) {
-            throw IphoneUsbException.DeviceUnavailable(
-                "USBMUX write transferred $transferred of ${data.size} bytes",
+
+        // Jelly Bean's usbhost path caps one synchronous bulk transfer at 16 KiB. The API18
+        // offset overload is unavailable on the CR-V API17 baseline, so keep using the API12
+        // four-argument call and copy each physical USB chunk to offset zero.
+        var offset = 0
+        while (offset < data.size) {
+            val count = minOf(USBFS_MAX_BULK_TRANSFER_BYTES, data.size - offset)
+            val chunk =
+                if (offset == 0 && count == data.size) data
+                else data.copyOfRange(offset, offset + count)
+            val transferred = connection.bulkTransfer(
+                outEndpoint,
+                chunk,
+                chunk.size,
+                timeoutMillis,
             )
+            if (transferred != chunk.size) {
+                throw IphoneUsbException.DeviceUnavailable(
+                    "USBMUX write transferred $transferred of ${chunk.size} bytes " +
+                        "(offset=$offset total=${data.size})",
+                )
+            }
+            offset += transferred
         }
     }
 
@@ -455,6 +473,7 @@ class Iap2UsbSession internal constructor(
     }
 
     private companion object {
+        const val USBFS_MAX_BULK_TRANSFER_BYTES = 16 * 1024
         const val USBMUX_READ_CHUNK_BYTES = 16 * 1024
     }
 }
