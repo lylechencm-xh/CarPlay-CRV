@@ -51,58 +51,61 @@ object NcmFunctionDiscovery {
             return findFlattened((0 until device.interfaceCount).map(device::getInterface))
         }
 
+        val pair = descriptorPair(rawDescriptors, activeConfigurationValue) ?: return null
+        val controlDescriptor = pair.first
+        val dataDescriptor = pair.second
+        val control = UsbActiveConfiguration.androidInterface(device, controlDescriptor)
+            ?: return null
+        val data = UsbActiveConfiguration.androidInterface(device, dataDescriptor)
+            ?: return null
+        val endpoints = bulkEndpoints(data, dataDescriptor) ?: return null
+        val statusIn = (0 until control.endpointCount)
+            .map(control::getEndpoint)
+            .singleOrNull {
+                it.direction == UsbConstants.USB_DIR_IN &&
+                    it.type == UsbConstants.USB_ENDPOINT_XFER_INT
+            }
+
+        return NcmFunction(
+            configurationValue = activeConfigurationValue,
+            control = control,
+            data = data,
+            dataAlternateSetting = dataDescriptor.alternateSetting,
+            statusIn = statusIn,
+            bulkIn = endpoints.first,
+            bulkOut = endpoints.second,
+        )
+    }
+
+    internal fun descriptorPair(
+        rawDescriptors: ByteArray,
+        activeConfigurationValue: Int,
+    ): Pair<UsbActiveConfiguration.InterfaceDescriptor, UsbActiveConfiguration.InterfaceDescriptor>? {
         val descriptors = UsbActiveConfiguration.interfaces(
             rawDescriptors,
             activeConfigurationValue,
         )
-        if (descriptors.isEmpty()) return null
-
         val controls = descriptors.filter {
             it.interfaceClass == CONTROL_CLASS &&
                 it.interfaceSubclass == CONTROL_SUBCLASS &&
                 it.alternateSetting == 0
         }
-        for (controlDescriptor in controls) {
-            val unionDataNumber = unionSlaveInterface(controlDescriptor)
-            val dataCandidates = descriptors.filter { descriptor ->
-                descriptor.interfaceClass == DATA_CLASS &&
-                    (
-                        unionDataNumber == null ||
-                            descriptor.number == unionDataNumber
-                        )
-            }
-            val dataDescriptor = dataCandidates
+        for (control in controls) {
+            val unionDataNumber = unionSlaveInterface(control)
+            val data = descriptors
+                .filter { descriptor ->
+                    descriptor.interfaceClass == DATA_CLASS &&
+                        (unionDataNumber == null || descriptor.number == unionDataNumber)
+                }
                 .filter(::hasBulkPair)
                 .minByOrNull {
                     if (it.alternateSetting == DATA_ALTERNATE_SETTING) 0 else 1
                 }
                 ?: continue
-
-            val control = UsbActiveConfiguration.androidInterface(device, controlDescriptor)
-                ?: continue
-            val data = UsbActiveConfiguration.androidInterface(device, dataDescriptor)
-                ?: continue
-            val endpoints = bulkEndpoints(data, dataDescriptor) ?: continue
-            val statusIn = (0 until control.endpointCount)
-                .map(control::getEndpoint)
-                .singleOrNull {
-                    it.direction == UsbConstants.USB_DIR_IN &&
-                        it.type == UsbConstants.USB_ENDPOINT_XFER_INT
-                }
-
-            return NcmFunction(
-                configurationValue = activeConfigurationValue,
-                control = control,
-                data = data,
-                dataAlternateSetting = dataDescriptor.alternateSetting,
-                statusIn = statusIn,
-                bulkIn = endpoints.first,
-                bulkOut = endpoints.second,
-            )
+            return control to data
         }
         return null
     }
-
     private fun findFlattened(interfaces: List<UsbInterface>): NcmFunction? {
         val control = interfaces.firstOrNull {
             it.interfaceClass == CONTROL_CLASS && it.interfaceSubclass == CONTROL_SUBCLASS
