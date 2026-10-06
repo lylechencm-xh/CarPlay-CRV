@@ -64,7 +64,11 @@ internal object UsbLegacySelection {
         val method = UsbDeviceConnection::class.java.getDeclaredMethod(name, *parameterTypes)
         method.isAccessible = true
         method.invoke(connection, *args) as? Boolean
-    } catch (_: ReflectiveOperationException) {
+    } catch (_: NoSuchMethodException) {
+        null
+    } catch (_: IllegalAccessException) {
+        null
+    } catch (_: java.lang.reflect.InvocationTargetException) {
         null
     } catch (_: SecurityException) {
         null
