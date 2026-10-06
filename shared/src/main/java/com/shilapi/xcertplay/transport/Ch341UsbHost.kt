@@ -77,8 +77,8 @@ class Ch341UsbHost(
             }
         }
         val filter = IntentFilter(permissionAction)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            appContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        if (Build.VERSION.SDK_INT >= 33) {
+            AndroidApi33UsbCompat.registerNotExported(appContext, receiver, filter)
         } else {
             appContext.registerReceiver(receiver, filter)
         }
@@ -121,16 +121,16 @@ class Ch341UsbHost(
 
     private fun permissionPendingIntent(): PendingIntent {
         val intent = Intent(permissionAction).setPackage(appContext.packageName)
-        return PendingIntent.getBroadcast(
-            appContext,
-            0,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
+        return PendingIntent.getBroadcast(appContext, 0, intent, flags)
     }
 
-    private fun Intent.usbDevice(): UsbDevice? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+    private fun Intent.usbDevice(): UsbDevice? = if (Build.VERSION.SDK_INT >= 33) {
+        AndroidApi33UsbCompat.usbDevice(this)
     } else {
         @Suppress("DEPRECATION")
         getParcelableExtra(UsbManager.EXTRA_DEVICE)
