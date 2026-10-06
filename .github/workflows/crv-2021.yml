@@ -151,6 +151,7 @@ jobs:
           - Android 4.2.2 compatible v1/JAR signature verified by CI
           - Signing: ${{ steps.signing.outputs.label }}
           - Wired CarPlay path is the production target
+          - Honda kernel CDC-NCM netdev is brought UP when the matching config-6 interface is bound; userspace NCM remains the safe fallback
           - External CH341 authentication is disabled for the CR-V target
           - CarPlay/MFi authentication assets are not bundled; this build validates installability and the pre-auth transport path only
           - Source commit: ${GITHUB_SHA}
