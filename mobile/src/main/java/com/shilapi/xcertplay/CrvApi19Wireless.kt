@@ -12,9 +12,9 @@ import java.net.NetworkInterface
 import java.util.Collections
 
 /**
- * Android 4.4-compatible local Wi-Fi AP used by wireless CarPlay handoff.
+ * Android 4.2.2 / API17-compatible local Wi-Fi AP used by wireless CarPlay handoff.
  *
- * KitKat predates LocalOnlyHotspot, so the AP is started through the vendor/framework
+ * Jelly Bean predates LocalOnlyHotspot, so the AP is started through the vendor/framework
  * setWifiApEnabled(WifiConfiguration, boolean) method when the head unit exposes it.
  */
 internal class CrvApi19WirelessHotspot(
