@@ -137,6 +137,14 @@ Android 4.2.2 没有现代 `LocalOnlyHotspot` API，因此 CR-V 无线模式采�
 
 ## MFi
 
+CR-V 目标明确**不使用外接 CH341**。上游 `shared/` 可能仍保留 CH341 通用实现，但 CR-V 的 `mobile/Crv*` 运行路径不会发现、申请权限或连接 CH341 设备。
+
+当前 CR-V 认证方向为：
+
+1. 优先研究和复用 Honda 原厂认证服务 / Binder / HAL；
+2. 仅做板载 `/dev/i2c-*` 节点和权限元数据诊断，不直接读写寄存器；
+3. 在原厂认证路径未完成前，Standalone 测试使用显式提供的合法 Local MFi 身份。
+
 项目不会把 MFi 私钥或证书提交到仓库。
 
 Standalone CarPlay 测试需要通过受控本地方式提供授权的 MFi 资产：
