@@ -358,16 +358,11 @@ class NcmUsbBridge internal constructor(
             if (android.os.Build.VERSION.SDK_INT >= 21) {
                 return UsbInterfaceApi21.select(connection, usbInterface)
             }
-            val result = connection.controlTransfer(
-                UsbConstants.USB_DIR_OUT or UsbConstants.USB_TYPE_STANDARD or USB_RECIP_INTERFACE,
-                USB_REQUEST_SET_INTERFACE,
-                alternateSetting,
+            return UsbLegacySelection.setInterface(
+                connection,
                 usbInterface.id,
-                null,
-                0,
-                USB_CONTROL_TIMEOUT_MILLIS,
+                alternateSetting,
             )
-            return result >= 0
         }
 
         private fun readNcmHostMac(
@@ -427,8 +422,6 @@ class NcmUsbBridge internal constructor(
         private fun ByteArray.macString(): String =
             joinToString(":") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
-        private const val USB_RECIP_INTERFACE = 0x01
-        private const val USB_REQUEST_SET_INTERFACE = 0x0b
         private const val USB_REQUEST_GET_DESCRIPTOR = 0x06
         private const val USB_STRING_DESCRIPTOR_TYPE = 0x03
         private const val CDC_FUNCTIONAL_DESCRIPTOR_TYPE = 0x24
