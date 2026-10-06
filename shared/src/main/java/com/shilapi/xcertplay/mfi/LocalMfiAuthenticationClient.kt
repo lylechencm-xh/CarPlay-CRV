@@ -2,6 +2,7 @@ package com.shilapi.xcertplay.mfi
 
 import org.bouncycastle.asn1.ASN1Integer
 import org.bouncycastle.asn1.ASN1Sequence
+import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.io.File
 import java.security.KeyFactory
 import java.security.PrivateKey
@@ -32,7 +33,7 @@ class LocalMfiAuthenticationClient private constructor(
     override fun signChallenge(challenge: ByteArray): ByteArray {
         require(challenge.size == 32) { "Local MFi v3 expects a 32-byte digest" }
         // The iAP2/AirPlay caller supplies a digest already. Do not hash it a second time.
-        val signer = Signature.getInstance("NONEwithECDSA")
+        val signer = Signature.getInstance("NONEwithECDSA", BC_PROVIDER)
         signer.initSign(privateKey)
         signer.update(challenge)
         val result = derToRaw(signer.sign())
@@ -44,12 +45,13 @@ class LocalMfiAuthenticationClient private constructor(
         /** Private app directory loaded only when local authentication is selected. */
         const val DIRECTORY = "offline-mfi"
         private const val MAX_FILE_BYTES = 16 * 1024
+        private val BC_PROVIDER = BouncyCastleProvider()
 
         fun load(directory: File, onSignature: (Int) -> Unit = {}): LocalMfiAuthenticationClient {
             require(directory.isDirectory) { "Offline MFi directory is missing or invalid" }
             val encodedKey = readBounded(File(directory, "identity.pk8"))
             val privateKey = try {
-                KeyFactory.getInstance("EC").generatePrivate(PKCS8EncodedKeySpec(encodedKey))
+                KeyFactory.getInstance("EC", BC_PROVIDER).generatePrivate(PKCS8EncodedKeySpec(encodedKey))
             } finally {
                 encodedKey.fill(0)
             }
@@ -64,11 +66,11 @@ class LocalMfiAuthenticationClient private constructor(
                 "Expected a P-256 accessory certificate"
             }
             val challenge = ByteArray(32).also(SecureRandom()::nextBytes)
-            val signer = Signature.getInstance("NONEwithECDSA")
+            val signer = Signature.getInstance("NONEwithECDSA", BC_PROVIDER)
             signer.initSign(privateKey)
             signer.update(challenge)
             val signature = signer.sign()
-            val verifier = Signature.getInstance("NONEwithECDSA")
+            val verifier = Signature.getInstance("NONEwithECDSA", BC_PROVIDER)
             verifier.initVerify(publicKey)
             verifier.update(challenge)
             require(verifier.verify(signature)) { "Local private key does not match certificate" }
