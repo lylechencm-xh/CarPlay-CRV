@@ -16,13 +16,25 @@ android {
     compileSdk {
         version = release(37)
     }
+    // API17 is the runtime baseline. NDK r23 is the last NDK line that supports API17.
+    ndkVersion = "23.2.8568313"
 
     defaultConfig {
         applicationId = "com.shihab.diplay"
         minSdk = 17
         targetSdk = 28
-        versionCode = 34
-        versionName = "0.2.15"
+        versionCode = 35
+        versionName = "0.2.16"
+        ndk {
+            abiFilters += listOf("armeabi-v7a", "x86")
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     localAuthenticationAssets?.let { sourceSets.getByName("main").assets.srcDir(it) }
@@ -128,4 +140,3 @@ tasks.register("assembleStandaloneDebug") {
     description = "Build a standalone car-test APK with explicitly provisioned authentication."
     dependsOn(verifyStandaloneAuthentication, "assembleDebug")
 }
-
