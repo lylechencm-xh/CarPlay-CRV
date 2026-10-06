@@ -404,8 +404,15 @@ class TlsDuplexChannel private constructor(
             underlying: BlockingDuplexByteStream,
             pairRecord: LockdownPairRecord,
             handshakeTimeoutMillis: Long = 5_000,
-        ): TlsDuplexChannel {
+        ): BlockingDuplexByteStream {
             require(handshakeTimeoutMillis > 0) { "handshakeTimeoutMillis must be positive" }
+            if (android.os.Build.VERSION.SDK_INT < 20) {
+                return TlsSocketDuplexChannel.open(
+                    underlying = underlying,
+                    pairRecord = pairRecord,
+                    handshakeTimeoutMillis = handshakeTimeoutMillis,
+                )
+            }
             try {
                 val engine = LockdownTlsEngineFactory.create(pairRecord)
                 val supported = engine.supportedProtocols.toSet()
