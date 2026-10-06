@@ -96,6 +96,7 @@ class CrvWiredCarPlayController(
     @Volatile private var bonjour: CrvApi19BonjourAdvertiser? = null
     @Volatile private var vpnService: CarPlayVpnService? = null
     @Volatile private var vpnBound = false
+    @Volatile private var mfiLease: CrvMfiProvider.Lease? = null
     private val vpnLatch = CountDownLatch(1)
 
     private val vpnConnection = object : ServiceConnection {
@@ -179,7 +180,7 @@ class CrvWiredCarPlayController(
     private fun runWired(device: UsbDevice, usbSession: Iap2UsbSession) {
         check(!closed.get()) { "controller is closed" }
 
-        report(CrvMfiAssets.status(appContext))
+        report(CrvMfiProvider.status(appContext, usbManager))
 
         // Match DiPlay's wired bring-up: validate the complete transport before crossing the
         // accessory-authentication boundary. This does not bypass MFi: authentication is loaded
@@ -230,7 +231,7 @@ class CrvWiredCarPlayController(
 
         if (mode == CrvConnectionMode.WIFI_HANDOFF) {
             val mfi = loadMfi()
-            report("MFi identity ready")
+            report("MFi authentication ready source=${mfiLease?.source ?: "unknown"}")
             runWirelessHandoff(session, mfi)
             return
         }
@@ -291,7 +292,7 @@ class CrvWiredCarPlayController(
         )
 
         report("Transport pre-auth ready")
-        report(CrvMfiAssets.status(appContext))
+        report(CrvMfiProvider.status(appContext, usbManager))
         val mfi = try {
             loadMfi()
         } catch (error: java.io.FileNotFoundException) {
@@ -301,7 +302,7 @@ class CrvWiredCarPlayController(
             )
             throw error
         }
-        report("MFi identity ready")
+        report("MFi authentication ready source=${mfiLease?.source ?: "unknown"}")
         vpn.updateMfiAuthenticator(mfi)
 
         report("Starting iAP2 identification/MFi")
@@ -498,7 +499,12 @@ class CrvWiredCarPlayController(
         return NcmUsbBridge.open(connection, function)
     }
 
-    private fun loadMfi(): MfiAuthenticator = CrvMfiAssets.load(appContext)
+    private fun loadMfi(): MfiAuthenticator {
+        mfiLease?.let { return it.client }
+        return CrvMfiProvider.acquire(appContext, usbManager, report).also {
+            mfiLease = it
+        }.client
+    }
 
     @SuppressLint("MissingPermission", "HardwareIds")
     private fun bluetoothTransportIdentifier(): String {
@@ -554,6 +560,8 @@ class CrvWiredCarPlayController(
         mux = null
         runCatching { wifiHotspot?.close() }
         wifiHotspot = null
+        runCatching { mfiLease?.close() }
+        mfiLease = null
     }
 
     override fun close() {
