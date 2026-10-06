@@ -1,6 +1,5 @@
 package com.shilapi.xcertplay.transport
 
-import java.io.Closeable
 import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -229,8 +228,12 @@ class TlsSocketDuplexChannel private constructor(
             }
         }
 
-        private fun closeQuietly(closeable: Closeable?) {
-            try { closeable?.close() } catch (_: Exception) { }
+        private fun closeQuietly(socket: Socket?) {
+            try { socket?.close() } catch (_: Exception) { }
+        }
+
+        private fun closeQuietly(serverSocket: ServerSocket?) {
+            try { serverSocket?.close() } catch (_: Exception) { }
         }
     }
 }
