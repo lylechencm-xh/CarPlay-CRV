@@ -68,6 +68,7 @@ class AirPlaySession(
     private val media: AirPlayMediaHandler,
 ) : Closeable {
     @Volatile private var mfi: MfiAuthenticator? = mfi
+    private val mfiLock = Object()
 
     internal val pairSetup = PairSetup(identity, pairings)
     internal val pairVerify = PairVerify(identity, pairings)
@@ -118,8 +119,32 @@ class AirPlaySession(
 
     /** Updates the authenticator for a session accepted before wired iAP2 reaches the MFi boundary. */
     fun updateMfiAuthenticator(next: MfiAuthenticator) {
-        mfi = next
+        synchronized(mfiLock) {
+            mfi = next
+            mfiLock.notifyAll()
+        }
         debugLog("airplay MFi authenticator installed")
+    }
+
+    private fun awaitMfiAuthenticator(): MfiAuthenticator? {
+        mfi?.let { return it }
+        val deadline = System.nanoTime() + MFI_INJECTION_WAIT_MILLIS * NANOS_PER_MILLISECOND
+        synchronized(mfiLock) {
+            while (mfi == null && !closed.get()) {
+                val remaining = deadline - System.nanoTime()
+                if (remaining <= 0L) break
+                try {
+                    mfiLock.wait(
+                        remaining / NANOS_PER_MILLISECOND,
+                        (remaining % NANOS_PER_MILLISECOND).toInt(),
+                    )
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    break
+                }
+            }
+            return mfi
+        }
     }
 
     internal fun logDebug(message: String) = debugLog(message)
@@ -541,9 +566,14 @@ class AirPlaySession(
                 body = pairVerify.handle(request.body),
             )
             path.endsWith("/auth-setup") -> {
-                val body = mfi?.let { MfiSapAuthSetup.handle(request.body, it) }
-                if (body == null) RtspMessage.Response(status = 400)
-                else RtspMessage.Response(headers = mapOf("Content-Type" to OCTET_CONTENT_TYPE), body = body)
+                val authenticator = awaitMfiAuthenticator()
+                val body = authenticator?.let { MfiSapAuthSetup.handle(request.body, it) }
+                if (body == null) {
+                    debugLog("airplay /auth-setup rejected: MFi authenticator unavailable")
+                    RtspMessage.Response(status = 400)
+                } else {
+                    RtspMessage.Response(headers = mapOf("Content-Type" to OCTET_CONTENT_TYPE), body = body)
+                }
             }
             path.endsWith("/info") -> {
                 val info = AirPlayInfoPlist.build(config)
@@ -984,6 +1014,11 @@ private fun asMap(value: Any?): Map<String, Any?>? {
     val result = LinkedHashMap<String, Any?>(map.size)
     for ((key, entry) in map) result[key.toString()] = entry
     return result
+    private companion object {
+        const val MFI_INJECTION_WAIT_MILLIS = 3_000L
+        const val NANOS_PER_MILLISECOND = 1_000_000L
+    }
+
 }
 
 private fun string(value: Any?): String = value as? String ?: ""
