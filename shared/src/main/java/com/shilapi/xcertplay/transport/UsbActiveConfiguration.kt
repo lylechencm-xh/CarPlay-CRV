@@ -73,20 +73,12 @@ object UsbActiveConfiguration {
 
     fun selectValue(connection: UsbDeviceConnection, configurationValue: Int): Boolean {
         require(configurationValue in 1..255) { "USB configuration value must fit in one byte" }
-        val transferred = try {
-            connection.controlTransfer(
-                UsbConstants.USB_DIR_OUT or UsbConstants.USB_TYPE_STANDARD,
-                USB_REQUEST_SET_CONFIGURATION,
-                configurationValue,
-                0,
-                null,
-                0,
-                CONTROL_TIMEOUT_MILLIS,
-            )
+        val selected = try {
+            UsbLegacySelection.setConfiguration(connection, configurationValue)
         } catch (_: RuntimeException) {
             return false
         }
-        if (transferred != 0) return false
+        if (!selected) return false
         repeat(CONFIGURATION_VERIFY_ATTEMPTS) {
             if (readValue(connection) == configurationValue) return true
             try {
@@ -242,7 +234,6 @@ object UsbActiveConfiguration {
     }
 
     private const val USB_REQUEST_GET_CONFIGURATION = 0x08
-    private const val USB_REQUEST_SET_CONFIGURATION = 0x09
     private const val USB_CONFIGURATION_DESCRIPTOR_TYPE = 0x02
     private const val USB_INTERFACE_DESCRIPTOR_TYPE = 0x04
     private const val USB_ENDPOINT_DESCRIPTOR_TYPE = 0x05
