@@ -42,7 +42,7 @@ object LockdownTlsEngineFactory {
                 load(null, password)
                 setKeyEntry(KEY_ALIAS, privateKey, password, arrayOf(certificate))
             }
-            val keyManagers = KeyManagerFactory.getInstance("PKIX").apply {
+            val keyManagers = createKeyManagerFactory().apply {
                 init(keyStore, password)
             }.keyManagers
             // Android 4.2.2 / API17 platform SSLEngine only exposes TLSv1. Modern iOS
@@ -65,6 +65,28 @@ object LockdownTlsEngineFactory {
             certificatePem.fill(0)
             privateKeyDer?.fill(0)
         }
+    }
+
+    private fun createKeyManagerFactory(): KeyManagerFactory {
+        val algorithms = linkedSetOf(
+            KeyManagerFactory.getDefaultAlgorithm(),
+            "X509",
+            "PKIX",
+            "SunX509",
+        )
+        var lastFailure: GeneralSecurityException? = null
+        for (algorithm in algorithms) {
+            if (algorithm.isBlank()) continue
+            try {
+                return KeyManagerFactory.getInstance(algorithm)
+            } catch (error: GeneralSecurityException) {
+                lastFailure = error
+            }
+        }
+        throw GeneralSecurityException(
+            "No compatible KeyManagerFactory implementation: " + algorithms.joinToString(","),
+            lastFailure,
+        )
     }
 
     private fun decodePkcs8Pem(pem: ByteArray): ByteArray {
