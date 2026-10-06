@@ -78,6 +78,11 @@ def crvExcludedKotlin = [
     '**/com/shilapi/xcertplay/media/MicrophoneUplink.kt',
     '**/com/shilapi/xcertplay/media/OpusEncoder.kt',
     '**/com/shilapi/xcertplay/mfi/RemoteMfiAuthenticationClient.kt',
+    '**/com/shilapi/xcertplay/transport/Ch341DeviceMatcher.kt',
+    '**/com/shilapi/xcertplay/transport/Ch341I2cStreamEncoder.kt',
+    '**/com/shilapi/xcertplay/transport/Ch341I2cTransport.kt',
+    '**/com/shilapi/xcertplay/transport/Ch341UsbHost.kt',
+    '**/com/shilapi/xcertplay/transport/LinuxI2cTransport.kt',
 ]
 
 tasks.configureEach { task ->
