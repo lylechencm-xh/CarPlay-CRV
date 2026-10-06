@@ -211,10 +211,19 @@ class CrvWiredCarPlayController(
             }
         }
         val ncmBridge = if (mode == CrvConnectionMode.WIRED && kernelNcm == null) {
+            val expected = expectedKernelNcm
+                ?: throw IphoneUsbException.DeviceUnavailable("Kernel NCM identity is unavailable")
+            val conflict = CrvUsbKernelProbe.findConfigurationConflict(expected)
+            if (conflict != null) {
+                report("USB KERNEL/DEVICE CONFIGURATION CONFLICT: $conflict")
+                throw IphoneUsbException.Protocol(
+                    "Kernel USB configuration does not match active iPhone CarPlay configuration",
+                )
+            }
             report("Honda kernel CDC-NCM unavailable; using userspace NCM fallback")
             openNcm(device).also {
                 ncm = it
-                report("CDC-NCM ready backend=userspace")
+                report("CDC-NCM ready backend=userspace experimental")
             }
         } else {
             null
