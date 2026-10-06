@@ -163,6 +163,10 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
         diagnostics = CrvDiagnostics(this)
         diagnostics.log("app started api=" + android.os.Build.VERSION.SDK_INT)
+        val probeContext = applicationContext
+        io.execute {
+            CrvHondaPlatformProbe(probeContext).collect().forEach(diagnostics::log)
+        }
         appendStatusLine("App started (Android API " + android.os.Build.VERSION.SDK_INT + ")")
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
         usbHost = IphoneUsbHost(this, usbManager, IphoneUsbMatcher.appleVendor())
