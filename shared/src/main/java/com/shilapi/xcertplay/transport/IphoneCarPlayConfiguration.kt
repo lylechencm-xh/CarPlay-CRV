@@ -26,11 +26,40 @@ object IphoneCarPlayConfiguration {
                 it.interfaceProtocol == USBMUX_PROTOCOL
         }
 
+    fun usbMuxInterface(
+        device: UsbDevice,
+        rawDescriptors: ByteArray,
+        activeConfigurationValue: Int?,
+    ): UsbInterface? {
+        if (activeConfigurationValue == null) return usbMuxInterface(device)
+        val descriptor = UsbActiveConfiguration.interfaces(
+            rawDescriptors,
+            activeConfigurationValue,
+        ).firstOrNull {
+            it.interfaceClass == USBMUX_CLASS &&
+                it.interfaceSubclass == USBMUX_SUBCLASS &&
+                it.interfaceProtocol == USBMUX_PROTOCOL &&
+                it.alternateSetting == 0 &&
+                it.endpoints.count { endpoint ->
+                    endpoint.type == UsbConstants.USB_ENDPOINT_XFER_BULK
+                } >= 2
+        } ?: return null
+        return UsbActiveConfiguration.androidInterface(device, descriptor)
+    }
+
     fun hasActiveCarPlayLayout(device: UsbDevice): Boolean =
         usbMuxInterface(device) != null && NcmFunctionDiscovery.find(device) != null
 
+    fun hasActiveCarPlayLayout(
+        device: UsbDevice,
+        rawDescriptors: ByteArray,
+        activeConfigurationValue: Int?,
+    ): Boolean =
+        usbMuxInterface(device, rawDescriptors, activeConfigurationValue) != null &&
+            NcmFunctionDiscovery.find(device, rawDescriptors, activeConfigurationValue) != null
+
     fun hasActiveCarPlayLayout(device: UsbDevice, rawDescriptors: ByteArray): Boolean =
-        usbMuxInterface(device) != null && NcmFunctionDiscovery.find(device, rawDescriptors) != null
+        hasActiveCarPlayLayout(device, rawDescriptors, null)
 
     fun usbMuxEndpoints(usbInterface: UsbInterface): Pair<UsbEndpoint, UsbEndpoint>? {
         val endpoints = (0 until usbInterface.endpointCount).map(usbInterface::getEndpoint)
