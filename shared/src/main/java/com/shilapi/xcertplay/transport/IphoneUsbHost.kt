@@ -379,7 +379,18 @@ class IphoneUsbHost(
             override fun onReceive(context: Context, intent: Intent) = onReceive(intent)
         }
         if (Build.VERSION.SDK_INT >= 33) {
-            AndroidApi33UsbCompat.registerNotExported(appContext, receiver, filter)
+            try {
+                val helperClass = Class.forName(
+                    "com.shilapi.xcertplay.transport.AndroidApi33UsbCompat",
+                )
+                val helper = helperClass.getField("INSTANCE").get(null)
+                val method = helperClass.methods.first {
+                    it.name == "registerNotExported" && it.parameterTypes.size == 3
+                }
+                method.invoke(helper, appContext, receiver, filter)
+            } catch (error: Exception) {
+                throw IllegalStateException("Android API33 receiver bridge unavailable", error)
+            }
         } else {
             appContext.registerReceiver(receiver, filter)
         }
@@ -390,7 +401,18 @@ class IphoneUsbHost(
     }
 
     private fun Intent.usbDevice(): UsbDevice? = if (Build.VERSION.SDK_INT >= 33) {
-        AndroidApi33UsbCompat.usbDevice(this)
+        try {
+            val helperClass = Class.forName(
+                "com.shilapi.xcertplay.transport.AndroidApi33UsbCompat",
+            )
+            val helper = helperClass.getField("INSTANCE").get(null)
+            val method = helperClass.methods.first {
+                it.name == "usbDevice" && it.parameterTypes.size == 1
+            }
+            method.invoke(helper, this) as? UsbDevice
+        } catch (error: Exception) {
+            throw IllegalStateException("Android API33 USB intent bridge unavailable", error)
+        }
     } else {
         @Suppress("DEPRECATION")
         getParcelableExtra(UsbManager.EXTRA_DEVICE)
