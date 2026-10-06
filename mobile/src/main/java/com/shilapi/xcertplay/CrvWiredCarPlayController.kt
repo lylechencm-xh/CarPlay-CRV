@@ -549,11 +549,14 @@ class CrvWiredCarPlayController(
     }
 
     private fun preflightLockdownTls(pairRecord: LockdownPairRecord) {
-        val engine = LockdownTlsEngineFactory.create(pairRecord)
-        report(
-            "Lockdown TLS preflight ready protocols=" +
-                engine.enabledProtocols.joinToString(","),
-        )
+        val supported = LockdownTlsEngineFactory.supportedSocketProtocols(pairRecord)
+        val enabled = listOf("TLSv1.3", "TLSv1.2").filter(supported.toSet()::contains)
+        if (enabled.isEmpty()) {
+            throw IphoneUsbException.Protocol(
+                "Platform SSLSocket supports neither TLSv1.2 nor TLSv1.3",
+            )
+        }
+        report("Lockdown TLS preflight ready protocols=" + enabled.joinToString(","))
     }
 
     private fun pairNew(host: Iap2UsbMuxHost): LockdownPairRecord {
