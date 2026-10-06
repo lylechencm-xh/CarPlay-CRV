@@ -63,6 +63,14 @@ android {
             // Do not append an applicationIdSuffix here: the final APK must remain
             // exactly com.shihab.diplay.
             versionNameSuffix = "-crv"
+            // API17 cannot tolerate unused dependency classes that reference post-Jelly-Bean
+            // platform APIs. Shrink only: keep names and disable optimization so field logs,
+            // reflection and the protocol stack remain stable while unused library code is removed.
+            isMinifyEnabled = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android.txt"),
+                "proguard-crv-api17.pro",
+            )
             if (crvTestKeystorePath != null) {
                 signingConfig = signingConfigs.getByName("crvTest")
             }
