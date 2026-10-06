@@ -220,7 +220,11 @@ class CrvWiredCarPlayController(
                     "Kernel USB configuration does not match active iPhone CarPlay configuration",
                 )
             }
-            report("Honda kernel CDC-NCM unavailable; using userspace NCM fallback")
+            // A bound cdc_ncm driver is not enough on this Honda build: Android leaves the
+            // corresponding netdev down with no link-local address. That is a kernel-backend
+            // readiness issue, not a failure of the CarPlay NCM function itself. Continue with
+            // the userspace bridge, which owns the USB interfaces directly.
+            report("Honda kernel CDC-NCM not network-ready; userspace NCM fallback active")
             openNcm(device).also {
                 ncm = it
                 report("CDC-NCM ready backend=userspace experimental")
