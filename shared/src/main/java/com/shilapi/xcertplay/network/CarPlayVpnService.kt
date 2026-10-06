@@ -122,6 +122,41 @@ class CarPlayVpnService : VpnService() {
     }
 
     /**
+     * Starts the wired AirPlay listener directly on a kernel-owned CDC-NCM interface.
+     *
+     * Honda Android 4.2.2 may bind cdc_ncm before the app opens the transport. In that case the
+     * kernel network interface is authoritative and the app must not create a second VPN/TUN/NCM
+     * bridge or steal the USB interfaces from the kernel driver.
+     */
+    @Synchronized
+    fun attachKernelNetwork(
+        bindAddress: InetAddress,
+        config: AirPlayConfig,
+        identity: AirPlayIdentity,
+        pairings: PairingStore,
+        mfi: MfiAuthenticator?,
+        listener: AirPlaySessionListener,
+        media: AirPlayMediaHandler,
+    ): AttachResult {
+        if (active.get()) {
+            Log.i(TAG, "replacing stale kernel-NCM attachment")
+            releaseLocked()
+        }
+        active.set(true)
+        val generation = ++attachGeneration
+        return try {
+            startAirPlayServer(
+                generation,
+                AirPlayAttachment(bindAddress, config, identity, pairings, mfi, listener, media),
+            )
+            AttachResult.Started
+        } catch (error: Exception) {
+            releaseLocked()
+            AttachResult.Failed(error.message ?: error.javaClass.simpleName)
+        }
+    }
+
+    /**
      * Starts the AirPlay listener on the local-only Wi-Fi AP address without establishing a VPN or
      * NCM bridge.
      */
