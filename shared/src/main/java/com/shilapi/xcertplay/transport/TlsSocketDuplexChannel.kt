@@ -121,23 +121,25 @@ class TlsSocketDuplexChannel private constructor(
 
             try {
                 val loopback = InetAddress.getByName("127.0.0.1")
-                server = ServerSocket(0, 1, loopback)
-                rawClient = Socket()
-                rawClient.tcpNoDelay = true
-                rawClient.connect(
-                    InetSocketAddress(loopback, server.localPort),
+                val loopbackServer = ServerSocket(0, 1, loopback)
+                server = loopbackServer
+                val plainClient = Socket().apply { tcpNoDelay = true }
+                rawClient = plainClient
+                plainClient.connect(
+                    InetSocketAddress(loopback, loopbackServer.localPort),
                     handshakeTimeoutMillis.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
                 )
-                bridge = server.accept().apply { tcpNoDelay = true }
-                server.close()
+                val bridgeSocket = loopbackServer.accept().apply { tcpNoDelay = true }
+                bridge = bridgeSocket
+                loopbackServer.close()
                 server = null
 
-                val bridgeInput = bridge.getInputStream()
-                val bridgeOutput = bridge.getOutputStream()
+                val bridgeInput = bridgeSocket.getInputStream()
+                val bridgeOutput = bridgeSocket.getOutputStream()
 
                 fun stopBridge() {
                     running.set(false)
-                    closeQuietly(bridge)
+                    closeQuietly(bridgeSocket)
                     try { underlying.close() } catch (_: Exception) { }
                 }
 
@@ -182,7 +184,7 @@ class TlsSocketDuplexChannel private constructor(
                 }
 
                 val context = LockdownTlsEngineFactory.createContext(pairRecord)
-                ssl = context.socketFactory.createSocket(rawClient, "Device", 0, true) as SSLSocket
+                ssl = context.socketFactory.createSocket(plainClient, "Device", 0, true) as SSLSocket
                 rawClient = null
                 ssl.useClientMode = true
                 val supported = ssl.supportedProtocols.toSet()
@@ -203,7 +205,7 @@ class TlsSocketDuplexChannel private constructor(
                 return TlsSocketDuplexChannel(
                     underlying = underlying,
                     sslSocket = ssl,
-                    bridgeSocket = bridge,
+                    bridgeSocket = bridgeSocket,
                     pumpThreads = threads,
                 ).also {
                     ssl = null
