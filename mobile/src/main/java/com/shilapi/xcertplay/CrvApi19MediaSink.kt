@@ -513,13 +513,10 @@ class CrvApi19MediaSink(
         }
 
         private fun handle(packet: Packet) {
-            if (packet.rtp.size <= RTP_HEADER_BYTES) return
+            val payload = rtpPayload(packet.rtp) ?: return
             when (format.codec) {
                 AudioCodecKind.LPCM -> {
-                    val pcm = packet.rtp.copyOfRange(
-                        RTP_HEADER_BYTES,
-                        packet.rtp.size,
-                    )
+                    val pcm = payload.copyOf()
                     var index = 0
                     while (index + 1 < pcm.size) {
                         val first = pcm[index]
@@ -531,10 +528,6 @@ class CrvApi19MediaSink(
                 }
 
                 AudioCodecKind.AAC_LC -> {
-                    val payload = packet.rtp.copyOfRange(
-                        RTP_HEADER_BYTES,
-                        packet.rtp.size,
-                    )
                     if (payload.isNotEmpty()) {
                         feedDecoder(
                             MediaCodecSupport.adtsFrame(
@@ -548,15 +541,40 @@ class CrvApi19MediaSink(
                 }
 
                 AudioCodecKind.OPUS -> {
-                    val payload = packet.rtp.copyOfRange(
-                        RTP_HEADER_BYTES,
-                        packet.rtp.size,
-                    )
                     if (payload.isNotEmpty()) {
                         feedDecoder(payload, sampleTimestampUs(packet.sample))
                     }
                 }
             }
+        }
+
+        private fun rtpPayload(packet: ByteArray): ByteArray? {
+            if (packet.size < RTP_FIXED_HEADER_BYTES) return null
+            val first = packet[0].toInt() and 0xff
+            if ((first ushr 6) != 2) return null
+            val csrcCount = first and 0x0f
+            var offset = RTP_FIXED_HEADER_BYTES + csrcCount * 4
+            if (offset > packet.size) return null
+
+            val hasExtension = first and 0x10 != 0
+            if (hasExtension) {
+                if (offset + 4 > packet.size) return null
+                val extensionWords =
+                    ((packet[offset + 2].toInt() and 0xff) shl 8) or
+                        (packet[offset + 3].toInt() and 0xff)
+                offset += 4 + extensionWords * 4
+                if (offset > packet.size) return null
+            }
+
+            var end = packet.size
+            val hasPadding = first and 0x20 != 0
+            if (hasPadding) {
+                val paddingBytes = packet.last().toInt() and 0xff
+                if (paddingBytes == 0 || paddingBytes > end - offset) return null
+                end -= paddingBytes
+            }
+            if (end <= offset) return null
+            return packet.copyOfRange(offset, end)
         }
 
         private fun feedDecoder(bytes: ByteArray, timestampUs: Long) {
@@ -656,7 +674,7 @@ class CrvApi19MediaSink(
         const val MAX_VIDEO_INPUT = 8 * 1024 * 1024
         const val VIDEO_INPUT_TIMEOUT_US = 10_000L
         const val AUDIO_INPUT_TIMEOUT_US = 10_000L
-        const val RTP_HEADER_BYTES = 12
+        const val RTP_FIXED_HEADER_BYTES = 12
         const val AAC_LC_OBJECT_TYPE = 2
         const val KEYFRAME_INTERVAL_NS = 1_000_000_000L
         const val WORKER_CLOSE_JOIN_MILLIS = 750L
