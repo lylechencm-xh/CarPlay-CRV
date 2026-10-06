@@ -180,7 +180,7 @@ class CrvWiredCarPlayController(
     private fun runWired(device: UsbDevice, usbSession: Iap2UsbSession) {
         check(!closed.get()) { "controller is closed" }
 
-        report(CrvMfiProvider.status(appContext, usbManager))
+        report(CrvMfiProvider.status(appContext))
 
         // Match DiPlay's wired bring-up: validate the complete transport before crossing the
         // accessory-authentication boundary. This does not bypass MFi: authentication is loaded
@@ -292,7 +292,7 @@ class CrvWiredCarPlayController(
         )
 
         report("Transport pre-auth ready")
-        report(CrvMfiProvider.status(appContext, usbManager))
+        report(CrvMfiProvider.status(appContext))
         val mfi = try {
             loadMfi()
         } catch (error: java.io.FileNotFoundException) {
@@ -501,7 +501,7 @@ class CrvWiredCarPlayController(
 
     private fun loadMfi(): MfiAuthenticator {
         mfiLease?.let { return it.client }
-        return CrvMfiProvider.acquire(appContext, usbManager, report).also {
+        return CrvMfiProvider.acquire(appContext, report).also {
             mfiLease = it
         }.client
     }
