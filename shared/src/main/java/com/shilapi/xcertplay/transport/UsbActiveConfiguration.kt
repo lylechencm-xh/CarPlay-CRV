@@ -56,6 +56,7 @@ object UsbActiveConfiguration {
     fun interfaces(raw: ByteArray, configurationValue: Int): List<InterfaceDescriptor> {
         val result = ArrayList<InterfaceDescriptor>()
         var currentConfiguration = -1
+        var currentConfigurationEnd = Int.MAX_VALUE
         var current: MutableInterface? = null
         var offset = 0
 
@@ -68,9 +69,22 @@ object UsbActiveConfiguration {
         }
 
         while (offset + 2 <= raw.size) {
+            if (offset >= currentConfigurationEnd) {
+                flush()
+                currentConfiguration = -1
+                currentConfigurationEnd = Int.MAX_VALUE
+            }
+
             val length = raw[offset].toInt() and 0xff
             val type = raw[offset + 1].toInt() and 0xff
             if (length < 2 || offset + length > raw.size) break
+            if (currentConfiguration != -1 && offset + length > currentConfigurationEnd) {
+                flush()
+                offset = currentConfigurationEnd
+                currentConfiguration = -1
+                currentConfigurationEnd = Int.MAX_VALUE
+                continue
+            }
 
             when (type) {
                 USB_CONFIGURATION_DESCRIPTOR_TYPE -> {
@@ -80,6 +94,19 @@ object UsbActiveConfiguration {
                             raw[offset + 5].toInt() and 0xff
                         } else {
                             -1
+                        }
+                    val totalLength =
+                        if (length >= USB_CONFIGURATION_DESCRIPTOR_LENGTH) {
+                            (raw[offset + 2].toInt() and 0xff) or
+                                ((raw[offset + 3].toInt() and 0xff) shl 8)
+                        } else {
+                            0
+                        }
+                    currentConfigurationEnd =
+                        if (totalLength >= USB_CONFIGURATION_DESCRIPTOR_LENGTH) {
+                            (offset + totalLength).coerceAtMost(raw.size)
+                        } else {
+                            Int.MAX_VALUE
                         }
                 }
 
