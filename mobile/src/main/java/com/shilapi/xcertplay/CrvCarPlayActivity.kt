@@ -439,8 +439,11 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         val stage = stageFor(message)
         val normalized = message.lowercase(java.util.Locale.US)
         if (
-            "mfi identity missing" in normalized ||
-            "mfi identity invalid" in normalized
+            "transport pre-auth verified" in normalized &&
+            (
+                "mfi identity missing" in normalized ||
+                    "mfi identity invalid" in normalized
+            )
         ) {
             reconnectBlockedForMfi = true
         }
