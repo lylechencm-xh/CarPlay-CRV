@@ -210,7 +210,7 @@ class CarPlayVpnService : VpnService() {
             addAllowedApplication.invoke(builder, packageName)
         } catch (error: InvocationTargetException) {
             throw error.targetException
-        } catch (error: ReflectiveOperationException) {
+        } catch (error: Exception) {
             throw IOException(
                 "API21 VPN builder compatibility bridge unavailable",
                 error,
