@@ -291,7 +291,7 @@ class NcmUsbBridge internal constructor(
                 val altSelected = selectInterface(connection, function.data)
                 Log.i(
                     IphoneCarPlayConfiguration.TAG,
-                    "setInterface iface=${function.data.id}/${NcmFunctionDiscovery.DATA_ALTERNATE_SETTING} ok=$altSelected",
+                    "setInterface iface=${function.data.id}/${function.data.alternateSetting} ok=$altSelected",
                 )
                 if (!altSelected) {
                     throw IphoneUsbException.DeviceUnavailable(
@@ -335,7 +335,7 @@ class NcmUsbBridge internal constructor(
             val result = connection.controlTransfer(
                 UsbConstants.USB_DIR_OUT or UsbConstants.USB_TYPE_STANDARD or USB_RECIP_INTERFACE,
                 USB_REQUEST_SET_INTERFACE,
-                NcmFunctionDiscovery.DATA_ALTERNATE_SETTING,
+                usbInterface.alternateSetting,
                 usbInterface.id,
                 null,
                 0,
