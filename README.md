@@ -202,7 +202,7 @@ CR-V 2021 Android 4.2.2 Build
 CI 成功后会生成：
 
 ```text
-CarPlay-CRV-2021-v0.2.19-api17.apk
+CarPlay-CRV-2021-v0.2.20-api17.apk
 ```
 
 Release 说明会记录版本、包名、minSdk、签名模式和源码 commit；APK 不再自动提交回 `main`。
