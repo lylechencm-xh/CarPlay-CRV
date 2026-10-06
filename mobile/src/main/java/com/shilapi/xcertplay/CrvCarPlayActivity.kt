@@ -84,6 +84,9 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             controller?.close()
             controller = null
             connectionError("CarPlay network service stopped")
+            if (!destroyed) {
+                mainHandler.postDelayed({ if (!destroyed && !vpnBound) bindVpn() }, VPN_BIND_RETRY_MILLIS)
+            }
         }
     }
 
@@ -258,11 +261,21 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     private fun bindVpn() {
-        if (vpnBound) return
+        if (vpnBound || destroyed) return
+        connectionStatus("Starting CarPlay network service")
         val intent = Intent(this, CarPlayVpnService::class.java)
         if (!bindService(intent, vpnConnection, Context.BIND_AUTO_CREATE)) {
             connectionError("Could not start CarPlay network service")
+            mainHandler.postDelayed({ if (!destroyed && !vpnBound) bindVpn() }, VPN_BIND_RETRY_MILLIS)
+            return
         }
+        mainHandler.postDelayed({
+            if (!destroyed && !vpnBound && vpnService == null) {
+                diagnostics.log(CrvConnectionStage.NETWORK_READY, "VPN service bind timed out; retrying")
+                runCatching { unbindService(vpnConnection) }
+                bindVpn()
+            }
+        }, VPN_BIND_TIMEOUT_MILLIS)
     }
 
     private fun requestPermission(device: UsbDevice) {
@@ -650,6 +663,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     companion object {
         private const val REQUEST_VPN = 1001
+        private const val VPN_BIND_TIMEOUT_MILLIS = 3_000L
+        private const val VPN_BIND_RETRY_MILLIS = 1_000L
         private const val USB_REENUMERATION_TIMEOUT_MILLIS = 15_000L
         private const val USB_REENUMERATION_POLL_MILLIS = 500L
         private val RECONNECT_DELAYS_MILLIS = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L)
