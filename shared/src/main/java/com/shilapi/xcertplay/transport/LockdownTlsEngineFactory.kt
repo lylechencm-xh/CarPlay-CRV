@@ -9,6 +9,8 @@ import java.security.KeyStore
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.spec.PKCS8EncodedKeySpec
+import org.bouncycastle.jce.provider.BouncyCastleProvider
+import org.bouncycastle.jsse.provider.BouncyCastleJsseProvider
 import org.bouncycastle.util.encoders.Base64
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
@@ -90,27 +92,23 @@ object LockdownTlsEngineFactory {
         }
     }
 
-    private fun createContext(keyManagers: Array<javax.net.ssl.KeyManager>): SSLContext =
-        SSLContext.getInstance("TLS").apply {
+    private fun createContext(keyManagers: Array<javax.net.ssl.KeyManager>): SSLContext {
+        val jsseProvider = privateJsseProvider()
+        return SSLContext.getInstance("TLS", jsseProvider).apply {
             init(keyManagers, arrayOf(UsbLockdownTrustManager), null)
         }
+    }
 
     private fun createKeyManagers(
         keyStore: KeyStore,
         password: CharArray,
     ): Array<javax.net.ssl.KeyManager> {
-        val algorithms = linkedSetOf<String>().apply {
-            KeyManagerFactory.getDefaultAlgorithm()
-                ?.takeIf { it.isNotBlank() }
-                ?.let(::add)
-            add("X509")
-            add("PKIX")
-            add("SunX509")
-        }
+        val jsseProvider = privateJsseProvider()
+        val algorithms = arrayOf("PKIX", "X.509", "X509")
         var lastFailure: GeneralSecurityException? = null
         for (algorithm in algorithms) {
             try {
-                val factory = KeyManagerFactory.getInstance(algorithm)
+                val factory = KeyManagerFactory.getInstance(algorithm, jsseProvider)
                 factory.init(keyStore, password)
                 return factory.keyManagers
             } catch (error: GeneralSecurityException) {
@@ -118,10 +116,13 @@ object LockdownTlsEngineFactory {
             }
         }
         throw GeneralSecurityException(
-            "No compatible KeyManagerFactory implementation: " + algorithms.joinToString(","),
+            "BCJSSE KeyManagerFactory unavailable: " + algorithms.joinToString(","),
             lastFailure,
         )
     }
+
+    private fun privateJsseProvider(): BouncyCastleJsseProvider =
+        BouncyCastleJsseProvider(BouncyCastleProvider())
 
     private fun decodePkcs8Pem(pem: ByteArray): ByteArray {
         val begin = pem.indexOf(BEGIN_PRIVATE_KEY)
