@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay
 
+import android.app.ActivityManager
 import android.content.Context
 import java.io.File
 import java.util.Locale
@@ -31,6 +32,29 @@ internal class CrvHondaPlatformProbe(context: Context) {
                 results += "Honda package candidate=$it"
             }
         }
+
+        val processes = runCatching {
+            val activity = appContext.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            activity.runningAppProcesses.orEmpty()
+                .mapNotNull { it.processName }
+                .filter(::interesting)
+                .distinct()
+                .sorted()
+                .take(MAX_MATCHES_PER_GROUP)
+        }.getOrElse { emptyList() }
+        processes.forEach { results += "Honda process candidate=$it" }
+
+        val binderServices = runCatching {
+            val serviceManager = Class.forName("android.os.ServiceManager")
+            val listServices = serviceManager.getDeclaredMethod("listServices")
+            @Suppress("UNCHECKED_CAST")
+            (listServices.invoke(null) as? Array<String>)
+                .orEmpty()
+                .filter(::interesting)
+                .sorted()
+                .take(MAX_MATCHES_PER_GROUP)
+        }.getOrElse { emptyList() }
+        binderServices.forEach { results += "Honda Binder candidate=$it" }
 
         for (directory in SYSTEM_PATHS) {
             val matches = runCatching {
@@ -86,7 +110,9 @@ internal class CrvHondaPlatformProbe(context: Context) {
             "/system/app",
             "/system/priv-app",
             "/system/framework",
+            "/system/bin",
             "/system/lib",
+            "/system/vendor/lib",
             "/vendor/app",
             "/vendor/lib",
         )
