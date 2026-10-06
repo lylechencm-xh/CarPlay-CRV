@@ -401,6 +401,7 @@ class CarPlayMediaEngine(
             key = key,
             codec = format.codec,
             bitrate = if (format.codec == AudioCodecKind.OPUS) opusBitrate else null,
+            opusClockRate = MicrophoneConfig.opusClockRate(formatBits),
         )
     }
 
