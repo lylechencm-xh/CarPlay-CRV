@@ -1,14 +1,17 @@
 package com.shilapi.xcertplay.transport
 
 import android.hardware.usb.UsbConstants
+import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 
 /**
  * Finds the NCM control/data interface pair inside an active iPhone configuration.
  *
- * LIVI claims the control interface, claims the data interface, and selects data alternate
- * setting 1, the setting that carries the bulk endpoints. This class only reads descriptors.
+ * Android 4.2.x exposes a flattened UsbDevice interface list, so API17 callers should use the
+ * overload that supplies raw descriptors plus the active bConfigurationValue. That path scopes
+ * discovery to one configuration and follows the CDC Union descriptor to the matching data
+ * interface instead of pairing unrelated duplicate interface numbers from other configurations.
  */
 object NcmFunctionDiscovery {
     const val CONTROL_CLASS = 0x02
@@ -20,6 +23,7 @@ object NcmFunctionDiscovery {
     const val DATA_ALTERNATE_SETTING = 1
 
     data class NcmFunction(
+        val configurationValue: Int?,
         val control: UsbInterface,
         val data: UsbInterface,
         val dataAlternateSetting: Int,
@@ -28,33 +32,85 @@ object NcmFunctionDiscovery {
         val bulkOut: UsbEndpoint,
     )
 
-    fun find(device: android.hardware.usb.UsbDevice): NcmFunction? {
+    /** Compatibility fallback for callers that cannot inspect the active configuration. */
+    fun find(device: UsbDevice): NcmFunction? {
         val interfaces = (0 until device.interfaceCount).map(device::getInterface)
-        return findCdcNcm(interfaces, null)
+        return findFlattened(interfaces)
     }
+
+    /** Compatibility fallback. Prefer the active-configuration overload on API17. */
+    fun find(device: UsbDevice, rawDescriptors: ByteArray): NcmFunction? =
+        find(device, rawDescriptors, null)
 
     fun find(
-        device: android.hardware.usb.UsbDevice,
+        device: UsbDevice,
         rawDescriptors: ByteArray,
+        activeConfigurationValue: Int?,
     ): NcmFunction? {
-        val interfaces = (0 until device.interfaceCount).map(device::getInterface)
-        return findCdcNcm(interfaces, rawDescriptors)
+        if (activeConfigurationValue == null) {
+            return findFlattened((0 until device.interfaceCount).map(device::getInterface))
+        }
+
+        val descriptors = UsbActiveConfiguration.interfaces(
+            rawDescriptors,
+            activeConfigurationValue,
+        )
+        if (descriptors.isEmpty()) return null
+
+        val controls = descriptors.filter {
+            it.interfaceClass == CONTROL_CLASS &&
+                it.interfaceSubclass == CONTROL_SUBCLASS &&
+                it.alternateSetting == 0
+        }
+        for (controlDescriptor in controls) {
+            val unionDataNumber = unionSlaveInterface(controlDescriptor)
+            val dataCandidates = descriptors.filter { descriptor ->
+                descriptor.interfaceClass == DATA_CLASS &&
+                    (
+                        unionDataNumber == null ||
+                            descriptor.number == unionDataNumber
+                        )
+            }
+            val dataDescriptor = dataCandidates
+                .filter(::hasBulkPair)
+                .minByOrNull {
+                    if (it.alternateSetting == DATA_ALTERNATE_SETTING) 0 else 1
+                }
+                ?: continue
+
+            val control = UsbActiveConfiguration.androidInterface(device, controlDescriptor)
+                ?: continue
+            val data = UsbActiveConfiguration.androidInterface(device, dataDescriptor)
+                ?: continue
+            val endpoints = bulkEndpoints(data, dataDescriptor) ?: continue
+            val statusIn = (0 until control.endpointCount)
+                .map(control::getEndpoint)
+                .singleOrNull {
+                    it.direction == UsbConstants.USB_DIR_IN &&
+                        it.type == UsbConstants.USB_ENDPOINT_XFER_INT
+                }
+
+            return NcmFunction(
+                configurationValue = activeConfigurationValue,
+                control = control,
+                data = data,
+                dataAlternateSetting = dataDescriptor.alternateSetting,
+                statusIn = statusIn,
+                bulkIn = endpoints.first,
+                bulkOut = endpoints.second,
+            )
+        }
+        return null
     }
 
-    private fun findCdcNcm(
-        interfaces: List<UsbInterface>,
-        rawDescriptors: ByteArray?,
-    ): NcmFunction? {
+    private fun findFlattened(interfaces: List<UsbInterface>): NcmFunction? {
         val control = interfaces.firstOrNull {
             it.interfaceClass == CONTROL_CLASS && it.interfaceSubclass == CONTROL_SUBCLASS
         } ?: return null
-        val candidates = interfaces
-            .filter { it.interfaceClass == DATA_CLASS && bulkEndpoints(it) != null }
-        val data = candidates.minByOrNull {
-            if (alternateSetting(rawDescriptors, it) == DATA_ALTERNATE_SETTING) 0 else 1
+        val data = interfaces.firstOrNull {
+            it.interfaceClass == DATA_CLASS && bulkEndpoints(it, null) != null
         } ?: return null
-        val dataAlternateSetting = alternateSetting(rawDescriptors, data) ?: DATA_ALTERNATE_SETTING
-        val endpoints = bulkEndpoints(data) ?: return null
+        val endpoints = bulkEndpoints(data, null) ?: return null
         val statusIn = (0 until control.endpointCount)
             .map(control::getEndpoint)
             .singleOrNull {
@@ -62,57 +118,73 @@ object NcmFunctionDiscovery {
                     it.type == UsbConstants.USB_ENDPOINT_XFER_INT
             }
         return NcmFunction(
+            configurationValue = null,
             control = control,
             data = data,
-            dataAlternateSetting = dataAlternateSetting,
+            dataAlternateSetting = DATA_ALTERNATE_SETTING,
             statusIn = statusIn,
             bulkIn = endpoints.first,
             bulkOut = endpoints.second,
         )
     }
 
-    private fun alternateSetting(raw: ByteArray?, usbInterface: UsbInterface): Int? {
-        if (raw == null) return null
-        var offset = 0
-        var fallback: Int? = null
-        while (offset + 2 <= raw.size) {
-            val length = raw[offset].toInt() and 0xff
-            val type = raw[offset + 1].toInt() and 0xff
-            if (length < 2 || offset + length > raw.size) return fallback
-            if (type == USB_INTERFACE_DESCRIPTOR_TYPE && length >= USB_INTERFACE_DESCRIPTOR_LENGTH) {
-                val number = raw[offset + 2].toInt() and 0xff
-                val alternate = raw[offset + 3].toInt() and 0xff
-                val endpointCount = raw[offset + 4].toInt() and 0xff
-                val interfaceClass = raw[offset + 5].toInt() and 0xff
-                val interfaceSubclass = raw[offset + 6].toInt() and 0xff
-                val interfaceProtocol = raw[offset + 7].toInt() and 0xff
-                if (
-                    number == usbInterface.id &&
-                    interfaceClass == usbInterface.interfaceClass &&
-                    interfaceSubclass == usbInterface.interfaceSubclass &&
-                    interfaceProtocol == usbInterface.interfaceProtocol &&
-                    endpointCount == usbInterface.endpointCount
-                ) {
-                    if (alternate == DATA_ALTERNATE_SETTING) return alternate
-                    if (fallback == null) fallback = alternate
-                }
+    private fun unionSlaveInterface(
+        control: UsbActiveConfiguration.InterfaceDescriptor,
+    ): Int? {
+        for (descriptor in control.extraDescriptors) {
+            if (
+                descriptor.size >= 5 &&
+                (descriptor[1].toInt() and 0xff) == CDC_FUNCTIONAL_DESCRIPTOR_TYPE &&
+                (descriptor[2].toInt() and 0xff) == CDC_UNION_SUBTYPE &&
+                (descriptor[3].toInt() and 0xff) == control.number
+            ) {
+                return descriptor[4].toInt() and 0xff
             }
-            offset += length
         }
-        return fallback
+        return null
     }
 
-    private fun bulkEndpoints(usbInterface: UsbInterface): Pair<UsbEndpoint, UsbEndpoint>? {
+    private fun hasBulkPair(
+        descriptor: UsbActiveConfiguration.InterfaceDescriptor,
+    ): Boolean {
+        val input = descriptor.endpoints.count {
+            it.direction == UsbConstants.USB_DIR_IN &&
+                it.type == UsbConstants.USB_ENDPOINT_XFER_BULK
+        }
+        val output = descriptor.endpoints.count {
+            it.direction == UsbConstants.USB_DIR_OUT &&
+                it.type == UsbConstants.USB_ENDPOINT_XFER_BULK
+        }
+        return input == 1 && output == 1
+    }
+
+    private fun bulkEndpoints(
+        usbInterface: UsbInterface,
+        descriptor: UsbActiveConfiguration.InterfaceDescriptor?,
+    ): Pair<UsbEndpoint, UsbEndpoint>? {
         val endpoints = (0 until usbInterface.endpointCount).map(usbInterface::getEndpoint)
+        val wantedIn = descriptor?.endpoints?.singleOrNull {
+            it.direction == UsbConstants.USB_DIR_IN &&
+                it.type == UsbConstants.USB_ENDPOINT_XFER_BULK
+        }?.address
+        val wantedOut = descriptor?.endpoints?.singleOrNull {
+            it.direction == UsbConstants.USB_DIR_OUT &&
+                it.type == UsbConstants.USB_ENDPOINT_XFER_BULK
+        }?.address
+
         val input = endpoints.singleOrNull {
-            it.direction == UsbConstants.USB_DIR_IN && it.type == UsbConstants.USB_ENDPOINT_XFER_BULK
+            it.direction == UsbConstants.USB_DIR_IN &&
+                it.type == UsbConstants.USB_ENDPOINT_XFER_BULK &&
+                (wantedIn == null || it.address == wantedIn)
         }
         val output = endpoints.singleOrNull {
-            it.direction == UsbConstants.USB_DIR_OUT && it.type == UsbConstants.USB_ENDPOINT_XFER_BULK
+            it.direction == UsbConstants.USB_DIR_OUT &&
+                it.type == UsbConstants.USB_ENDPOINT_XFER_BULK &&
+                (wantedOut == null || it.address == wantedOut)
         }
         return if (input != null && output != null) input to output else null
     }
 
-    private const val USB_INTERFACE_DESCRIPTOR_TYPE = 0x04
-    private const val USB_INTERFACE_DESCRIPTOR_LENGTH = 9
+    private const val CDC_FUNCTIONAL_DESCRIPTOR_TYPE = 0x24
+    private const val CDC_UNION_SUBTYPE = 0x06
 }
