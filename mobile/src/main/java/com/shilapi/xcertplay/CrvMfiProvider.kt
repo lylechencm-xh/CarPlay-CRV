@@ -24,11 +24,12 @@ internal object CrvMfiProvider {
     }
 
     fun status(context: Context): String {
+        val identity = CrvMfiAssets.status(context)
         val nodes = i2cNodes()
         return if (nodes.isNotEmpty()) {
-            "MFi source=local; onboard-i2c-visible=" + nodes.joinToString { it.name }
+            identity + "; source=local; onboard-i2c-visible=" + nodes.joinToString { it.name }
         } else {
-            CrvMfiAssets.status(context) + " source=local"
+            identity + "; source=local"
         }
     }
 
