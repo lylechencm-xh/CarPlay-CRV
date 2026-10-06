@@ -62,7 +62,10 @@ with ZipFile(apk) as package:
     defined = {types[u32(u32(100) + i * 32)] for i in range(u32(96))}
     vm_annotations = {
         "Ldalvik/annotation/" + name + ";"
-        for name in ["EnclosingClass", "EnclosingMethod", "InnerClass", "MemberClasses", "Signature", "Throws"]
+        for name in [
+            "AnnotationDefault", "EnclosingClass", "EnclosingMethod", "InnerClass",
+            "MemberClasses", "Signature", "SourceDebugExtension", "Throws",
+        ]
     }
     platform_prefixes = (
         "Ljava/", "Ljavax/", "Landroid/", "Ldalvik/",
