@@ -185,6 +185,13 @@ internal object CrvMfiProvider {
         }
     }
 
+    private fun i2cNodes(): List<File> =
+        File("/dev").listFiles()
+            .orEmpty()
+            .filter { I2C_NODE.matches(it.name) }
+            .sortedBy { it.name.removePrefix("i2c-").toIntOrNull() ?: Int.MAX_VALUE }
+            .take(MAX_I2C_NODES)
+
     private fun host(context: Context, usbManager: UsbManager): Ch341UsbHost =
         Ch341UsbHost(
             context = context,
