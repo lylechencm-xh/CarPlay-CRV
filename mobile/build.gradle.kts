@@ -75,6 +75,7 @@ android {
 
 dependencies {
     implementation(project(":crvlegacy"))
+    testImplementation(libs.junit)
 }
 
 // No implicit import. Only the two explicitly selected local runtime assets are allowed.
