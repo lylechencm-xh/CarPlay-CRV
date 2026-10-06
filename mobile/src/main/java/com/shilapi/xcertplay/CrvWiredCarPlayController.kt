@@ -2,9 +2,13 @@ package com.shilapi.xcertplay
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.os.IBinder
 import android.view.Surface
 import com.shilapi.xcertplay.airplay.AirPlayConfig
 import com.shilapi.xcertplay.airplay.AirPlayContact
@@ -37,8 +41,10 @@ import java.security.GeneralSecurityException
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -50,7 +56,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 class CrvWiredCarPlayController(
     context: Context,
     private val usbManager: UsbManager,
-    private val vpn: CarPlayVpnService,
     surface: Surface,
     private val displayWidth: Int,
     private val displayHeight: Int,
@@ -89,11 +94,31 @@ class CrvWiredCarPlayController(
     @Volatile private var vpnAttached = false
     @Volatile private var wifiHotspot: CrvApi19WirelessHotspot? = null
     @Volatile private var bonjour: CrvApi19BonjourAdvertiser? = null
+    @Volatile private var vpnService: CarPlayVpnService? = null
+    @Volatile private var vpnBound = false
+    private val vpnLatch = CountDownLatch(1)
+
+    private val vpnConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+            vpnService = (binder as CarPlayVpnService.LocalBinder).service
+            vpnLatch.countDown()
+        }
+
+        override fun onServiceDisconnected(name: ComponentName) {
+            vpnService = null
+            vpnLatch.countDown()
+            if (!closed.get()) {
+                report("CarPlay network service disconnected")
+                runCatching { csm?.close() }
+            }
+        }
+    }
 
     private val listener = object : AirPlaySessionListener {
         override fun onSessionActive(session: AirPlaySession) {
             activeSession = session
-            report("AirPlay transport attached=${vpn.isAttached()} port=${vpn.boundPort() ?: 0}")
+            val vpn = vpnService
+            report("AirPlay transport attached=${vpn?.isAttached() == true} port=${vpn?.boundPort() ?: 0}")
             report("CarPlay active")
         }
 
@@ -157,6 +182,18 @@ class CrvWiredCarPlayController(
         val mfi = loadMfi()
         report("MFi identity ready")
 
+        // Match DiPlay's wired bring-up: claim the complete CarPlay data plane first.
+        // NCM is opened before Lockdown/iAP2 so the iPhone sees both CarPlay interfaces active.
+        val ncmBridge = if (mode == CrvConnectionMode.WIRED) {
+            report("Opening CDC-NCM data path")
+            openNcm(device).also {
+                ncm = it
+                report("CDC-NCM ready")
+            }
+        } else {
+            null
+        }
+
         val host = Iap2UsbMuxHost.open(
             pipe = usbSession,
             onDiagnostic = { report(it) },
@@ -195,14 +232,17 @@ class CrvWiredCarPlayController(
             return
         }
 
-        val ncmBridge = openNcm(device)
-        ncm = ncmBridge
-        val hostMac = ncmBridge.hostMac ?: macBytes(deviceId)
+        val wiredNcm = ncmBridge
+            ?: throw IphoneUsbException.DeviceUnavailable("CDC-NCM data path is unavailable")
+        val hostMac = wiredNcm.hostMac ?: macBytes(deviceId)
         val airPlay = airPlayConfig(deviceId)
+        val vpn = awaitVpnService()
+            ?: throw IphoneUsbException.DeviceUnavailable("CarPlay VPN service did not bind")
+        report("CarPlay network service ready")
 
         when (
             val attached = vpn.attach(
-                ncm = ncmBridge,
+                ncm = wiredNcm,
                 linkLocal = LINK_LOCAL,
                 hostMac = hostMac,
                 config = airPlay,
@@ -267,6 +307,9 @@ class CrvWiredCarPlayController(
         val hotspotInfo = hotspot.start()
 
         val airPlay = airPlayConfig(deviceId)
+        val vpn = awaitVpnService()
+            ?: throw IphoneUsbException.DeviceUnavailable("CarPlay VPN service did not bind")
+        report("CarPlay network service ready")
         when (
             val attached = vpn.attachWireless(
                 bindAddress = hotspotInfo.hostAddress,
@@ -372,6 +415,44 @@ class CrvWiredCarPlayController(
         return false
     }
 
+    private fun awaitVpnService(): CarPlayVpnService? {
+        vpnService?.let { return it }
+        report("Binding CarPlay network service")
+        bindVpn()
+        return try {
+            if (vpnLatch.await(VPN_CONNECT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) vpnService else null
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            null
+        }
+    }
+
+    private fun bindVpn() {
+        if (vpnBound || closed.get()) return
+        vpnBound = true
+        try {
+            if (!appContext.bindService(
+                    Intent(appContext, CarPlayVpnService::class.java),
+                    vpnConnection,
+                    Context.BIND_AUTO_CREATE,
+                )
+            ) {
+                vpnBound = false
+                vpnLatch.countDown()
+            }
+        } catch (_: Throwable) {
+            vpnBound = false
+            vpnLatch.countDown()
+        }
+    }
+
+    private fun unbindVpn() {
+        if (!vpnBound) return
+        vpnBound = false
+        runCatching { appContext.unbindService(vpnConnection) }
+        vpnService = null
+    }
+
     private fun openNcm(device: UsbDevice): NcmUsbBridge {
         val function = NcmFunctionDiscovery.find(device)
             ?: throw IphoneUsbException.Protocol("CarPlay USB layout exposes no CDC-NCM function")
@@ -423,7 +504,7 @@ class CrvWiredCarPlayController(
         runCatching { bonjour?.close() }
         bonjour = null
         if (vpnAttached) {
-            runCatching { vpn.detach() }
+            runCatching { vpnService?.detach() }
             vpnAttached = false
             ncm = null
         } else {
@@ -441,6 +522,7 @@ class CrvWiredCarPlayController(
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         cleanupAfterFailure()
+        unbindVpn()
         sink.close()
         executor.shutdownNow()
         notifyStopped()
@@ -470,5 +552,6 @@ class CrvWiredCarPlayController(
         private const val LINK_LOCAL = "fe80::2"
         private const val AVAILABLE_CURRENT_MA = 1500
         private const val PAIR_TIMEOUT_MILLIS = 5 * 60_000L
+        private const val VPN_CONNECT_TIMEOUT_MILLIS = 5_000L
     }
 }
