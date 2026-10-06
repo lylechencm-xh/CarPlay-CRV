@@ -289,20 +289,22 @@ class NcmUsbBridge internal constructor(
                     }
                     claimed.add(function.data)
                 }
-                val resetSelected = selectInterface(
-                    connection,
-                    function.data,
-                    DATA_ALT_SETTING_DISABLED,
-                )
-                Log.i(
-                    IphoneCarPlayConfiguration.TAG,
-                    "setInterface iface=${function.data.id}/$DATA_ALT_SETTING_DISABLED ok=$resetSelected",
-                )
-                if (!resetSelected) {
-                    Log.w(
-                        IphoneCarPlayConfiguration.TAG,
-                        "NCM data alt0 reset reported failure; continuing with selected data alt",
+                if (android.os.Build.VERSION.SDK_INT < 21) {
+                    val resetSelected = selectInterface(
+                        connection,
+                        function.data,
+                        DATA_ALT_SETTING_DISABLED,
                     )
+                    Log.i(
+                        IphoneCarPlayConfiguration.TAG,
+                        "setInterface iface=${function.data.id}/$DATA_ALT_SETTING_DISABLED ok=$resetSelected",
+                    )
+                    if (!resetSelected) {
+                        Log.w(
+                            IphoneCarPlayConfiguration.TAG,
+                            "NCM data alt0 reset reported failure; continuing with selected data alt",
+                        )
+                    }
                 }
                 val altSelected = selectInterface(
                     connection,
