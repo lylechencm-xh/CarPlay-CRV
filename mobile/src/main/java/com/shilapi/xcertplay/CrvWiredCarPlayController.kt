@@ -49,7 +49,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Android 4.4 CarPlay stack for the 2021 CR-V, supporting wired media and Wi-Fi handoff.
+ * Android 4.2.2 / API17 CarPlay stack for the 2021 CR-V, supporting wired media and Wi-Fi handoff.
  *
  * USBMUX -> Lockdown pairing -> com.apple.carkit.service -> iAP2/MFi ->
  * USB NCM -> VpnService/AirPlay -> MediaCodec/AudioTrack.
