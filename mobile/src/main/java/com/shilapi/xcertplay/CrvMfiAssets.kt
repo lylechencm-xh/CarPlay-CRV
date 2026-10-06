@@ -8,7 +8,7 @@ import java.io.FileNotFoundException
 /**
  * Loads an explicitly provisioned MFi accessory identity.
  *
- * No private key is committed to the repository. On Android 4.4 the user can place:
+ * No private key is committed to the repository. On Android 4.2.2 / API17 the user can place:
  *   identity.pk8
  *   certificate.p7b
  * under the app external-files/offline-mfi directory. The files are validated and then copied
