@@ -34,6 +34,7 @@ import com.shilapi.xcertplay.transport.IphoneUsbException
 import com.shilapi.xcertplay.transport.LockdownCarKitClient
 import com.shilapi.xcertplay.transport.LockdownPairingClient
 import com.shilapi.xcertplay.transport.LockdownPairRecord
+import com.shilapi.xcertplay.transport.LockdownTlsEngineFactory
 import com.shilapi.xcertplay.transport.NcmFunctionDiscovery
 import com.shilapi.xcertplay.transport.NcmUsbBridge
 import java.io.Closeable
@@ -224,6 +225,7 @@ class CrvWiredCarPlayController(
             pairRecord = pairNew(host)
             carKitClient.open(pairRecord, LABEL)
         }
+        preflightLockdownTls(checkNotNull(pairRecord))
         report("iPhone Lockdown ready")
         val session = Iap2Session.open(
             underlying = carkit,
@@ -405,6 +407,14 @@ class CrvWiredCarPlayController(
             timeoutMillis = Iap2WirelessControlClient.NO_TIMEOUT_MILLIS,
             onReady = { report("Wi-Fi CarPlay credentials ready") },
             onProgress = { report(it) },
+        )
+    }
+
+    private fun preflightLockdownTls(pairRecord: LockdownPairRecord) {
+        val engine = LockdownTlsEngineFactory.create(pairRecord)
+        report(
+            "Lockdown TLS preflight ready protocols=" +
+                engine.enabledProtocols.joinToString(","),
         )
     }
 
