@@ -47,9 +47,9 @@ internal class CrvHondaPlatformProbe(context: Context) {
         val binderServices = runCatching {
             val serviceManager = Class.forName("android.os.ServiceManager")
             val listServices = serviceManager.getDeclaredMethod("listServices")
-            @Suppress("UNCHECKED_CAST")
-            (listServices.invoke(null) as? Array<String>)
+            (listServices.invoke(null) as? Array<*>)
                 .orEmpty()
+                .mapNotNull { it as? String }
                 .filter(::interesting)
                 .sorted()
                 .take(MAX_MATCHES_PER_GROUP)
