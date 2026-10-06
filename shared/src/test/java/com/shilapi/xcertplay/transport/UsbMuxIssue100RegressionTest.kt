@@ -134,7 +134,7 @@ class UsbMuxIssue100RegressionTest {
             ClassParameter.from(Int::class.javaPrimitiveType, 2),
             ClassParameter.from(Int::class.javaPrimitiveType, 512),
             ClassParameter.from(Int::class.javaPrimitiveType, 0))
-        return Iap2UsbSession(connection, endpoint(0x04), endpoint(0x85))
+        return Iap2UsbSession(connection, endpoint(0x04), endpoint(0x85), 1)
     }
 
     private fun takeFrame(host: Iap2UsbMuxHost, timeoutMillis: Long = 1000L): Any? {
