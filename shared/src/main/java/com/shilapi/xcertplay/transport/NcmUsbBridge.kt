@@ -283,10 +283,26 @@ class NcmUsbBridge internal constructor(
                     )
                     if (!dataClaimed) {
                         throw IphoneUsbException.DeviceUnavailable(
-                            "Android could not claim the NCM data interface ${function.data.id}",
+                            "Android could not claim NCM data interface ${function.data.id} " +
+                                "in USB configuration ${function.configurationValue ?: -1}",
                         )
                     }
                     claimed.add(function.data)
+                }
+                val resetSelected = selectInterface(
+                    connection,
+                    function.data,
+                    DATA_ALT_SETTING_DISABLED,
+                )
+                Log.i(
+                    IphoneCarPlayConfiguration.TAG,
+                    "setInterface iface=${function.data.id}/$DATA_ALT_SETTING_DISABLED ok=$resetSelected",
+                )
+                if (!resetSelected) {
+                    Log.w(
+                        IphoneCarPlayConfiguration.TAG,
+                        "NCM data alt0 reset reported failure; continuing with selected data alt",
+                    )
                 }
                 val altSelected = selectInterface(
                     connection,
