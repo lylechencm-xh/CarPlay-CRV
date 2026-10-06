@@ -182,8 +182,8 @@ class CarPlayVpnService : VpnService() {
      * Installs the authenticator after the wired transport has reached the MFi boundary.
      *
      * The listener may be brought up earlier for USB/NCM/VPN diagnostics on legacy head units.
-     * Existing AirPlay sessions keep the authenticator they were created with; wired CarPlay
-     * installs this before iAP2 advertises the endpoint, so no normal AirPlay session exists yet.
+     * The attachment and any already accepted AirPlay sessions are updated together so an early
+     * TCP accept cannot permanently retain a null authenticator.
      */
     @Synchronized
     fun updateMfiAuthenticator(mfi: MfiAuthenticator) {
