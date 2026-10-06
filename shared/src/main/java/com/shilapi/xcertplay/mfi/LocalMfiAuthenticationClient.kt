@@ -56,7 +56,7 @@ class LocalMfiAuthenticationClient private constructor(
                 encodedKey.fill(0)
             }
             val certificate = readBounded(File(directory, "certificate.p7b"))
-            val certificates = CertificateFactory.getInstance("X.509")
+            val certificates = CertificateFactory.getInstance("X.509", BC_PROVIDER)
                 .generateCertificates(certificate.inputStream())
             require(certificates.size == 1) { "Expected one accessory certificate" }
             val publicKey = certificates.single().publicKey as? ECPublicKey
