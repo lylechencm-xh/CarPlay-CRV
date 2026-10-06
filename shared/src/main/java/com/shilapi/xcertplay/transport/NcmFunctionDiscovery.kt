@@ -33,12 +33,14 @@ object NcmFunctionDiscovery {
     )
 
     /** Compatibility fallback for callers that cannot inspect the active configuration. */
+    @Deprecated("Production callers must scope discovery to the active USB configuration")
     fun find(device: UsbDevice): NcmFunction? {
         val interfaces = (0 until device.interfaceCount).map(device::getInterface)
         return findFlattened(interfaces)
     }
 
     /** Compatibility fallback. Prefer the active-configuration overload on API17. */
+    @Deprecated("Production callers must supply the active USB configuration value")
     fun find(device: UsbDevice, rawDescriptors: ByteArray): NcmFunction? =
         find(device, rawDescriptors, null)
 
