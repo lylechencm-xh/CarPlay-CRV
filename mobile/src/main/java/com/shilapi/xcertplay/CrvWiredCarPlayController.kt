@@ -273,9 +273,8 @@ class CrvWiredCarPlayController(
             ?: throw IphoneUsbException.DeviceUnavailable("AirPlay listener did not bind")
         report("AirPlay listening on $LINK_LOCAL:$airPlayPort")
 
-        val usbMuxInterfaceNumber = IphoneCarPlayConfiguration.usbMuxInterface(device)?.id
-            ?: throw IphoneUsbException.Protocol("CarPlay USB layout exposes no USBMUX interface")
-        report("CarPlay USBMUX interface=$usbMuxInterfaceNumber")
+        val usbMuxInterfaceNumber = usbSession.usbMuxInterfaceNumber
+        report("CarPlay USBMUX interface=$usbMuxInterfaceNumber (claimed)")
 
         val identification = Iap2IdentificationConfig(
             name = "Honda CR-V CarPlay",
