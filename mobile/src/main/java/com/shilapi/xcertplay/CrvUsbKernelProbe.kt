@@ -16,8 +16,21 @@ internal object CrvUsbKernelProbe {
 
     fun waitForKernelNcm(timeoutMillis: Long): KernelNcmNetwork? {
         val deadline = System.nanoTime() + timeoutMillis.coerceAtLeast(0L) * 1_000_000L
+        var previous: KernelNcmNetwork? = null
+        var stableSamples = 0
         do {
-            findKernelNcm()?.let { return it }
+            val current = findKernelNcm()
+            if (
+                current != null &&
+                previous?.interfaceName == current.interfaceName &&
+                previous.linkLocal == current.linkLocal
+            ) {
+                stableSamples += 1
+                if (stableSamples >= REQUIRED_STABLE_SAMPLES) return current
+            } else {
+                stableSamples = if (current == null) 0 else 1
+            }
+            previous = current
             if (System.nanoTime() >= deadline) return null
             try {
                 Thread.sleep(KERNEL_NCM_POLL_MILLIS)
@@ -37,7 +50,8 @@ internal object CrvUsbKernelProbe {
             .filter { network ->
                 val lower = network.name.lowercase(Locale.US)
                 (lower.startsWith("usb") || lower.contains("ncm")) &&
-                    runCatching { network.isUp && !network.isLoopback }.getOrDefault(false)
+                    runCatching { network.isUp && !network.isLoopback }.getOrDefault(false) &&
+                    hasCarrier(network.name)
             }
             .sortedWith(compareBy<NetworkInterface> {
                 if (it.name.lowercase(Locale.US).startsWith("usb")) 0 else 1
@@ -54,6 +68,12 @@ internal object CrvUsbKernelProbe {
                     hardwareAddress = runCatching { network.hardwareAddress?.copyOf() }.getOrNull(),
                 )
             }
+    }
+
+    private fun hasCarrier(interfaceName: String): Boolean {
+        val carrier = File("/sys/class/net/$interfaceName/carrier")
+        if (!carrier.exists()) return true
+        return runCatching { carrier.readText().trim() == "1" }.getOrDefault(false)
     }
 
     private fun hasBoundCdcNcmDriver(): Boolean {
@@ -126,4 +146,5 @@ internal object CrvUsbKernelProbe {
 
     private const val MAX_ITEMS = 24
     private const val KERNEL_NCM_POLL_MILLIS = 100L
+    private const val REQUIRED_STABLE_SAMPLES = 3
 }
