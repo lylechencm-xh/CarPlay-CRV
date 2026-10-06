@@ -180,10 +180,10 @@ class CrvWiredCarPlayController(
         check(!closed.get()) { "controller is closed" }
 
         report(CrvMfiAssets.status(appContext))
-        val mfi = loadMfi()
-        report("MFi identity ready")
 
-        // Match DiPlay's wired bring-up: claim the complete CarPlay data plane first.
+        // Match DiPlay's wired bring-up: validate the complete transport before crossing the
+        // accessory-authentication boundary. This does not bypass MFi: authentication is loaded
+        // immediately before iAP2 identification and installed into the AirPlay listener first.
         // NCM is opened before Lockdown/iAP2 so the iPhone sees both CarPlay interfaces active.
         val ncmBridge = if (mode == CrvConnectionMode.WIRED) {
             report("Opening CDC-NCM data path")
@@ -229,6 +229,8 @@ class CrvWiredCarPlayController(
         report("iAP2 carkit channel ready")
 
         if (mode == CrvConnectionMode.WIFI_HANDOFF) {
+            val mfi = loadMfi()
+            report("MFi identity ready")
             runWirelessHandoff(session, mfi)
             return
         }
@@ -249,7 +251,7 @@ class CrvWiredCarPlayController(
                 config = airPlay,
                 identity = identity,
                 pairings = pairingStore,
-                mfi = mfi,
+                mfi = null,
                 listener = listener,
                 media = media,
             )
@@ -287,6 +289,20 @@ class CrvWiredCarPlayController(
             sourceVersion = SOURCE_VERSION,
             deviceIdentifier = hostMac.macString(),
         )
+
+        report("Transport pre-auth ready")
+        report(CrvMfiAssets.status(appContext))
+        val mfi = try {
+            loadMfi()
+        } catch (error: java.io.FileNotFoundException) {
+            report(
+                "MFi identity missing; transport pre-auth verified. Provision " +
+                    CrvMfiAssets.provisioningDirectory(appContext),
+            )
+            throw error
+        }
+        report("MFi identity ready")
+        vpn.updateMfiAuthenticator(mfi)
 
         report("Starting iAP2 identification/MFi")
         Iap2WiredControlClient(
