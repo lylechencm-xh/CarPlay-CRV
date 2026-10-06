@@ -8,22 +8,40 @@ import java.util.Locale
 
 /** Read-only diagnostics for OEM USB/network drivers that may own the iPhone NCM interfaces. */
 internal object CrvUsbKernelProbe {
+    data class ExpectedUsbNcm(
+        val configurationValue: Int,
+        val interfaceNumbers: Set<Int>,
+        val vendorId: Int,
+        val productId: Int,
+        val busNumber: Int?,
+        val deviceNumber: Int?,
+    )
+
     data class KernelNcmNetwork(
         val interfaceName: String,
         val linkLocal: Inet6Address,
         val hardwareAddress: ByteArray?,
+        val kernelConfigurationValue: Int,
+        val usbInterfaceNumber: Int,
+        val sysfsInterfaceName: String,
+        val usbDevicePath: String,
     )
 
-    fun waitForKernelNcm(timeoutMillis: Long): KernelNcmNetwork? {
+    fun waitForKernelNcm(
+        expected: ExpectedUsbNcm,
+        timeoutMillis: Long,
+    ): KernelNcmNetwork? {
         val deadline = System.nanoTime() + timeoutMillis.coerceAtLeast(0L) * 1_000_000L
         var previous: KernelNcmNetwork? = null
         var stableSamples = 0
         do {
-            val current = findKernelNcm()
+            val current = findKernelNcm(expected)
             if (
                 current != null &&
                 previous?.interfaceName == current.interfaceName &&
-                previous.linkLocal == current.linkLocal
+                previous.linkLocal == current.linkLocal &&
+                previous.kernelConfigurationValue == current.kernelConfigurationValue &&
+                previous.usbInterfaceNumber == current.usbInterfaceNumber
             ) {
                 stableSamples += 1
                 if (stableSamples >= REQUIRED_STABLE_SAMPLES) return current
@@ -41,11 +59,11 @@ internal object CrvUsbKernelProbe {
         } while (true)
     }
 
-    fun findKernelNcm(): KernelNcmNetwork? {
-        if (!hasBoundCdcNcmDriver()) return null
+    fun findKernelNcm(expected: ExpectedUsbNcm): KernelNcmNetwork? {
         val networks = runCatching {
             Collections.list(NetworkInterface.getNetworkInterfaces())
         }.getOrElse { emptyList() }
+
         return networks
             .filter { network ->
                 val lower = network.name.lowercase(Locale.US)
@@ -57,18 +75,94 @@ internal object CrvUsbKernelProbe {
                 if (it.name.lowercase(Locale.US).startsWith("usb")) 0 else 1
             }.thenBy { it.name })
             .firstNotNullOfOrNull { network ->
-                val linkLocal = runCatching {
-                    Collections.list(network.inetAddresses)
-                        .filterIsInstance<Inet6Address>()
-                        .firstOrNull { it.isLinkLocalAddress }
-                }.getOrNull() ?: return@firstNotNullOfOrNull null
-                KernelNcmNetwork(
-                    interfaceName = network.name,
-                    linkLocal = linkLocal,
-                    hardwareAddress = runCatching { network.hardwareAddress?.copyOf() }.getOrNull(),
-                )
+                inspectNetwork(network, expected)
             }
     }
+
+    fun describeExpected(expected: ExpectedUsbNcm): String =
+        "expected cfg=${expected.configurationValue} ifaces=${expected.interfaceNumbers.sorted()} " +
+            "usb=${hex4(expected.vendorId)}:${hex4(expected.productId)} " +
+            "bus=${expected.busNumber ?: -1} dev=${expected.deviceNumber ?: -1}"
+
+    private fun inspectNetwork(
+        network: NetworkInterface,
+        expected: ExpectedUsbNcm,
+    ): KernelNcmNetwork? {
+        val linkLocal = runCatching {
+            Collections.list(network.inetAddresses)
+                .filterIsInstance<Inet6Address>()
+                .firstOrNull { it.isLinkLocalAddress }
+        }.getOrNull() ?: return null
+
+        val interfacePath = runCatching {
+            File("/sys/class/net/${network.name}/device").canonicalFile
+        }.getOrNull()?.takeIf { it.exists() } ?: return null
+
+        val driverName = runCatching {
+            File(interfacePath, "driver").canonicalFile.name
+        }.getOrNull() ?: return null
+        if (driverName != "cdc_ncm") return null
+
+        val sysfsInterfaceName = interfacePath.name
+        val parsed = parseUsbInterfaceName(sysfsInterfaceName) ?: return null
+        val sysfsConfiguration = parsed.first
+        val sysfsInterfaceNumber = parsed.second
+
+        val usbDevice = findUsbDeviceParent(interfacePath) ?: return null
+        val kernelConfiguration = readInt(File(usbDevice, "bConfigurationValue")) ?: return null
+        val vendor = readHex(File(usbDevice, "idVendor")) ?: return null
+        val product = readHex(File(usbDevice, "idProduct")) ?: return null
+        val bus = readInt(File(usbDevice, "busnum"))
+        val dev = readInt(File(usbDevice, "devnum"))
+
+        if (vendor != expected.vendorId || product != expected.productId) return null
+        if (expected.busNumber != null && bus != null && bus != expected.busNumber) return null
+        if (expected.deviceNumber != null && dev != null && dev != expected.deviceNumber) return null
+        if (kernelConfiguration != expected.configurationValue) return null
+        if (sysfsConfiguration != expected.configurationValue) return null
+        if (sysfsInterfaceNumber !in expected.interfaceNumbers) return null
+
+        return KernelNcmNetwork(
+            interfaceName = network.name,
+            linkLocal = linkLocal,
+            hardwareAddress = runCatching { network.hardwareAddress?.copyOf() }.getOrNull(),
+            kernelConfigurationValue = kernelConfiguration,
+            usbInterfaceNumber = sysfsInterfaceNumber,
+            sysfsInterfaceName = sysfsInterfaceName,
+            usbDevicePath = usbDevice.absolutePath,
+        )
+    }
+
+    private fun findUsbDeviceParent(start: File): File? {
+        var current: File? = start
+        repeat(MAX_PARENT_DEPTH) {
+            val node = current ?: return null
+            if (
+                File(node, "idVendor").isFile &&
+                File(node, "idProduct").isFile &&
+                File(node, "bConfigurationValue").isFile
+            ) {
+                return node
+            }
+            current = node.parentFile
+        }
+        return null
+    }
+
+    private fun parseUsbInterfaceName(name: String): Pair<Int, Int>? {
+        val colon = name.lastIndexOf(':')
+        val dot = name.lastIndexOf('.')
+        if (colon < 0 || dot <= colon + 1 || dot >= name.length - 1) return null
+        val configuration = name.substring(colon + 1, dot).toIntOrNull() ?: return null
+        val interfaceNumber = name.substring(dot + 1).toIntOrNull() ?: return null
+        return configuration to interfaceNumber
+    }
+
+    private fun readInt(file: File): Int? =
+        runCatching { file.readText().trim().toInt() }.getOrNull()
+
+    private fun readHex(file: File): Int? =
+        runCatching { file.readText().trim().toInt(16) }.getOrNull()
 
     private fun hasCarrier(interfaceName: String): Boolean {
         val carrier = File("/sys/class/net/$interfaceName/carrier")
@@ -76,15 +170,6 @@ internal object CrvUsbKernelProbe {
         return runCatching { carrier.readText().trim() == "1" }.getOrDefault(false)
     }
 
-    private fun hasBoundCdcNcmDriver(): Boolean {
-        val driver = File("/sys/bus/usb/drivers/cdc_ncm")
-        return runCatching {
-            driver.isDirectory && driver.listFiles().orEmpty().any {
-                val name = it.name
-                ":" in name && !name.startsWith(".")
-            }
-        }.getOrDefault(false)
-    }
     fun collect(): List<String> {
         val lines = ArrayList<String>()
 
@@ -115,7 +200,13 @@ internal object CrvUsbKernelProbe {
                 .map { network ->
                     val addresses = Collections.list(network.inetAddresses)
                         .joinToString(",") { it.hostAddress ?: "?" }
-                    "${network.name}(up=${network.isUp},loop=${network.isLoopback},addr=$addresses)"
+                    val sysfs = runCatching {
+                        val path = File("/sys/class/net/${network.name}/device").canonicalFile
+                        val driver = File(path, "driver").canonicalFile.name
+                        "${path.name}/$driver"
+                    }.getOrDefault("?")
+                    "${network.name}(up=${network.isUp},loop=${network.isLoopback}," +
+                        "addr=$addresses,sysfs=$sysfs)"
                 }
                 .filter { summary ->
                     val lower = summary.lowercase(Locale.US)
@@ -144,7 +235,10 @@ internal object CrvUsbKernelProbe {
             lower.contains("cdc_mbim")
     }
 
+    private fun hex4(value: Int): String = "%04x".format(Locale.US, value and 0xffff)
+
     private const val MAX_ITEMS = 24
+    private const val MAX_PARENT_DEPTH = 8
     private const val KERNEL_NCM_POLL_MILLIS = 100L
     private const val REQUIRED_STABLE_SAMPLES = 3
 }
