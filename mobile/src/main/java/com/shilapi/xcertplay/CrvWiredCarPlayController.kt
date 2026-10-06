@@ -163,6 +163,10 @@ class CrvWiredCarPlayController(
         }
     }
 
+    fun updateSurface(surface: Surface?) {
+        sink.updateSurface(surface)
+    }
+
     fun sendTouch(x: Double, y: Double, down: Boolean): Boolean {
         val session = activeSession ?: return false
         return session.sendTouch(
