@@ -455,8 +455,25 @@ class CrvWiredCarPlayController(
     }
 
     private fun openNcm(device: UsbDevice): NcmUsbBridge {
+        report(
+            "USB layout " +
+                (0 until device.interfaceCount).joinToString(" ") { index ->
+                    val usbInterface = device.getInterface(index)
+                    "#${usbInterface.id}/${usbInterface.alternateSetting}:" +
+                        "${usbInterface.interfaceClass.toString(16)}." +
+                        "${usbInterface.interfaceSubclass.toString(16)}." +
+                        "${usbInterface.interfaceProtocol.toString(16)}" +
+                        "x${usbInterface.endpointCount}"
+                },
+        )
         val function = NcmFunctionDiscovery.find(device)
             ?: throw IphoneUsbException.Protocol("CarPlay USB layout exposes no CDC-NCM function")
+        report(
+            "NCM selected ctrl=${function.control.id}/${function.control.alternateSetting} " +
+                "data=${function.data.id}/${function.data.alternateSetting} " +
+                "in=0x${function.bulkIn.address.toString(16)} " +
+                "out=0x${function.bulkOut.address.toString(16)}",
+        )
         val connection = usbManager.openDevice(device)
             ?: throw IphoneUsbException.DeviceUnavailable("Could not open iPhone NCM USB connection")
         return NcmUsbBridge.open(connection, function)
