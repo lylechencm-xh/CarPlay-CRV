@@ -425,6 +425,7 @@ class NcmUsbBridge internal constructor(
         private const val CDC_ETHERNET_SUBTYPE = 0x0f
         private const val USB_ENGLISH_US = 0x0409
         private const val USB_CONTROL_TIMEOUT_MILLIS = 1_000
+        private const val DATA_ALT_SETTING_DISABLED = 0
         private const val DATA_ALT_SETTING_FALLBACK = 1
     }
 }
