@@ -53,6 +53,52 @@ object UsbActiveConfiguration {
         return (result[0].toInt() and 0xff).takeIf { it != 0 }
     }
 
+    fun configurationValues(raw: ByteArray): List<Int> {
+        val values = ArrayList<Int>()
+        var offset = 0
+        while (offset + 2 <= raw.size) {
+            val length = raw[offset].toInt() and 0xff
+            val type = raw[offset + 1].toInt() and 0xff
+            if (length < 2 || offset + length > raw.size) break
+            if (type == USB_CONFIGURATION_DESCRIPTOR_TYPE &&
+                length >= USB_CONFIGURATION_DESCRIPTOR_LENGTH
+            ) {
+                val value = raw[offset + 5].toInt() and 0xff
+                if (value != 0 && value !in values) values += value
+            }
+            offset += length
+        }
+        return values
+    }
+
+    fun selectValue(connection: UsbDeviceConnection, configurationValue: Int): Boolean {
+        require(configurationValue in 1..255) { "USB configuration value must fit in one byte" }
+        val transferred = try {
+            connection.controlTransfer(
+                UsbConstants.USB_DIR_OUT or UsbConstants.USB_TYPE_STANDARD,
+                USB_REQUEST_SET_CONFIGURATION,
+                configurationValue,
+                0,
+                null,
+                0,
+                CONTROL_TIMEOUT_MILLIS,
+            )
+        } catch (_: RuntimeException) {
+            return false
+        }
+        if (transferred != 0) return false
+        repeat(CONFIGURATION_VERIFY_ATTEMPTS) {
+            if (readValue(connection) == configurationValue) return true
+            try {
+                Thread.sleep(CONFIGURATION_VERIFY_DELAY_MILLIS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return false
+            }
+        }
+        return false
+    }
+
     fun interfaces(raw: ByteArray, configurationValue: Int): List<InterfaceDescriptor> {
         val result = ArrayList<InterfaceDescriptor>()
         var currentConfiguration = -1
@@ -196,6 +242,7 @@ object UsbActiveConfiguration {
     }
 
     private const val USB_REQUEST_GET_CONFIGURATION = 0x08
+    private const val USB_REQUEST_SET_CONFIGURATION = 0x09
     private const val USB_CONFIGURATION_DESCRIPTOR_TYPE = 0x02
     private const val USB_INTERFACE_DESCRIPTOR_TYPE = 0x04
     private const val USB_ENDPOINT_DESCRIPTOR_TYPE = 0x05
@@ -203,4 +250,6 @@ object UsbActiveConfiguration {
     private const val USB_INTERFACE_DESCRIPTOR_LENGTH = 9
     private const val USB_ENDPOINT_DESCRIPTOR_LENGTH = 7
     private const val CONTROL_TIMEOUT_MILLIS = 1_000
+    private const val CONFIGURATION_VERIFY_ATTEMPTS = 10
+    private const val CONFIGURATION_VERIFY_DELAY_MILLIS = 25L
 }
