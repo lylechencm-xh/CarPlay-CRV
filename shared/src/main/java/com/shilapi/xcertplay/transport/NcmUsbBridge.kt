@@ -356,7 +356,15 @@ class NcmUsbBridge internal constructor(
             alternateSetting: Int = DATA_ALT_SETTING_FALLBACK,
         ): Boolean {
             if (android.os.Build.VERSION.SDK_INT >= 21) {
-                return UsbInterfaceApi21.select(connection, usbInterface)
+                return try {
+                    val method = connection.javaClass.getMethod(
+                        "setInterface",
+                        UsbInterface::class.java,
+                    )
+                    method.invoke(connection, usbInterface) as? Boolean ?: false
+                } catch (_: Exception) {
+                    false
+                }
             }
             return UsbLegacySelection.setInterface(
                 connection,
