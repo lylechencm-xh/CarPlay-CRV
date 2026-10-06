@@ -118,6 +118,11 @@ val verifyStandaloneAuthentication by tasks.registering {
     }
 }
 tasks.named("preBuild") { mustRunAfter(verifyStandaloneAuthentication) }
+
+// The CR-V APK is never assembled without its target-specific regression tests.
+tasks.matching { it.name == "assembleDebug" }.configureEach {
+    dependsOn("testDebugUnitTest")
+}
 tasks.register("assembleStandaloneDebug") {
     group = "build"
     description = "Build a standalone car-test APK with explicitly provisioned authentication."
