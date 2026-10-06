@@ -256,10 +256,21 @@ class IphoneUsbHost(
             val usbMux = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 selectUsbMuxFromConfiguration(connection, device)
             } else {
-                IphoneCarPlayConfiguration.usbMuxInterface(device)
+                val activeConfiguration = UsbActiveConfiguration.readValue(connection)
                     ?: throw IphoneUsbException.Protocol(
-                        "Active iPhone USB layout exposes no USBMUX interface",
+                        "Could not read active iPhone USB configuration",
                     )
+                Log.i(
+                    IphoneCarPlayConfiguration.TAG,
+                    "active USB configuration=$activeConfiguration",
+                )
+                IphoneCarPlayConfiguration.usbMuxInterface(
+                    device,
+                    connection.rawDescriptors,
+                    activeConfiguration,
+                ) ?: throw IphoneUsbException.Protocol(
+                    "Active iPhone USB configuration $activeConfiguration exposes no USBMUX interface",
+                )
             }
             val endpoints = IphoneCarPlayConfiguration.usbMuxEndpoints(usbMux)
                 ?: throw IphoneUsbException.Protocol("USBMUX interface exposes no bulk endpoint pair")
