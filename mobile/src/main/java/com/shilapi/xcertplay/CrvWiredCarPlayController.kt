@@ -301,25 +301,57 @@ class CrvWiredCarPlayController(
         if (attached is CarPlayVpnService.AttachResult.Failed && activeKernelNcm != null) {
             report(
                 "Kernel CDC-NCM AirPlay bind failed: ${attached.message}; " +
-                    "trying userspace NCM fallback",
+                    "rechecking Honda kernel link before fallback",
             )
-            activeKernelNcm = null
-            val fallback = openNcm(device)
-            ncm = fallback
-            activeNcmBridge = fallback
-            activeHostMac = fallback.hostMac ?: macBytes(deviceId)
-            activeLinkLocal = LINK_LOCAL
-            attached = vpn.attach(
-                ncm = fallback,
-                linkLocal = activeLinkLocal,
-                hostMac = activeHostMac,
-                config = airPlay,
-                identity = identity,
-                pairings = pairingStore,
-                mfi = null,
-                listener = listener,
-                media = media,
-            )
+            val refreshed = CrvUsbKernelProbe.waitForKernelNcm(KERNEL_NCM_RETRY_WAIT_MILLIS)
+            if (refreshed != null) {
+                activeKernelNcm = refreshed
+                activeHostMac = refreshed.hardwareAddress
+                    ?.takeIf { it.size == 6 }
+                    ?: activeHostMac
+                activeLinkLocal = refreshed.linkLocal.hostAddress.substringBefore('%')
+                report(
+                    "Honda kernel CDC-NCM still healthy interface=${refreshed.interfaceName}; " +
+                        "retrying scoped AirPlay bind",
+                )
+                attached = vpn.attachKernelNetwork(
+                    bindAddress = refreshed.linkLocal,
+                    config = airPlay,
+                    identity = identity,
+                    pairings = pairingStore,
+                    mfi = null,
+                    listener = listener,
+                    media = media,
+                )
+                if (attached is CarPlayVpnService.AttachResult.Failed) {
+                    throw IphoneUsbException.DeviceUnavailable(
+                        "Kernel CDC-NCM is healthy but AirPlay bind failed after retry: " +
+                            attached.message,
+                    )
+                }
+            } else {
+                report(
+                    "Honda kernel CDC-NCM disappeared after bind failure; " +
+                        "using userspace NCM fallback",
+                )
+                activeKernelNcm = null
+                val fallback = openNcm(device)
+                ncm = fallback
+                activeNcmBridge = fallback
+                activeHostMac = fallback.hostMac ?: macBytes(deviceId)
+                activeLinkLocal = LINK_LOCAL
+                attached = vpn.attach(
+                    ncm = fallback,
+                    linkLocal = activeLinkLocal,
+                    hostMac = activeHostMac,
+                    config = airPlay,
+                    identity = identity,
+                    pairings = pairingStore,
+                    mfi = null,
+                    listener = listener,
+                    media = media,
+                )
+            }
         }
 
         when (attached) {
@@ -707,5 +739,6 @@ class CrvWiredCarPlayController(
         private const val PAIR_TIMEOUT_MILLIS = 5 * 60_000L
         private const val VPN_CONNECT_TIMEOUT_MILLIS = 5_000L
         private const val KERNEL_NCM_WAIT_MILLIS = 2_500L
+        private const val KERNEL_NCM_RETRY_WAIT_MILLIS = 1_000L
     }
 }
