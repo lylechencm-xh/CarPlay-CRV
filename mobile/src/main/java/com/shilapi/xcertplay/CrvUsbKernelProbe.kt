@@ -6,7 +6,7 @@ import java.net.NetworkInterface
 import java.util.Collections
 import java.util.Locale
 
-/** Read-only diagnostics for OEM USB/network drivers that may own the iPhone NCM interfaces. */
+/** Diagnostics plus narrowly-scoped bring-up for OEM USB/NCM interfaces owned by the current iPhone. */
 internal object CrvUsbKernelProbe {
     data class ExpectedUsbNcm(
         val configurationValue: Int,
@@ -132,7 +132,7 @@ internal object CrvUsbKernelProbe {
         val resultCode: Int?,
         val error: String?,
     ) {
-        val successful: Boolean get() = interfaceName != null && (resultCode == null || resultCode == 0)
+        val successful: Boolean get() = interfaceName != null && error == null && resultCode == 0
     }
 
     /**
@@ -278,6 +278,9 @@ internal object CrvUsbKernelProbe {
     private fun readHex(file: File): Int? =
         runCatching { file.readText().trim().toInt(16) }.getOrNull()
 
+    private fun readText(file: File): String? =
+        runCatching { file.readText().trim().takeIf { it.isNotEmpty() } }.getOrNull()
+
     private fun hasCarrier(interfaceName: String): Boolean {
         val carrier = File("/sys/class/net/$interfaceName/carrier")
         if (!carrier.exists()) return true
@@ -319,7 +322,13 @@ internal object CrvUsbKernelProbe {
                         val driver = File(path, "driver").canonicalFile.name
                         "${path.name}/$driver"
                     }.getOrDefault("?")
+                    val carrier = readText(File("/sys/class/net/${network.name}/carrier"))
+                    val operstate = readText(File("/sys/class/net/${network.name}/operstate"))
+                    val disableIpv6 = readText(File("/proc/sys/net/ipv6/conf/${network.name}/disable_ipv6"))
+                    val autoconf = readText(File("/proc/sys/net/ipv6/conf/${network.name}/autoconf"))
                     "${network.name}(up=${network.isUp},loop=${network.isLoopback}," +
+                        "carrier=${carrier ?: "?"},oper=${operstate ?: "?"}," +
+                        "ipv6Disabled=${disableIpv6 ?: "?"},autoconf=${autoconf ?: "?"}," +
                         "addr=$addresses,sysfs=$sysfs)"
                 }
                 .filter { summary ->
