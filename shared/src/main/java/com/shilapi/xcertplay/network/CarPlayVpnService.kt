@@ -178,6 +178,20 @@ class CarPlayVpnService : VpnService() {
     /** Port the AirPlay listener actually bound, which may differ from the configured port. */
     fun boundPort(): Int? = attachment?.config?.port
 
+    /**
+     * Installs the authenticator after the wired transport has reached the MFi boundary.
+     *
+     * The listener may be brought up earlier for USB/NCM/VPN diagnostics on legacy head units.
+     * Existing AirPlay sessions keep the authenticator they were created with; wired CarPlay
+     * installs this before iAP2 advertises the endpoint, so no normal AirPlay session exists yet.
+     */
+    @Synchronized
+    fun updateMfiAuthenticator(mfi: MfiAuthenticator) {
+        val current = attachment
+            ?: throw IllegalStateException("AirPlay transport is not attached")
+        attachment = current.copy(mfi = mfi)
+    }
+
     override fun onDestroy() {
         detach()
         super.onDestroy()
