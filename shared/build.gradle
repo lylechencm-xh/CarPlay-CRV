@@ -35,9 +35,7 @@ android {
 dependencies {
     implementation libs.androidx.app
     implementation libs.bouncycastle
-    implementation libs.bctls
     implementation libs.jmdns
     testImplementation libs.junit
-    testImplementation libs.bctls
     testImplementation 'org.robolectric:robolectric:4.17'
 }
