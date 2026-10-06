@@ -253,7 +253,7 @@ class NcmUsbBridge internal constructor(
         fun open(connection: UsbDeviceConnection, function: NcmFunctionDiscovery.NcmFunction): NcmUsbBridge {
             val claimed = ArrayList<UsbInterface>(2)
             try {
-                val descriptorHostMac = readNcmHostMac(connection, function.control.id)
+                val descriptorHostMac = readNcmHostMac(connection, function)
                 Log.i(
                     IphoneCarPlayConfiguration.TAG,
                     "ncm descriptor hostMac=${descriptorHostMac?.macString() ?: "unavailable"}",
@@ -370,8 +370,16 @@ class NcmUsbBridge internal constructor(
             return result >= 0
         }
 
-        private fun readNcmHostMac(connection: UsbDeviceConnection, controlInterfaceId: Int): ByteArray? {
-            val index = ethernetMacStringIndex(connection.rawDescriptors, controlInterfaceId) ?: return null
+        private fun readNcmHostMac(
+            connection: UsbDeviceConnection,
+            function: NcmFunctionDiscovery.NcmFunction,
+        ): ByteArray? {
+            val configurationValue = function.configurationValue ?: return null
+            val index = ethernetMacStringIndex(
+                connection.rawDescriptors,
+                configurationValue,
+                function.control.id,
+            ) ?: return null
             val buffer = ByteArray(256)
             val length = connection.controlTransfer(
                 UsbConstants.USB_DIR_IN or UsbConstants.USB_TYPE_STANDARD,
@@ -391,26 +399,29 @@ class NcmUsbBridge internal constructor(
             return ByteArray(6) { offset -> hex.substring(offset * 2, offset * 2 + 2).toInt(16).toByte() }
         }
 
-        private fun ethernetMacStringIndex(raw: ByteArray, controlInterfaceId: Int): Int? {
-            var offset = 0
-            var currentInterface = -1
-            while (offset + 2 <= raw.size) {
-                val length = raw[offset].toInt() and 0xff
-                val type = raw[offset + 1].toInt() and 0xff
-                if (length < 2 || offset + length > raw.size) return null
-                if (type == USB_INTERFACE_DESCRIPTOR_TYPE && length >= 9) {
-                    currentInterface = raw[offset + 2].toInt() and 0xff
-                } else if (
-                    type == CDC_FUNCTIONAL_DESCRIPTOR_TYPE &&
-                    length >= 4 &&
-                    currentInterface == controlInterfaceId &&
-                    (raw[offset + 2].toInt() and 0xff) == CDC_ETHERNET_SUBTYPE
+        internal fun ethernetMacStringIndex(
+            raw: ByteArray,
+            configurationValue: Int,
+            controlInterfaceId: Int,
+        ): Int? {
+            val control = UsbActiveConfiguration.interfaces(raw, configurationValue)
+                .firstOrNull {
+                    it.number == controlInterfaceId &&
+                        it.alternateSetting == 0 &&
+                        it.interfaceClass == NcmFunctionDiscovery.CONTROL_CLASS &&
+                        it.interfaceSubclass == NcmFunctionDiscovery.CONTROL_SUBCLASS
+                } ?: return null
+            return control.extraDescriptors.firstNotNullOfOrNull { descriptor ->
+                if (
+                    descriptor.size >= 4 &&
+                    (descriptor[1].toInt() and 0xff) == CDC_FUNCTIONAL_DESCRIPTOR_TYPE &&
+                    (descriptor[2].toInt() and 0xff) == CDC_ETHERNET_SUBTYPE
                 ) {
-                    return (raw[offset + 3].toInt() and 0xff).takeIf { it != 0 }
+                    (descriptor[3].toInt() and 0xff).takeIf { it != 0 }
+                } else {
+                    null
                 }
-                offset += length
             }
-            return null
         }
 
         private fun ByteArray.macString(): String =
@@ -418,7 +429,6 @@ class NcmUsbBridge internal constructor(
 
         private const val USB_RECIP_INTERFACE = 0x01
         private const val USB_REQUEST_SET_INTERFACE = 0x0b
-        private const val USB_INTERFACE_DESCRIPTOR_TYPE = 0x04
         private const val USB_REQUEST_GET_DESCRIPTOR = 0x06
         private const val USB_STRING_DESCRIPTOR_TYPE = 0x03
         private const val CDC_FUNCTIONAL_DESCRIPTOR_TYPE = 0x24
