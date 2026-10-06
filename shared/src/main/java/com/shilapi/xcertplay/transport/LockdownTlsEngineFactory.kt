@@ -42,9 +42,7 @@ object LockdownTlsEngineFactory {
                 load(null, password)
                 setKeyEntry(KEY_ALIAS, privateKey, password, arrayOf(certificate))
             }
-            val keyManagers = createKeyManagerFactory().apply {
-                init(keyStore, password)
-            }.keyManagers
+            val keyManagers = createKeyManagers(keyStore, password)
             // Android 4.2.2 / API17 platform SSLEngine only exposes TLSv1. Modern iOS
             // Lockdown requires TLSv1.2+, so use a private BCJSSE provider instead of
             // globally modifying the head unit's security-provider list.
@@ -67,18 +65,24 @@ object LockdownTlsEngineFactory {
         }
     }
 
-    private fun createKeyManagerFactory(): KeyManagerFactory {
-        val algorithms = linkedSetOf(
-            KeyManagerFactory.getDefaultAlgorithm(),
-            "X509",
-            "PKIX",
-            "SunX509",
-        )
+    private fun createKeyManagers(
+        keyStore: KeyStore,
+        password: CharArray,
+    ): Array<javax.net.ssl.KeyManager> {
+        val algorithms = linkedSetOf<String>().apply {
+            KeyManagerFactory.getDefaultAlgorithm()
+                ?.takeIf { it.isNotBlank() }
+                ?.let(::add)
+            add("X509")
+            add("PKIX")
+            add("SunX509")
+        }
         var lastFailure: GeneralSecurityException? = null
         for (algorithm in algorithms) {
-            if (algorithm.isBlank()) continue
             try {
-                return KeyManagerFactory.getInstance(algorithm)
+                val factory = KeyManagerFactory.getInstance(algorithm)
+                factory.init(keyStore, password)
+                return factory.keyManagers
             } catch (error: GeneralSecurityException) {
                 lastFailure = error
             }
