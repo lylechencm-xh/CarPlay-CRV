@@ -194,7 +194,19 @@ class CarPlayVpnService : VpnService() {
     /** API21 features are isolated so the Android 4.2.2 service class contains no direct calls. */
     private fun configureOptionalBuilderFeatures(builder: Builder) {
         if (!useScopedVpnBuilder(android.os.Build.VERSION.SDK_INT)) return
-        VpnBuilderApi21.configure(builder, packageName)
+        try {
+            val helperClass = Class.forName("com.shilapi.xcertplay.network.VpnBuilderApi21")
+            val helper = helperClass.getField("INSTANCE").get(null)
+            val method = helperClass.methods.first {
+                it.name == "configure" && it.parameterTypes.size == 2
+            }
+            method.invoke(helper, builder, packageName)
+        } catch (error: Exception) {
+            throw IOException(
+                "API21 VPN builder compatibility bridge unavailable",
+                error,
+            )
+        }
     }
 
     /** Releases the active AirPlay listener and whichever VPN/NCM transport resources are active. */
