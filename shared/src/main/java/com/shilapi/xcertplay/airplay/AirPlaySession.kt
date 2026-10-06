@@ -956,6 +956,7 @@ class AirPlaySession(
         const val ZOOM_DIRECTION_IN = 0
         const val ZOOM_DIRECTION_OUT = 1
         const val EVENT_READY_POLL_MILLIS = 25L
+        const val MFI_INJECTION_WAIT_MILLIS = 3_000L
         const val NANOS_PER_MILLISECOND = 1_000_000L
     }
 }
@@ -1014,11 +1015,6 @@ private fun asMap(value: Any?): Map<String, Any?>? {
     val result = LinkedHashMap<String, Any?>(map.size)
     for ((key, entry) in map) result[key.toString()] = entry
     return result
-    private companion object {
-        const val MFI_INJECTION_WAIT_MILLIS = 3_000L
-        const val NANOS_PER_MILLISECOND = 1_000_000L
-    }
-
 }
 
 private fun string(value: Any?): String = value as? String ?: ""
