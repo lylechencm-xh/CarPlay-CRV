@@ -114,6 +114,36 @@ jobs:
           path: mobile/build/outputs/apk/debug/mobile-debug.apk
           if-no-files-found: error
 
+      - name: Publish GitHub Release v0.2.12 API17
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v0.2.12-crv-api17"
+          ASSET="mobile/build/outputs/apk/debug/mobile-debug.apk"
+          RELEASE_ASSET="CarPlay-CRV-2021-v0.2.12-api17.apk"
+          TITLE="CarPlay CR-V 2021 v0.2.12 (Android 4.2.2 / API17)"
+          NOTES_FILE="$RUNNER_TEMP/crv-release-notes.txt"
+          cat > "$NOTES_FILE" <<EOF
+          Android 4.2.2 / API17 compatibility build for 2021 Honda CR-V.
+
+          - Package: com.shihab.diplay
+          - minSdk: 17
+          - Android 4.2.2 compatible v1/JAR signature verified by CI
+          - Signing: ${{ steps.signing.outputs.label }}
+          - Wired CarPlay path is the production target
+          - CarPlay/MFi authentication assets are not bundled; this build validates installability and the pre-auth transport path only
+          - Source commit: ${GITHUB_SHA}
+          EOF
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ASSET#$RELEASE_ASSET" --clobber
+            gh release edit "$TAG" --title "$TITLE" --notes-file "$NOTES_FILE"
+          else
+            gh release create "$TAG" "$ASSET#$RELEASE_ASSET" \
+              --target "$GITHUB_SHA" \
+              --title "$TITLE" \
+              --notes-file "$NOTES_FILE"
+          fi
+
       - name: Commit APK to repository release folder
         run: |
           mkdir -p release
