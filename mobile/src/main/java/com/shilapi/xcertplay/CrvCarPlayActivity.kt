@@ -559,6 +559,21 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         surfaceWidth = width.coerceAtLeast(1)
         surfaceHeight = height.coerceAtLeast(1)
         maybeStartCarPlay()
+        if (controller == null && pendingUsbSession == null && vpnService != null) {
+            reconnectAttempts = 0
+            reconnectGeneration++
+            val device = usbHost.discover().firstOrNull()
+            if (device != null) {
+                beginConnectionStatus("Display ready; reconnecting CarPlay")
+                if (IphoneCarPlayConfiguration.hasActiveCarPlayLayout(device)) {
+                    awaitingCarPlayReattach = false
+                    requestPermissionForCarPlay(device)
+                } else {
+                    awaitingCarPlayReattach = false
+                    requestPermission(device)
+                }
+            }
+        }
     }
 
     override fun onSurfaceTextureSizeChanged(
@@ -573,10 +588,14 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
 
     override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
+        // Clear the surface before closing the controller so its onStopped callback cannot
+        // schedule a reconnect that will immediately abort against a null TextureView surface.
+        val oldSurface = videoSurface
+        videoSurface = null
+        reconnectGeneration++
         controller?.close()
         controller = null
-        videoSurface?.release()
-        videoSurface = null
+        oldSurface?.release()
         return true
     }
 
