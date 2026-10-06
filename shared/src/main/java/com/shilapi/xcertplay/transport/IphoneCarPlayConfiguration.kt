@@ -19,6 +19,17 @@ object IphoneCarPlayConfiguration {
     private const val PREFERRED_USBMUX_OUT = 0x04
     private const val PREFERRED_USBMUX_IN = 0x85
 
+    fun carPlayConfigurationValue(rawDescriptors: ByteArray): Int? {
+        val candidates = UsbActiveConfiguration.configurationValues(rawDescriptors)
+        return candidates.firstOrNull { value ->
+            val descriptors = UsbActiveConfiguration.interfaces(rawDescriptors, value)
+            hasUsbMux(descriptors) && hasCdcNcm(descriptors) && hasAppleEthernet(descriptors)
+        } ?: candidates.firstOrNull { value ->
+            val descriptors = UsbActiveConfiguration.interfaces(rawDescriptors, value)
+            hasUsbMux(descriptors) && hasCdcNcm(descriptors)
+        }
+    }
+
     fun usbMuxInterface(device: UsbDevice): UsbInterface? =
         (0 until device.interfaceCount).map(device::getInterface).firstOrNull {
             it.interfaceClass == USBMUX_CLASS &&
@@ -60,6 +71,34 @@ object IphoneCarPlayConfiguration {
 
     fun hasActiveCarPlayLayout(device: UsbDevice, rawDescriptors: ByteArray): Boolean =
         hasActiveCarPlayLayout(device, rawDescriptors, null)
+
+    private fun hasUsbMux(
+        descriptors: List<UsbActiveConfiguration.InterfaceDescriptor>,
+    ): Boolean = descriptors.any {
+        it.interfaceClass == USBMUX_CLASS &&
+            it.interfaceSubclass == USBMUX_SUBCLASS &&
+            it.interfaceProtocol == USBMUX_PROTOCOL &&
+            it.alternateSetting == 0 &&
+            it.endpoints.count { endpoint ->
+                endpoint.type == UsbConstants.USB_ENDPOINT_XFER_BULK
+            } >= 2
+    }
+
+    private fun hasCdcNcm(
+        descriptors: List<UsbActiveConfiguration.InterfaceDescriptor>,
+    ): Boolean = descriptors.any {
+        it.interfaceClass == NcmFunctionDiscovery.CONTROL_CLASS &&
+            it.interfaceSubclass == NcmFunctionDiscovery.CONTROL_SUBCLASS &&
+            it.alternateSetting == 0
+    }
+
+    private fun hasAppleEthernet(
+        descriptors: List<UsbActiveConfiguration.InterfaceDescriptor>,
+    ): Boolean = descriptors.any {
+        it.interfaceClass == NcmFunctionDiscovery.APPLE_ETHERNET_CLASS &&
+            it.interfaceSubclass == NcmFunctionDiscovery.APPLE_ETHERNET_SUBCLASS &&
+            it.interfaceProtocol == NcmFunctionDiscovery.APPLE_ETHERNET_PROTOCOL
+    }
 
     fun usbMuxEndpoints(usbInterface: UsbInterface): Pair<UsbEndpoint, UsbEndpoint>? {
         val endpoints = (0 until usbInterface.endpointCount).map(usbInterface::getEndpoint)
