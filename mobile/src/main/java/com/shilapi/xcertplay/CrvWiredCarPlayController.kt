@@ -307,6 +307,12 @@ class CrvWiredCarPlayController(
                     CrvMfiAssets.provisioningDirectory(appContext),
             )
             throw error
+        } catch (error: Exception) {
+            report(
+                "MFi identity invalid; transport pre-auth verified type=" +
+                    error.javaClass.simpleName,
+            )
+            throw error
         }
         report("MFi authentication ready source=${mfiLease?.source ?: "unknown"}")
         vpn.updateMfiAuthenticator(mfi)
