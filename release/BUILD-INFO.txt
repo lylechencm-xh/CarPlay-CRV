@@ -4,5 +4,5 @@ minSdk=17
 signing=debug-signed
 carplay_authentication=not-bundled
 test_scope=install-and-transport-preauth
-source_commit=c098740c441d2dc0324353a2b325b39a2a4f287a
+source_commit=94c21cd1456b42f247db7d2f4cb52a13106c2a7e
 Upstream commit: fd9850c665feb5192ffb41e8b2b69e990b19558d
