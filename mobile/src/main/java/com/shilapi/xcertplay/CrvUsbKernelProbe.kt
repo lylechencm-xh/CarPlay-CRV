@@ -1,12 +1,70 @@
 package com.shilapi.xcertplay
 
 import java.io.File
+import java.net.Inet6Address
 import java.net.NetworkInterface
 import java.util.Collections
 import java.util.Locale
 
 /** Read-only diagnostics for OEM USB/network drivers that may own the iPhone NCM interfaces. */
 internal object CrvUsbKernelProbe {
+    data class KernelNcmNetwork(
+        val interfaceName: String,
+        val linkLocal: Inet6Address,
+        val hardwareAddress: ByteArray?,
+    )
+
+    fun waitForKernelNcm(timeoutMillis: Long): KernelNcmNetwork? {
+        val deadline = System.nanoTime() + timeoutMillis.coerceAtLeast(0L) * 1_000_000L
+        do {
+            findKernelNcm()?.let { return it }
+            if (System.nanoTime() >= deadline) return null
+            try {
+                Thread.sleep(KERNEL_NCM_POLL_MILLIS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return null
+            }
+        } while (true)
+    }
+
+    fun findKernelNcm(): KernelNcmNetwork? {
+        if (!hasBoundCdcNcmDriver()) return null
+        val networks = runCatching {
+            Collections.list(NetworkInterface.getNetworkInterfaces())
+        }.getOrElse { emptyList() }
+        return networks
+            .filter { network ->
+                val lower = network.name.lowercase(Locale.US)
+                (lower.startsWith("usb") || lower.contains("ncm")) &&
+                    runCatching { network.isUp && !network.isLoopback }.getOrDefault(false)
+            }
+            .sortedWith(compareBy<NetworkInterface> {
+                if (it.name.lowercase(Locale.US).startsWith("usb")) 0 else 1
+            }.thenBy { it.name })
+            .firstNotNullOfOrNull { network ->
+                val linkLocal = runCatching {
+                    Collections.list(network.inetAddresses)
+                        .filterIsInstance<Inet6Address>()
+                        .firstOrNull { it.isLinkLocalAddress }
+                }.getOrNull() ?: return@firstNotNullOfOrNull null
+                KernelNcmNetwork(
+                    interfaceName = network.name,
+                    linkLocal = linkLocal,
+                    hardwareAddress = runCatching { network.hardwareAddress?.copyOf() }.getOrNull(),
+                )
+            }
+    }
+
+    private fun hasBoundCdcNcmDriver(): Boolean {
+        val driver = File("/sys/bus/usb/drivers/cdc_ncm")
+        return runCatching {
+            driver.isDirectory && driver.listFiles().orEmpty().any {
+                val name = it.name
+                ":" in name && !name.startsWith(".")
+            }
+        }.getOrDefault(false)
+    }
     fun collect(): List<String> {
         val lines = ArrayList<String>()
 
@@ -67,4 +125,5 @@ internal object CrvUsbKernelProbe {
     }
 
     private const val MAX_ITEMS = 24
+    private const val KERNEL_NCM_POLL_MILLIS = 100L
 }
