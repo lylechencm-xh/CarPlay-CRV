@@ -25,6 +25,12 @@ jobs:
         with:
           gradle-version: '9.5.0'
 
+      - name: Install API17-compatible Android NDK
+        run: |
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort | tail -1)"
+          test -n "$SDKMANAGER"
+          "$SDKMANAGER" "ndk;23.2.8568313" "cmake;3.22.1"
+
       - name: Enforce CR-V Android 4.2.2 / API17 baseline
         run: python3 .github/scripts/check-crv-baseline.py
 
@@ -110,19 +116,19 @@ jobs:
       - name: Upload CR-V 2021 APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarPlay-CRV-2021-v0.2.15-api17-${{ steps.signing.outputs.label }}
+          name: CarPlay-CRV-2021-v0.2.16-api17-${{ steps.signing.outputs.label }}
           path: mobile/build/outputs/apk/debug/mobile-debug.apk
           if-no-files-found: error
 
-      - name: Publish GitHub Release v0.2.15 API17
+      - name: Publish GitHub Release v0.2.16 API17
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v0.2.15-crv-api17"
+          TAG="v0.2.16-crv-api17"
           SOURCE_APK="mobile/build/outputs/apk/debug/mobile-debug.apk"
-          RELEASE_NAME="CarPlay-CRV-2021-v0.2.15-api17.apk"
+          RELEASE_NAME="CarPlay-CRV-2021-v0.2.16-api17.apk"
           RELEASE_APK="$RUNNER_TEMP/$RELEASE_NAME"
-          TITLE="CarPlay CR-V 2021 v0.2.15 (Android 4.2.2 / API17)"
+          TITLE="CarPlay CR-V 2021 v0.2.16 (Android 4.2.2 / API17)"
           NOTES_FILE="$RUNNER_TEMP/crv-release-notes.txt"
           cp "$SOURCE_APK" "$RELEASE_APK"
           cat > "$NOTES_FILE" <<EOF
