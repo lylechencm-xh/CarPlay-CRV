@@ -126,6 +126,78 @@ internal object CrvUsbKernelProbe {
             "usb=${hex4(expected.vendorId)}:${hex4(expected.productId)} " +
             "bus=${expected.busNumber ?: -1} dev=${expected.deviceNumber ?: -1}"
 
+    data class KernelBringUpResult(
+        val interfaceName: String?,
+        val attempted: Boolean,
+        val resultCode: Int?,
+        val error: String?,
+    ) {
+        val successful: Boolean get() = interfaceName != null && (resultCode == null || resultCode == 0)
+    }
+
+    /**
+     * Android 4.2.x exposes hidden NetworkUtils.enableInterface(), backed by ifc_enable().
+     * Try it only after the sysfs USB identity proves this netdev belongs to the current iPhone
+     * CarPlay configuration. Permission/capability failures are non-fatal; callers can fall back
+     * to the userspace NCM bridge.
+     */
+    fun tryBringUpKernelNcm(expected: ExpectedUsbNcm): KernelBringUpResult {
+        val interfaceName = findBoundKernelNcmInterface(expected)
+            ?: return KernelBringUpResult(null, false, null, "no matching cdc_ncm netdev")
+        val network = runCatching { NetworkInterface.getByName(interfaceName) }.getOrNull()
+        if (network != null && runCatching { network.isUp }.getOrDefault(false)) {
+            return KernelBringUpResult(interfaceName, false, 0, null)
+        }
+
+        return try {
+            val networkUtils = Class.forName("android.net.NetworkUtils")
+            val enable = networkUtils.getDeclaredMethod("enableInterface", String::class.java)
+            enable.isAccessible = true
+            val code = (enable.invoke(null, interfaceName) as? Number)?.toInt()
+            KernelBringUpResult(interfaceName, true, code, null)
+        } catch (error: Throwable) {
+            val cause = error.cause ?: error
+            KernelBringUpResult(
+                interfaceName = interfaceName,
+                attempted = true,
+                resultCode = null,
+                error = cause.javaClass.simpleName + ": " + cause.message.orEmpty(),
+            )
+        }
+    }
+
+    private fun findBoundKernelNcmInterface(expected: ExpectedUsbNcm): String? {
+        val names = runCatching {
+            File("/sys/class/net").listFiles().orEmpty().map { it.name }
+        }.getOrElse { emptyList() }
+        for (name in names.sorted()) {
+            val interfacePath = runCatching {
+                File("/sys/class/net/$name/device").canonicalFile
+            }.getOrNull()?.takeIf { it.exists() } ?: continue
+            val driverName = runCatching {
+                File(interfacePath, "driver").canonicalFile.name
+            }.getOrNull() ?: continue
+            if (driverName != "cdc_ncm") continue
+
+            val parsed = parseUsbInterfaceName(interfacePath.name) ?: continue
+            if (parsed.first != expected.configurationValue) continue
+            if (parsed.second !in expected.interfaceNumbers) continue
+
+            val usbDevice = findUsbDeviceParent(interfacePath) ?: continue
+            val vendor = readHex(File(usbDevice, "idVendor")) ?: continue
+            val product = readHex(File(usbDevice, "idProduct")) ?: continue
+            val bus = readInt(File(usbDevice, "busnum"))
+            val dev = readInt(File(usbDevice, "devnum"))
+            val kernelConfiguration = readInt(File(usbDevice, "bConfigurationValue"))
+            if (vendor != expected.vendorId || product != expected.productId) continue
+            if (kernelConfiguration != expected.configurationValue) continue
+            if (expected.busNumber != null && bus != null && bus != expected.busNumber) continue
+            if (expected.deviceNumber != null && dev != null && dev != expected.deviceNumber) continue
+            return name
+        }
+        return null
+    }
+
     private fun inspectNetwork(
         network: NetworkInterface,
         expected: ExpectedUsbNcm,
