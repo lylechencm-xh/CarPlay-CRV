@@ -9,7 +9,7 @@ import com.shilapi.xcertplay.transport.Ch341I2cTransport
 import com.shilapi.xcertplay.transport.Ch341UsbHost
 import com.shilapi.xcertplay.transport.Ch341UsbSession
 import com.shilapi.xcertplay.transport.I2cTransportException
- import com.shilapi.xcertplay.transport.UsbDeviceId
+import com.shilapi.xcertplay.transport.UsbDeviceId
 import java.io.Closeable
 import java.io.File
 import java.util.concurrent.CountDownLatch
@@ -197,6 +197,7 @@ internal object CrvMfiProvider {
     private const val CH341_VENDOR_ID = 0x1a86
     private const val CH341_I2C_PRODUCT_ID = 0x5512
     private const val PERMISSION_TIMEOUT_MILLIS = 15_000L
-     private val I2C_NODE = Regex("i2c-[0-9]+")
+    private const val MAX_CERTIFICATE_PROBE_BYTES = 1280
+    private val I2C_NODE = Regex("i2c-[0-9]+")
     private const val MAX_I2C_NODES = 16
- }
+}
