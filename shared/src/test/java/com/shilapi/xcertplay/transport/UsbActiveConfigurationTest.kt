@@ -36,6 +36,29 @@ class UsbActiveConfigurationTest {
     }
 
     @Test
+    fun discoversCarPlayConfigurationWhenActiveDefaultHasNoUsbMux() {
+        val raw = concat(
+            configuration(2, 1),
+            interfaceDescriptor(0, 0, 2, 0xff, 0xfd, 0x01),
+            endpoint(0x81, 0x02),
+            endpoint(0x02, 0x02),
+            configuration(6, 3),
+            interfaceDescriptor(1, 0, 2, 0xff, 0xfe, 0x02),
+            endpoint(0x85, 0x02),
+            endpoint(0x04, 0x02),
+            interfaceDescriptor(2, 0, 1, 0x02, 0x0d, 0),
+            byteArrayOf(5, 0x24, 0x06, 2, 3),
+            endpoint(0x86, 0x03),
+            interfaceDescriptor(3, 1, 2, 0x0a, 0, 0),
+            endpoint(0x87, 0x02),
+            endpoint(0x05, 0x02),
+        )
+
+        assertEquals(listOf(2, 6), UsbActiveConfiguration.configurationValues(raw))
+        assertEquals(6, IphoneCarPlayConfiguration.carPlayConfigurationValue(raw))
+    }
+
+    @Test
     fun malformedDescriptorStopsWithoutLeakingAnotherConfiguration() {
         val raw = concat(
             configuration(6, 1),
