@@ -29,7 +29,7 @@ jobs:
         run: |
           SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort | tail -1)"
           test -n "$SDKMANAGER"
-          "$SDKMANAGER" "ndk;23.2.8568313" "cmake;3.22.1"
+          "$SDKMANAGER" "platforms;android-17" "ndk;23.2.8568313" "cmake;3.22.1"
 
       - name: Enforce CR-V Android 4.2.2 / API17 baseline
         run: python3 .github/scripts/check-crv-baseline.py
@@ -86,6 +86,9 @@ jobs:
 
       - name: Build CR-V 2021 Android 4.2.2 APK
         run: ./gradlew :mobile:assembleDebug --stacktrace
+
+      - name: Verify final APK API17 platform surface
+        run: python3 .github/scripts/verify-crv-apk.py mobile/build/outputs/apk/debug/mobile-debug.apk
 
       - name: Verify APK v1/JAR signature for Android 4.2.2
         run: |
