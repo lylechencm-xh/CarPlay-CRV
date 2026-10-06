@@ -385,10 +385,24 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     @Synchronized
     private fun maybeStartCarPlay() {
         if (controller != null) return
-        val device = pendingDevice ?: return
-        val usb = pendingUsbSession ?: return
-        val vpn = vpnService ?: return
-        val surface = videoSurface ?: return
+        val device = pendingDevice
+        val usb = pendingUsbSession
+        val vpn = vpnService
+        val surface = videoSurface
+        if (device == null || usb == null || vpn == null || surface == null) {
+            val waiting = mutableListOf<String>()
+            if (device == null || usb == null) waiting += "USB session"
+            if (vpn == null) waiting += "VPN service"
+            if (surface == null) waiting += "display surface"
+            if (pendingUsbSession != null) {
+                connectionStatus("Waiting for " + waiting.joinToString(", "))
+                diagnostics.log(
+                    CrvConnectionStage.NETWORK_READY,
+                    "controller waiting for " + waiting.joinToString(", "),
+                )
+            }
+            return
+        }
 
         pendingDevice = null
         pendingUsbSession = null
