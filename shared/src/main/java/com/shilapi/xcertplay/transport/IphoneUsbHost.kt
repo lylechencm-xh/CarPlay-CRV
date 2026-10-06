@@ -315,23 +315,47 @@ class IphoneUsbHost(
         }
     }
 
-    @android.annotation.TargetApi(21)
     private fun selectUsbMuxFromConfiguration(
         connection: UsbDeviceConnection,
         device: UsbDevice,
     ): UsbInterface {
-        val configuration = IphoneCarPlayConfigurationApi21.find(device)
-            ?: throw IphoneUsbException.Protocol(
-                "Re-enumerated iPhone exposes no USBMUX CarPlay configuration",
+        try {
+            val helperClass = Class.forName(
+                "com.shilapi.xcertplay.transport.IphoneCarPlayConfigurationApi21",
             )
-        if (!connection.setConfiguration(configuration)) {
-            Log.w(
-                IphoneCarPlayConfiguration.TAG,
-                "setConfiguration ${configuration.id} reported failure; claiming anyway",
+            val helper = helperClass.getField("INSTANCE").get(null)
+            val find = helperClass.methods.firstOrNull {
+                it.name == "find" && it.parameterTypes.size == 1
+            } ?: throw NoSuchMethodException("IphoneCarPlayConfigurationApi21.find")
+            val configuration = find.invoke(helper, device)
+                ?: throw IphoneUsbException.Protocol(
+                    "Re-enumerated iPhone exposes no USBMUX CarPlay configuration",
+                )
+            val configurationClass = configuration.javaClass
+            val configurationId = configurationClass.getMethod("getId").invoke(configuration) as? Int ?: -1
+            val setConfiguration = connection.javaClass.methods.firstOrNull {
+                it.name == "setConfiguration" && it.parameterTypes.size == 1
+            } ?: throw NoSuchMethodException("UsbDeviceConnection.setConfiguration")
+            val selected = setConfiguration.invoke(connection, configuration) as? Boolean ?: false
+            if (!selected) {
+                Log.w(
+                    IphoneCarPlayConfiguration.TAG,
+                    "setConfiguration $configurationId reported failure; claiming anyway",
+                )
+            }
+            val usbMux = helperClass.methods.firstOrNull {
+                it.name == "usbMuxInterface" && it.parameterTypes.size == 1
+            } ?: throw NoSuchMethodException("IphoneCarPlayConfigurationApi21.usbMuxInterface")
+            return usbMux.invoke(helper, configuration) as? UsbInterface
+                ?: throw IphoneUsbException.Protocol("CarPlay configuration exposes no USBMUX interface")
+        } catch (error: IphoneUsbException) {
+            throw error
+        } catch (error: Exception) {
+            throw IphoneUsbException.DeviceUnavailable(
+                "Android API21 USB configuration bridge unavailable",
+                error,
             )
         }
-        return IphoneCarPlayConfigurationApi21.usbMuxInterface(configuration)
-            ?: throw IphoneUsbException.Protocol("CarPlay configuration exposes no USBMUX interface")
     }
 
     private fun requireConfiguredDevice(device: UsbDevice) {
