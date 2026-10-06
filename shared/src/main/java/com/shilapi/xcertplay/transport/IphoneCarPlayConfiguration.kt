@@ -29,6 +29,9 @@ object IphoneCarPlayConfiguration {
     fun hasActiveCarPlayLayout(device: UsbDevice): Boolean =
         usbMuxInterface(device) != null && NcmFunctionDiscovery.find(device) != null
 
+    fun hasActiveCarPlayLayout(device: UsbDevice, rawDescriptors: ByteArray): Boolean =
+        usbMuxInterface(device) != null && NcmFunctionDiscovery.find(device, rawDescriptors) != null
+
     fun usbMuxEndpoints(usbInterface: UsbInterface): Pair<UsbEndpoint, UsbEndpoint>? {
         val endpoints = (0 until usbInterface.endpointCount).map(usbInterface::getEndpoint)
         val out = endpoints.firstOrNull {
