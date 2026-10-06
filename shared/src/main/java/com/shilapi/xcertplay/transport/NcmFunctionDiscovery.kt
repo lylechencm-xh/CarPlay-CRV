@@ -92,16 +92,22 @@ object NcmFunctionDiscovery {
         }
         for (control in controls) {
             val unionDataNumber = unionSlaveInterface(control)
-            val data = descriptors
+            val bulkData = descriptors
                 .filter { descriptor ->
-                    descriptor.interfaceClass == DATA_CLASS &&
-                        (unionDataNumber == null || descriptor.number == unionDataNumber)
+                    descriptor.interfaceClass == DATA_CLASS && hasBulkPair(descriptor)
                 }
-                .filter(::hasBulkPair)
-                .minByOrNull {
-                    if (it.alternateSetting == DATA_ALTERNATE_SETTING) 0 else 1
-                }
-                ?: continue
+
+            val dataCandidates = if (unionDataNumber != null) {
+                bulkData.filter { it.number == unionDataNumber }
+            } else {
+                val distinctNumbers = bulkData.map { it.number }.distinct()
+                if (distinctNumbers.size != 1) continue
+                bulkData
+            }
+
+            val data = dataCandidates.minByOrNull {
+                if (it.alternateSetting == DATA_ALTERNATE_SETTING) 0 else 1
+            } ?: continue
             return control to data
         }
         return null
