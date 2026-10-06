@@ -8,6 +8,7 @@ import android.content.ServiceConnection
 import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.graphics.SurfaceTexture
+import android.graphics.Typeface
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Bundle
@@ -27,6 +28,7 @@ import com.shilapi.xcertplay.transport.IphoneCarPlayConfiguration
 import com.shilapi.xcertplay.transport.IphoneUsbHost
 import com.shilapi.xcertplay.transport.IphoneUsbMatcher
 import java.io.Closeable
+import java.util.ArrayDeque
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -45,7 +47,10 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private lateinit var diagnostics: CrvDiagnostics
     private lateinit var modeButton: TextView
     private var connectionMode = CrvConnectionMode.WIRED
-    @Volatile private var connectionStatusActive = false
+    @Volatile private var connectionStatusActive = true
+    private val statusLines = ArrayDeque<String>()
+    private var statusSequence = 0
+    private var lastStatusMessage: String? = null
 
     private val io: ExecutorService = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -159,17 +164,21 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
         status = TextView(this).apply {
             text = ""
-            visibility = android.view.View.GONE
+            visibility = android.view.View.VISIBLE
             setTextColor(Color.WHITE)
-            setBackgroundColor(0x99000000.toInt())
-            gravity = Gravity.CENTER
-            setPadding(18, 12, 18, 12)
+            setBackgroundColor(0x88000000.toInt())
+            gravity = Gravity.LEFT or Gravity.TOP
+            typeface = Typeface.MONOSPACE
+            textSize = 14f
+            setSingleLine(false)
+            maxLines = STATUS_MAX_LINES
+            setPadding(14, 10, 14, 10)
         }
 
         setContentView(FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             addView(video, FrameLayout.LayoutParams(-1, -1))
-            addView(status, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+            addView(status, FrameLayout.LayoutParams(-1, -2, Gravity.TOP or Gravity.LEFT))
             if (!Crv2021Config.WIRED_ONLY) {
                 addView(modeButton, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.END))
             }
@@ -177,6 +186,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
         diagnostics = CrvDiagnostics(this)
         diagnostics.log("app started api=" + android.os.Build.VERSION.SDK_INT)
+        appendStatusLine("App started (Android API " + android.os.Build.VERSION.SDK_INT + ")")
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
         usbHost = IphoneUsbHost(this, usbManager, IphoneUsbMatcher.appleVendor())
 
@@ -451,15 +461,15 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         val stage = stageFor(message)
         if (message == "CarPlay active") {
             diagnostics.log(CrvConnectionStage.CARPLAY_ACTIVE, message)
-            mainHandler.post {
-                if (!destroyed) {
+            connectionStatus(message)
+            mainHandler.postDelayed({
+                if (!destroyed && controller != null) {
                     reconnectAttempts = 0
                     reconnectGeneration++
                     connectionStatusActive = false
-                    status.text = ""
                     status.visibility = android.view.View.GONE
                 }
-            }
+            }, STATUS_HIDE_AFTER_ACTIVE_MILLIS)
             return
         }
 
@@ -520,29 +530,39 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     private fun connectionStatus(message: String) {
         if (!connectionStatusActive) return
-        runOnUiThread {
-            if (destroyed) return@runOnUiThread
-            status.text = message
-            status.visibility = android.view.View.VISIBLE
-        }
+        appendStatusLine(message)
     }
 
     private fun connectionError(message: String) {
         diagnostics.log(CrvConnectionStage.ERROR, message)
         connectionStatusActive = true
-        runOnUiThread {
-            if (destroyed) return@runOnUiThread
-            status.text = "Error: $message"
-            status.visibility = android.view.View.VISIBLE
-        }
+        appendStatusLine("ERROR: $message")
     }
 
     private fun hideConnectionStatus() {
-        connectionStatusActive = false
+        connectionStatusActive = true
+        appendStatusLine("Waiting for iPhone USB")
+    }
+
+    private fun appendStatusLine(message: String) {
         runOnUiThread {
             if (destroyed) return@runOnUiThread
-            status.text = ""
-            status.visibility = android.view.View.GONE
+            if (message == lastStatusMessage) return@runOnUiThread
+            lastStatusMessage = message
+            statusSequence += 1
+            val line = String.format(java.util.Locale.US, "%02d  %s", statusSequence, message)
+            statusLines.addLast(line)
+            while (statusLines.size > STATUS_MAX_LINES) {
+                statusLines.removeFirst()
+            }
+            val builder = StringBuilder()
+            val iterator = statusLines.iterator()
+            while (iterator.hasNext()) {
+                if (builder.isNotEmpty()) builder.append('\n')
+                builder.append(iterator.next())
+            }
+            status.text = builder.toString()
+            status.visibility = android.view.View.VISIBLE
         }
     }
 
@@ -665,6 +685,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         private const val REQUEST_VPN = 1001
         private const val VPN_BIND_TIMEOUT_MILLIS = 3_000L
         private const val VPN_BIND_RETRY_MILLIS = 1_000L
+        private const val STATUS_MAX_LINES = 16
+        private const val STATUS_HIDE_AFTER_ACTIVE_MILLIS = 2_000L
         private const val USB_REENUMERATION_TIMEOUT_MILLIS = 15_000L
         private const val USB_REENUMERATION_POLL_MILLIS = 500L
         private val RECONNECT_DELAYS_MILLIS = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L)
