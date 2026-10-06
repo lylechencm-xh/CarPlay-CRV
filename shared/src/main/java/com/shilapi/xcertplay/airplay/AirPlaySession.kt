@@ -164,6 +164,7 @@ class AirPlaySession(
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        synchronized(mfiLock) { mfiLock.notifyAll() }
         mainScreenToken = null
         clearClusterContent()
         try { socket.close() } catch (_: Exception) { }
