@@ -512,9 +512,21 @@ class CrvWiredCarPlayController(
                 throw IphoneUsbException.Protocol("Could not read active iPhone USB configuration")
             }
         report("USB active configuration=$activeConfiguration")
+        val rawDescriptors = connection.rawDescriptors
+        val activeLayout = UsbActiveConfiguration.interfaces(rawDescriptors, activeConfiguration)
+        report(
+            "USB active layout " + activeLayout.joinToString(" ") { descriptor ->
+                "#${descriptor.number}/${descriptor.alternateSetting}:" +
+                    "${descriptor.interfaceClass.toString(16)}." +
+                    "${descriptor.interfaceSubclass.toString(16)}." +
+                    "${descriptor.interfaceProtocol.toString(16)}" +
+                    "x${descriptor.endpointCount}"
+            },
+        )
+        CrvUsbKernelProbe.collect().forEach(report)
         val function = NcmFunctionDiscovery.find(
             device,
-            connection.rawDescriptors,
+            rawDescriptors,
             activeConfiguration,
         ) ?: run {
             connection.close()
