@@ -63,10 +63,12 @@ class AirPlaySession(
     private val config: AirPlayConfig,
     private val identity: AirPlayIdentity,
     private val pairings: PairingStore,
-    private val mfi: MfiAuthenticator?,
+    mfi: MfiAuthenticator?,
     private val listener: AirPlaySessionListener,
     private val media: AirPlayMediaHandler,
 ) : Closeable {
+    @Volatile private var mfi: MfiAuthenticator? = mfi
+
     internal val pairSetup = PairSetup(identity, pairings)
     internal val pairVerify = PairVerify(identity, pairings)
     internal var cipher: ControlCipher? = null
@@ -113,6 +115,12 @@ class AirPlaySession(
     }
 
     fun syncedNtp(): BigInteger = ntp.syncedNtp()
+
+    /** Updates the authenticator for a session accepted before wired iAP2 reaches the MFi boundary. */
+    fun updateMfiAuthenticator(next: MfiAuthenticator) {
+        mfi = next
+        debugLog("airplay MFi authenticator installed")
+    }
 
     internal fun logDebug(message: String) = debugLog(message)
 
