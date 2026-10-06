@@ -106,11 +106,15 @@ object CrvMfiAssets {
         }
 
         val staging = File(parent, "${LocalMfiAuthenticationClient.DIRECTORY}-install")
+        val backup = File(parent, "${LocalMfiAuthenticationClient.DIRECTORY}-backup")
         staging.deleteRecursively()
+        backup.deleteRecursively()
         if (!staging.mkdirs()) {
             throw IllegalStateException("Could not prepare MFi private staging directory")
         }
 
+        var movedOldTarget = false
+        var installedNewTarget = false
         try {
             for (name in requiredFiles) {
                 File(source, name).inputStream().use { input ->
@@ -119,12 +123,33 @@ object CrvMfiAssets {
             }
             LocalMfiAuthenticationClient.load(staging)
 
-            target.deleteRecursively()
+            if (target.exists()) {
+                if (!target.renameTo(backup)) {
+                    throw IllegalStateException("Could not preserve existing MFi identity")
+                }
+                movedOldTarget = true
+            }
             if (!staging.renameTo(target)) {
+                if (movedOldTarget) {
+                    runCatching { backup.renameTo(target) }
+                }
                 throw IllegalStateException("Could not install MFi identity into private storage")
             }
+            installedNewTarget = true
+            // Verify the final location before discarding the previous known-good copy.
+            LocalMfiAuthenticationClient.load(target)
+            backup.deleteRecursively()
+        } catch (error: Throwable) {
+            if (installedNewTarget) {
+                target.deleteRecursively()
+            }
+            if (movedOldTarget && backup.exists() && !target.exists()) {
+                runCatching { backup.renameTo(target) }
+            }
+            throw error
         } finally {
             staging.deleteRecursively()
+            if (target.exists()) backup.deleteRecursively()
         }
     }
 
