@@ -595,6 +595,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         videoSurface = Surface(texture)
         surfaceWidth = width.coerceAtLeast(1)
         surfaceHeight = height.coerceAtLeast(1)
+        controller?.updateSurface(videoSurface)
         maybeStartCarPlay()
         if (controller == null && pendingUsbSession == null) {
             reconnectAttempts = 0
@@ -625,13 +626,11 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
 
     override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
-        // Clear the surface before closing the controller so its onStopped callback cannot
-        // schedule a reconnect that will immediately abort against a null TextureView surface.
+        // API17 cannot retarget an existing MediaCodec, so detach/recreate only the decoder.
+        // Keep USB/NCM/Lockdown/iAP2/AirPlay alive across ordinary TextureView recreation.
         val oldSurface = videoSurface
         videoSurface = null
-        reconnectGeneration++
-        controller?.close()
-        controller = null
+        controller?.updateSurface(null)
         oldSurface?.release()
         return true
     }
