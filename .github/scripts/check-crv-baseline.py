@@ -15,9 +15,11 @@ for path, pattern in checks.items():
         failures.append(f"{path}: CR-V baseline must remain minSdk=17 (Android 4.2.2)")
 
 workflow = Path(".github/workflows/crv-2021.yml").read_text(encoding="utf-8")
-for required in ("Android 4.2.2", "api17", "minSdk=17", "check-api17-java.py"):
+for required in ("Android 4.2.2", "api17", "check-api17-java.py"):
     if required not in workflow:
         failures.append(f"workflow baseline marker missing: {required}")
+if not re.search(r"minSdk\s*[:=]\s*17\b", workflow):
+    failures.append("workflow baseline marker missing: minSdk 17")
 
 if failures:
     print("CR-V API17 baseline violation:", file=sys.stderr)
