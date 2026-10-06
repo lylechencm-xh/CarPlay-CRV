@@ -19,6 +19,7 @@ import com.shilapi.xcertplay.airplay.PairingStore
 import com.shilapi.xcertplay.mfi.MfiAuthenticator
 import com.shilapi.xcertplay.transport.NcmUsbBridge
 import java.io.IOException
+import java.lang.reflect.InvocationTargetException
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -195,13 +196,21 @@ class CarPlayVpnService : VpnService() {
     private fun configureOptionalBuilderFeatures(builder: Builder) {
         if (!useScopedVpnBuilder(android.os.Build.VERSION.SDK_INT)) return
         try {
-            val helperClass = Class.forName("com.shilapi.xcertplay.network.VpnBuilderApi21")
-            val helper = helperClass.getField("INSTANCE").get(null)
-            val method = helperClass.methods.first {
-                it.name == "configure" && it.parameterTypes.size == 2
-            }
-            method.invoke(helper, builder, packageName)
-        } catch (error: Exception) {
+            val setBlocking = builder.javaClass.methods.firstOrNull {
+                it.name == "setBlocking" && it.parameterTypes.contentEquals(
+                    arrayOf(Boolean::class.javaPrimitiveType),
+                )
+            } ?: throw NoSuchMethodException("VpnService.Builder.setBlocking")
+            setBlocking.invoke(builder, true)
+
+            val addAllowedApplication = builder.javaClass.methods.firstOrNull {
+                it.name == "addAllowedApplication" &&
+                    it.parameterTypes.contentEquals(arrayOf(String::class.java))
+            } ?: throw NoSuchMethodException("VpnService.Builder.addAllowedApplication")
+            addAllowedApplication.invoke(builder, packageName)
+        } catch (error: InvocationTargetException) {
+            throw error.targetException
+        } catch (error: ReflectiveOperationException) {
             throw IOException(
                 "API21 VPN builder compatibility bridge unavailable",
                 error,
