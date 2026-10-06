@@ -21,7 +21,10 @@ internal object TunIoCompatibility {
                 "eagain" in message ||
                 "ewouldblock" in message ||
                 "resource temporarily unavailable" in message ||
-                "try again" in message
+                "try again" in message ||
+                "errno=11" in message ||
+                "errno 11" in message ||
+                "error 11" in message
             ) return true
             current = current.cause
         }
