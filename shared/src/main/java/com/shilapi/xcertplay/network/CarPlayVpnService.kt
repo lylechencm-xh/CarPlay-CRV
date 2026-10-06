@@ -190,6 +190,11 @@ class CarPlayVpnService : VpnService() {
         val current = attachment
             ?: throw IllegalStateException("AirPlay transport is not attached")
         attachment = current.copy(mfi = mfi)
+        synchronized(sessionsLock) {
+            sessions.toList().forEach { session ->
+                runCatching { session.updateMfiAuthenticator(mfi) }
+            }
+        }
     }
 
     override fun onDestroy() {
