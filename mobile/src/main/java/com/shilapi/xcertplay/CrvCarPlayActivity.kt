@@ -1,10 +1,8 @@
 package com.shilapi.xcertplay
 
 import android.app.Activity
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.ServiceConnection
 import android.content.pm.ActivityInfo
 import android.graphics.Color
 import android.graphics.SurfaceTexture
@@ -13,7 +11,6 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Bundle
 import android.os.Handler
-import android.os.IBinder
 import android.os.Looper
 import android.view.Gravity
 import android.view.MotionEvent
@@ -71,29 +68,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private var surfaceWidth = Crv2021Config.CARPLAY_WIDTH
     private var surfaceHeight = Crv2021Config.CARPLAY_HEIGHT
 
-    private var vpnService: CarPlayVpnService? = null
-    private var vpnBound = false
     private var controller: CrvWiredCarPlayController? = null
-
-    private val vpnConnection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
-            vpnService = (binder as CarPlayVpnService.LocalBinder).service
-            vpnBound = true
-            connectionStatus("CarPlay network ready")
-            maybeStartCarPlay()
-        }
-
-        override fun onServiceDisconnected(name: ComponentName) {
-            vpnBound = false
-            vpnService = null
-            controller?.close()
-            controller = null
-            connectionError("CarPlay network service stopped")
-            if (!destroyed) {
-                mainHandler.postDelayed({ if (!destroyed && !vpnBound) bindVpn() }, VPN_BIND_RETRY_MILLIS)
-            }
-        }
-    }
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
@@ -253,8 +228,9 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private fun prepareVpn() {
         val consent = CarPlayVpnService.prepare(this)
         if (consent == null) {
-            bindVpn()
+            connectionStatus("CarPlay network permission ready")
         } else {
+            connectionStatus("Requesting CarPlay network permission")
             startActivityForResult(consent, REQUEST_VPN)
         }
     }
@@ -264,28 +240,11 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != REQUEST_VPN) return
         if (resultCode == RESULT_OK) {
-            bindVpn()
+            connectionStatus("CarPlay network permission granted")
+            maybeStartCarPlay()
         } else {
             connectionError("CarPlay network permission required")
         }
-    }
-
-    private fun bindVpn() {
-        if (vpnBound || destroyed) return
-        connectionStatus("Starting CarPlay network service")
-        val intent = Intent(this, CarPlayVpnService::class.java)
-        if (!bindService(intent, vpnConnection, Context.BIND_AUTO_CREATE)) {
-            connectionError("Could not start CarPlay network service")
-            mainHandler.postDelayed({ if (!destroyed && !vpnBound) bindVpn() }, VPN_BIND_RETRY_MILLIS)
-            return
-        }
-        mainHandler.postDelayed({
-            if (!destroyed && !vpnBound && vpnService == null) {
-                diagnostics.log(CrvConnectionStage.NETWORK_READY, "VPN service bind timed out; retrying")
-                runCatching { unbindService(vpnConnection) }
-                bindVpn()
-            }
-        }, VPN_BIND_TIMEOUT_MILLIS)
     }
 
     private fun requestPermission(device: UsbDevice) {
@@ -410,12 +369,10 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         if (controller != null) return
         val device = pendingDevice
         val usb = pendingUsbSession
-        val vpn = vpnService
         val surface = videoSurface
-        if (device == null || usb == null || vpn == null || surface == null) {
+        if (device == null || usb == null || surface == null) {
             val waiting = mutableListOf<String>()
             if (device == null || usb == null) waiting += "USB session"
-            if (vpn == null) waiting += "VPN service"
             if (surface == null) waiting += "display surface"
             if (pendingUsbSession != null) {
                 connectionStatus("Waiting for " + waiting.joinToString(", "))
@@ -433,7 +390,6 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         val next = CrvWiredCarPlayController(
             context = this,
             usbManager = usbManager,
-            vpn = vpn,
             surface = surface,
             displayWidth = surfaceWidth,
             displayHeight = surfaceHeight,
@@ -482,7 +438,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     private fun scheduleReconnect() {
-        if (destroyed || videoSurface == null || vpnService == null) return
+        if (destroyed || videoSurface == null) return
         if (reconnectAttempts >= MAX_AUTOMATIC_RECONNECTS) {
             connectionError("CarPlay stopped; reconnect iPhone to retry")
             return
@@ -503,8 +459,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 generation != reconnectGeneration ||
                 controller != null ||
                 pendingUsbSession != null ||
-                videoSurface == null ||
-                vpnService == null
+                videoSurface == null
             ) {
                 return@postDelayed
             }
@@ -606,7 +561,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         surfaceWidth = width.coerceAtLeast(1)
         surfaceHeight = height.coerceAtLeast(1)
         maybeStartCarPlay()
-        if (controller == null && pendingUsbSession == null && vpnService != null) {
+        if (controller == null && pendingUsbSession == null) {
             reconnectAttempts = 0
             reconnectGeneration++
             val device = usbHost.discover().firstOrNull()
@@ -667,12 +622,6 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         pendingUsbSession = null
         pendingDevice = null
 
-        if (vpnBound) {
-            runCatching { unbindService(vpnConnection) }
-            vpnBound = false
-        }
-        vpnService = null
-
         videoSurface?.release()
         videoSurface = null
 
@@ -683,8 +632,6 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     companion object {
         private const val REQUEST_VPN = 1001
-        private const val VPN_BIND_TIMEOUT_MILLIS = 3_000L
-        private const val VPN_BIND_RETRY_MILLIS = 1_000L
         private const val STATUS_MAX_LINES = 16
         private const val STATUS_HIDE_AFTER_ACTIVE_MILLIS = 2_000L
         private const val USB_REENUMERATION_TIMEOUT_MILLIS = 15_000L
