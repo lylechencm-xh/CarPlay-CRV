@@ -200,14 +200,25 @@ class CrvWiredCarPlayController(
         } else {
             null
         }
-        val kernelNcm = expectedKernelNcm?.let { expected ->
+        var kernelNcm = expectedKernelNcm?.let { expected ->
             CrvUsbKernelProbe.waitForKernelNcm(expected, KERNEL_NCM_WAIT_MILLIS)?.also { network ->
-                report(
-                    "Honda kernel CDC-NCM ready interface=${network.interfaceName} " +
-                        "ipv6=${network.linkLocal.hostAddress} " +
-                        "kernelCfg=${network.kernelConfigurationValue} " +
-                        "usbIface=${network.usbInterfaceNumber} sysfs=${network.sysfsInterfaceName}",
-                )
+                reportKernelNcmReady(network)
+            }
+        }
+        if (mode == CrvConnectionMode.WIRED && kernelNcm == null && expectedKernelNcm != null) {
+            val bringUp = CrvUsbKernelProbe.tryBringUpKernelNcm(expectedKernelNcm)
+            report(
+                "Honda kernel CDC-NCM bring-up interface=${bringUp.interfaceName ?: "none"} " +
+                    "attempted=${bringUp.attempted} result=${bringUp.resultCode ?: -1}" +
+                    (bringUp.error?.let { " detail=$it" } ?: ""),
+            )
+            if (bringUp.interfaceName != null) {
+                kernelNcm = CrvUsbKernelProbe.waitForKernelNcm(
+                    expectedKernelNcm,
+                    KERNEL_NCM_BRINGUP_WAIT_MILLIS,
+                )?.also { network ->
+                    reportKernelNcmReady(network)
+                }
             }
         }
         val ncmBridge = if (mode == CrvConnectionMode.WIRED && kernelNcm == null) {
@@ -612,6 +623,15 @@ class CrvWiredCarPlayController(
         vpnService = null
     }
 
+    private fun reportKernelNcmReady(network: CrvUsbKernelProbe.KernelNcmNetwork) {
+        report(
+            "Honda kernel CDC-NCM ready interface=${network.interfaceName} " +
+                "ipv6=${network.linkLocal.hostAddress} " +
+                "kernelCfg=${network.kernelConfigurationValue} " +
+                "usbIface=${network.usbInterfaceNumber} sysfs=${network.sysfsInterfaceName}",
+        )
+    }
+
     private fun inspectExpectedKernelNcm(device: UsbDevice): CrvUsbKernelProbe.ExpectedUsbNcm {
         val connection = usbManager.openDevice(device)
             ?: throw IphoneUsbException.DeviceUnavailable(
@@ -810,6 +830,7 @@ class CrvWiredCarPlayController(
         private const val PAIR_TIMEOUT_MILLIS = 5 * 60_000L
         private const val VPN_CONNECT_TIMEOUT_MILLIS = 5_000L
         private const val KERNEL_NCM_WAIT_MILLIS = 2_500L
+        private const val KERNEL_NCM_BRINGUP_WAIT_MILLIS = 4_000L
         private const val KERNEL_NCM_RETRY_WAIT_MILLIS = 1_000L
     }
 }
