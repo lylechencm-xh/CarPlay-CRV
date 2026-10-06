@@ -22,7 +22,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Verifier-safe Android 4.4 media backend used by the 2021 CR-V build.
+ * Verifier-safe Android 4.2.2 / API17 media backend used by the 2021 CR-V build.
  *
  * Intentionally avoids every media API introduced after API19:
  * AudioAttributes, AudioFocusRequest, AudioTrack.Builder, AudioFormat.Builder,
@@ -260,7 +260,7 @@ class CrvApi19MediaSink(
             firstRendered = false
 
             if (videoCodec != VideoCodec.H264) {
-                diagnostic("HEVC disabled on Android 4.4")
+                diagnostic("HEVC disabled on Android 4.2.2")
                 requestKeyFrameIfDue()
                 return
             }
@@ -283,7 +283,7 @@ class CrvApi19MediaSink(
                 MediaCodec.createDecoderByType("video/avc").also { codec ->
                     codec.configure(format, surface, null, 0)
                     codec.start()
-                    diagnostic("API19 H.264 decoder ready")
+                    diagnostic("API17 H.264 decoder ready")
                 }
             } catch (error: Exception) {
                 diagnostic("H.264 decoder failed: ${error.javaClass.simpleName}")
@@ -477,7 +477,7 @@ class CrvApi19MediaSink(
                 return
             }
             track = audio
-            report("Audio API19 ready: ${format.codec} ${format.sampleRate}Hz")
+            report("Audio API17 ready: ${format.codec} ${format.sampleRate}Hz")
         }
 
         private fun configureDecoder() {
