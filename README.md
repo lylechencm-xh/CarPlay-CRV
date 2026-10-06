@@ -195,23 +195,17 @@ CR-V 2021 Android 4.2.2 Build
 8. APK `minSdk=17` 检查；
 9. APK 签名信息检查；
 10. 上传 GitHub Actions Artifact；
-11. 更新 `release/` 目录中的测试 APK。
+11. 发布/更新 GitHub Release 中的正式 API17 APK。
 
 ## APK 产物
 
 CI 成功后会生成：
 
 ```text
-CarPlay-CRV-2021-v0.2.12-api17.apk
+CarPlay-CRV-2021-v0.2.13-api17.apk
 ```
 
-并记录：
-
-```text
-release/BUILD-INFO.txt
-```
-
-其中包括版本、包名、minSdk、签名模式、源码 commit 和上游版本信息。
+Release 说明会记录版本、包名、minSdk、签名模式和源码 commit；APK 不再自动提交回 `main`。
 
 ## CR-V 车机安装说明
 
