@@ -369,7 +369,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                         pendingUsbSession = result.session
                         pendingDevice = device
                     }
-                    connectionStatus("USBMUX connected")
+                    connectionStatus("USB bulk data path open")
                     runOnUiThread { maybeStartCarPlay() }
                 }
                 is IphoneUsbHost.Iap2SessionResult.Failed -> {
