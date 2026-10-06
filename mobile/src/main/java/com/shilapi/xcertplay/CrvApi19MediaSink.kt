@@ -36,6 +36,8 @@ class CrvApi19MediaSink(
     private val report: (String) -> Unit = {},
 ) : MediaSink, Closeable {
     @Volatile private var outputSurface: Surface? = surface
+    private val videoLock = Any()
+    private val closed = AtomicBoolean(false)
 
     private val audioManager =
         context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -61,31 +63,37 @@ class CrvApi19MediaSink(
     private val microphones = ConcurrentHashMap<AudioStreamId, CrvApi19MicrophoneUplink>()
 
     override fun setVideoRecoveryHandler(type: Int, handler: () -> Unit) {
-        recoveryHandlers[type] = handler
+        if (!closed.get()) recoveryHandlers[type] = handler
     }
 
     override fun setVideoDiagnosticHandler(type: Int, handler: (String) -> Unit) {
-        diagnosticHandlers[type] = handler
+        if (!closed.get()) diagnosticHandlers[type] = handler
     }
 
     override fun onVideoCodec(type: Int, codec: VideoCodec) {
-        videoCodecs[type] = codec
+        if (!closed.get()) videoCodecs[type] = codec
     }
 
     override fun onVideoConfig(type: Int, codecData: ByteArray) {
+        if (closed.get()) return
         val codec = videoCodecs[type] ?: VideoCodec.H264
         videoConfigs[type] = codecData.copyOf()
         decoder(type)?.configure(codec, codecData)
     }
 
     override fun onVideoFrame(type: Int, naluBytes: ByteArray) {
+        if (closed.get()) return
         decoder(type)?.submit(naluBytes)
     }
 
     fun updateSurface(surface: Surface?) {
-        outputSurface = surface
-        videoDecoders.values.toList().forEach { it.close() }
-        videoDecoders.clear()
+        if (closed.get()) return
+        val oldDecoders = synchronized(videoLock) {
+            if (closed.get()) return
+            outputSurface = surface
+            videoDecoders.values.toList().also { videoDecoders.clear() }
+        }
+        oldDecoders.forEach { it.close() }
         if (surface != null) {
             report("Video surface attached")
             recoveryHandlers.values.toList().forEach { runCatching(it) }
@@ -95,8 +103,10 @@ class CrvApi19MediaSink(
     }
 
     override fun onScreenStreamActive(type: Int, active: Boolean) {
+        if (closed.get()) return
         if (!active) {
-            videoDecoders.remove(type)?.close()
+            val decoder = synchronized(videoLock) { videoDecoders.remove(type) }
+            decoder?.close()
             videoCodecs.remove(type)
             videoConfigs.remove(type)
             recoveryHandlers.remove(type)
@@ -105,6 +115,7 @@ class CrvApi19MediaSink(
     }
 
     override fun onAudioStarted(id: AudioStreamId, format: AudioFormat, firstSample: Int) {
+        if (closed.get()) return
         ensureAudioFocus()
         audioRenderers.remove(id)?.close()
         LegacyAudioRenderer(format, report).also {
@@ -114,7 +125,7 @@ class CrvApi19MediaSink(
     }
 
     override fun onAudioRtp(id: AudioStreamId, format: AudioFormat, rtp: ByteArray, sample: Int) {
-        audioRenderers[id]?.submit(rtp, sample)
+        if (!closed.get()) audioRenderers[id]?.submit(rtp, sample)
     }
 
     override fun onAudioStopped(id: AudioStreamId) {
@@ -123,6 +134,7 @@ class CrvApi19MediaSink(
     }
 
     override fun onMicrophoneStarted(id: AudioStreamId, config: MicrophoneConfig) {
+        if (closed.get()) return
         microphones.remove(id)?.close()
         CrvApi19MicrophoneUplink(config, report).also { uplink ->
             if (uplink.start()) microphones[id] = uplink else uplink.close()
@@ -134,8 +146,12 @@ class CrvApi19MediaSink(
     }
 
     override fun close() {
-        videoDecoders.values.toList().forEach { it.close() }
-        videoDecoders.clear()
+        if (!closed.compareAndSet(false, true)) return
+        val decoders = synchronized(videoLock) {
+            outputSurface = null
+            videoDecoders.values.toList().also { videoDecoders.clear() }
+        }
+        decoders.forEach { it.close() }
         audioRenderers.values.toList().forEach { it.close() }
         audioRenderers.clear()
         abandonAudioFocus()
@@ -165,10 +181,12 @@ class CrvApi19MediaSink(
         runCatching { audioManager.abandonAudioFocus(audioFocusListener) }
     }
 
-    private fun decoder(type: Int): LegacyVideoDecoder? {
-        val surface = outputSurface ?: return null
-        return videoDecoders[type] ?: synchronized(videoDecoders) {
-            videoDecoders[type] ?: LegacyVideoDecoder(
+    private fun decoder(type: Int): LegacyVideoDecoder? =
+        synchronized(videoLock) {
+            if (closed.get()) return@synchronized null
+            videoDecoders[type]?.let { return@synchronized it }
+            val surface = outputSurface ?: return@synchronized null
+            LegacyVideoDecoder(
                 surface = surface,
                 width = videoWidth,
                 height = videoHeight,
@@ -184,7 +202,6 @@ class CrvApi19MediaSink(
                 }
             }
         }
-    }
 
     private class LegacyVideoDecoder(
         private val surface: Surface,
