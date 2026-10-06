@@ -37,6 +37,7 @@ import com.shilapi.xcertplay.transport.LockdownPairRecord
 import com.shilapi.xcertplay.transport.LockdownTlsEngineFactory
 import com.shilapi.xcertplay.transport.NcmFunctionDiscovery
 import com.shilapi.xcertplay.transport.NcmUsbBridge
+import com.shilapi.xcertplay.transport.UsbActiveConfiguration
 import java.io.Closeable
 import java.security.GeneralSecurityException
 import java.security.MessageDigest
@@ -505,13 +506,25 @@ class CrvWiredCarPlayController(
         )
         val connection = usbManager.openDevice(device)
             ?: throw IphoneUsbException.DeviceUnavailable("Could not open iPhone NCM USB connection")
-        val function = NcmFunctionDiscovery.find(device, connection.rawDescriptors)
+        val activeConfiguration = UsbActiveConfiguration.readValue(connection)
             ?: run {
                 connection.close()
-                throw IphoneUsbException.Protocol("CarPlay USB layout exposes no CDC-NCM function")
+                throw IphoneUsbException.Protocol("Could not read active iPhone USB configuration")
             }
+        report("USB active configuration=$activeConfiguration")
+        val function = NcmFunctionDiscovery.find(
+            device,
+            connection.rawDescriptors,
+            activeConfiguration,
+        ) ?: run {
+            connection.close()
+            throw IphoneUsbException.Protocol(
+                "Active USB configuration $activeConfiguration exposes no CDC-NCM function",
+            )
+        }
         report(
-            "NCM selected ctrl=${function.control.id} " +
+            "NCM selected cfg=${function.configurationValue ?: -1} " +
+                "ctrl=${function.control.id} " +
                 "data=${function.data.id}/${function.dataAlternateSetting} " +
                 "in=0x${function.bulkIn.address.toString(16)} " +
                 "out=0x${function.bulkOut.address.toString(16)}",
