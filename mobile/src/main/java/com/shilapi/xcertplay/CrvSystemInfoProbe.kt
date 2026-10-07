@@ -45,9 +45,9 @@ internal class CrvSystemInfoProbe(context: Context) {
             "id=${safe(Build.ID)} display=${safe(Build.DISPLAY)} " +
             "type=${safe(Build.TYPE)} tags=${safe(Build.TAGS)}"
         out += "System ABI primary=${safe(Build.CPU_ABI)} secondary=${safe(Build.CPU_ABI2)} " +
-            "arch=${safe(System.getProperty(\"os.arch\"))}"
+            "arch=${safe(System.getProperty("os.arch"))}"
         out += "System runtime processors=${Runtime.getRuntime().availableProcessors()} " +
-            "java=${safe(System.getProperty(\"java.version\"))}"
+            "java=${safe(System.getProperty("java.version"))}"
     }
 
     private fun collectProperties(out: MutableList<String>) {
@@ -145,7 +145,7 @@ internal class CrvSystemInfoProbe(context: Context) {
             }.getOrElse { emptyList() }
             out += "System net iface=${safe(network.name)} up=${runCatching { network.isUp }.getOrDefault(false)} " +
                 "loopback=${runCatching { network.isLoopback }.getOrDefault(false)} " +
-                "mtu=${runCatching { network.mtu }.getOrDefault(-1)} addresses=${addresses.joinToString(\",\")}"
+                "mtu=${runCatching { network.mtu }.getOrDefault(-1)} addresses=${addresses.joinToString(",")}"
         }
     }
 
