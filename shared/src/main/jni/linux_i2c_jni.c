@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #define MAX_I2C_MESSAGE_LENGTH 0xffff
@@ -146,4 +147,37 @@ Java_com_shilapi_xcertplay_transport_LinuxI2cNative_close(
     if (close(file_descriptor) != 0) {
         throw_native_error(env, errno, "close");
     }
+}
+
+
+JNIEXPORT jstring JNICALL
+Java_com_shilapi_xcertplay_CrvNativeDeviceProbe_nativeStat(
+        JNIEnv *env, jobject receiver, jstring device_path) {
+    (void) receiver;
+    if (device_path == NULL) {
+        return (*env)->NewStringUTF(env, "stat-error errno=22");
+    }
+
+    const char *path = (*env)->GetStringUTFChars(env, device_path, NULL);
+    if (path == NULL) return NULL;
+
+    struct stat info;
+    int result = stat(path, &info);
+    int error_number = result == 0 ? 0 : errno;
+    (*env)->ReleaseStringUTFChars(env, device_path, path);
+
+    char buffer[192];
+    if (result != 0) {
+        snprintf(buffer, sizeof(buffer), "stat-error errno=%d", error_number);
+    } else {
+        snprintf(
+                buffer,
+                sizeof(buffer),
+                "mode=%04o uid=%u gid=%u type=%s",
+                (unsigned int) (info.st_mode & 07777),
+                (unsigned int) info.st_uid,
+                (unsigned int) info.st_gid,
+                S_ISCHR(info.st_mode) ? "char" : (S_ISBLK(info.st_mode) ? "block" : "other"));
+    }
+    return (*env)->NewStringUTF(env, buffer);
 }
