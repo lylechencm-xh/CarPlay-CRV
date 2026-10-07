@@ -131,7 +131,7 @@ jobs:
 
       - name: Check explicit release eligibility
         id: release_guard
-        if: (github.event_name == 'workflow_dispatch' && inputs.publish_release == true) || (github.event_name == 'push' && github.event.head_commit.message == 'release(crv): manual publish v0.2.26')
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.publish_release == true) || (github.event_name == 'push' && github.event.head_commit.message == 'release-crv-manual-publish-v0.2.26') }}
         run: |
           CURRENT_MAIN="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
           if [ "$CURRENT_MAIN" = "$GITHUB_SHA" ]; then
