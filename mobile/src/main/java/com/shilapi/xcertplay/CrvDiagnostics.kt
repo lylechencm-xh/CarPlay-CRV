@@ -19,6 +19,8 @@ class CrvDiagnostics(context: Context) {
     private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
     private var lastLine: String? = null
     private var lastLineAtMillis: Long = 0L
+    private val startedAtMillis = android.os.SystemClock.elapsedRealtime()
+    private var sequence = 0L
 
     fun path(): String = file.absolutePath
 
@@ -33,21 +35,50 @@ class CrvDiagnostics(context: Context) {
             if (safe == lastLine && now - lastLineAtMillis < DEDUPE_WINDOW_MILLIS) return
             lastLine = safe
             lastLineAtMillis = now
+            sequence += 1
             try {
                 rotateIfNeeded()
                 file.parentFile?.mkdirs()
-                file.appendText("${formatter.format(Date())}  $safe\n")
+                val elapsed = now - startedAtMillis
+                file.appendText(
+                    formatter.format(Date()) +
+                        "  #" + sequence +
+                        " +" + elapsed + "ms  " +
+                        safe + "\n",
+                )
             } catch (_: Exception) {
                 // Diagnostics must never stop CarPlay bring-up.
             }
         }
     }
 
+    fun logFailure(label: String, error: Throwable) {
+        log(
+            label + " exception=" + error.javaClass.name +
+                " message=" + (error.message ?: "none"),
+        )
+        error.stackTrace.take(MAX_STACK_FRAMES).forEachIndexed { index, frame ->
+            log(
+                label + " stack#" + index + "=" +
+                    frame.className + "." + frame.methodName +
+                    "(" + (frame.fileName ?: "?") + ":" + frame.lineNumber + ")",
+            )
+        }
+        error.cause?.takeIf { it !== error }?.let { cause ->
+            log(
+                label + " cause=" + cause.javaClass.name +
+                    " message=" + (cause.message ?: "none"),
+            )
+        }
+    }
+
     private fun rotateIfNeeded() {
         if (!file.isFile || file.length() < MAX_BYTES) return
-        val old = File(file.parentFile, "carplay-crv.previous.log")
-        old.delete()
-        file.renameTo(old)
+        val old1 = File(file.parentFile, "carplay-crv.previous.log")
+        val old2 = File(file.parentFile, "carplay-crv.previous2.log")
+        old2.delete()
+        if (old1.exists()) old1.renameTo(old2)
+        file.renameTo(old1)
     }
 
     private fun sanitize(message: String): String {
@@ -67,8 +98,9 @@ class CrvDiagnostics(context: Context) {
     }
 
     companion object {
-        private const val MAX_BYTES = 256 * 1024L
-        private const val MAX_LINE = 1024
+        private const val MAX_BYTES = 1024 * 1024L
+        private const val MAX_LINE = 2048
+        private const val MAX_STACK_FRAMES = 12
         private const val DEDUPE_WINDOW_MILLIS = 1_000L
     }
 }
