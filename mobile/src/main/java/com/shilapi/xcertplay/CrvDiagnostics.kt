@@ -74,11 +74,17 @@ class CrvDiagnostics(context: Context) {
 
     private fun rotateIfNeeded() {
         if (!file.isFile || file.length() < MAX_BYTES) return
-        val old1 = File(file.parentFile, "carplay-crv.previous.log")
-        val old2 = File(file.parentFile, "carplay-crv.previous2.log")
-        old2.delete()
-        if (old1.exists()) old1.renameTo(old2)
-        file.renameTo(old1)
+        val files = listOf(
+            File(file.parentFile, "carplay-crv.previous.log"),
+            File(file.parentFile, "carplay-crv.previous2.log"),
+            File(file.parentFile, "carplay-crv.previous3.log"),
+            File(file.parentFile, "carplay-crv.previous4.log"),
+        )
+        files.last().delete()
+        for (index in files.lastIndex downTo 1) {
+            if (files[index - 1].exists()) files[index - 1].renameTo(files[index])
+        }
+        file.renameTo(files[0])
     }
 
     private fun sanitize(message: String): String {
@@ -98,7 +104,7 @@ class CrvDiagnostics(context: Context) {
     }
 
     companion object {
-        private const val MAX_BYTES = 1024 * 1024L
+        private const val MAX_BYTES = 8 * 1024 * 1024L
         private const val MAX_LINE = 2048
         private const val MAX_STACK_FRAMES = 12
         private const val DEDUPE_WINDOW_MILLIS = 1_000L
