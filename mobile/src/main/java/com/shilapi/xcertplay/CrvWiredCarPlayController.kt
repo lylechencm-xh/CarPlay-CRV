@@ -61,6 +61,7 @@ class CrvWiredCarPlayController(
     private val displayWidth: Int,
     private val displayHeight: Int,
     private val report: (String) -> Unit,
+    private val reportFailure: (String, Throwable) -> Unit = { _, _ -> },
     private val mode: CrvConnectionMode = CrvConnectionMode.WIRED,
     private val onStopped: () -> Unit = {},
 ) : Closeable {
@@ -154,7 +155,11 @@ class CrvWiredCarPlayController(
                 runWired(device, usbSession)
             } catch (error: Throwable) {
                 if (!closed.get()) {
-                    report("CarPlay failed: ${error.message ?: error.javaClass.simpleName}")
+                    reportFailure("CarPlay controller", error)
+                    report(
+                        "CarPlay failed: " + error.javaClass.name + ": " +
+                            (error.message ?: "no message"),
+                    )
                 }
             } finally {
                 cleanupAfterFailure()
