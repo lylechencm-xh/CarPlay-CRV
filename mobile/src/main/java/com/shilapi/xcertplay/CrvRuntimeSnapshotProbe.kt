@@ -3,7 +3,6 @@ package com.shilapi.xcertplay
 import android.content.Context
 import android.hardware.usb.UsbManager
 import android.os.SystemClock
-import com.shilapi.xcertplay.transport.UsbActiveConfiguration
 import java.io.File
 import java.net.NetworkInterface
 import java.util.Collections
@@ -35,23 +34,12 @@ internal class CrvRuntimeSnapshotProbe(context: Context) {
         out += "Snapshot USB count=" + devices.size
         devices.sortedBy { it.deviceId }.forEach { device ->
             val permission = runCatching { manager.hasPermission(device) }.getOrDefault(false)
-            var active = -1
-            var rawSize = -1
-            if (permission) {
-                val connection = runCatching { manager.openDevice(device) }.getOrNull()
-                if (connection != null) {
-                    active = runCatching { UsbActiveConfiguration.readValue(connection) ?: -1 }.getOrDefault(-1)
-                    rawSize = runCatching { connection.rawDescriptors.size }.getOrDefault(-1)
-                    connection.close()
-                }
-            }
             out += "Snapshot USB vid=0x" + device.vendorId.toString(16) +
                 " pid=0x" + device.productId.toString(16) +
                 " id=" + device.deviceId +
                 " permission=" + permission +
-                " activeCfg=" + active +
-                " rawDescriptorBytes=" + rawSize +
-                " interfaces=" + device.interfaceCount
+                " interfaces=" + device.interfaceCount +
+                " note=no-extra-usbfs-open-for-diagnostics"
             for (index in 0 until device.interfaceCount) {
                 val iface = device.getInterface(index)
                 out += "Snapshot USB iface index=" + index +
