@@ -165,6 +165,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         diagnostics.log("app started api=" + android.os.Build.VERSION.SDK_INT)
         val probeContext = applicationContext
         io.execute {
+            CrvSystemInfoProbe(probeContext).collect().forEach(diagnostics::log)
             CrvHondaPlatformProbe(probeContext).collect().forEach(diagnostics::log)
         }
         appendStatusLine("App started (Android API " + android.os.Build.VERSION.SDK_INT + ")")
