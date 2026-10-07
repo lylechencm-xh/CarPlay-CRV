@@ -50,6 +50,13 @@ internal object CrvMfiProvider {
         context: Context,
         report: (String) -> Unit,
     ): Lease {
+        CrvOemMfiAuthenticator.acquire(context, report)?.let { oem ->
+            return Lease(
+                client = oem.authenticator,
+                source = oem.source,
+            )
+        }
+
         reportOnboardI2cAvailability(report)
         configuredI2cNode(context)?.let { path ->
             val transport = try {
