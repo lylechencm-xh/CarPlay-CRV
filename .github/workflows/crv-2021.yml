@@ -129,9 +129,9 @@ jobs:
           path: mobile/build/outputs/apk/debug/mobile-debug.apk
           if-no-files-found: error
 
-      - name: Check manual release eligibility
+      - name: Check explicit release eligibility
         id: release_guard
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
+        if: (github.event_name == 'workflow_dispatch' && inputs.publish_release == true) || (github.event_name == 'push' && github.event.head_commit.message == 'release(crv): manual publish v0.2.26')
         run: |
           CURRENT_MAIN="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
           if [ "$CURRENT_MAIN" = "$GITHUB_SHA" ]; then
@@ -142,7 +142,7 @@ jobs:
           fi
 
       - name: Publish GitHub Release v0.2.26 API17
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true && steps.release_guard.outputs.publish == 'true'
+        if: steps.release_guard.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
