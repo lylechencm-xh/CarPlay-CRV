@@ -492,6 +492,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     private fun maybeCaptureRuntimeSnapshot(message: String) {
+        if (destroyed || diagnosticIo.isShutdown) return
         val lower = message.lowercase(java.util.Locale.US)
         val reason = when {
             "opening cdc-ncm" in lower -> "before-ncm"
@@ -713,11 +714,16 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
         if (::diagnostics.isInitialized) {
             diagnostics.log("app stopped")
-            if (::runtimeSnapshotProbe.isInitialized) {
-                runCatching { runtimeSnapshotProbe.collect("app-stop").forEach(diagnostics::log) }
+            if (::runtimeSnapshotProbe.isInitialized && !diagnosticIo.isShutdown) {
+                runCatching {
+                    diagnosticIo.execute {
+                        runtimeSnapshotProbe.collect("app-stop").forEach(diagnostics::log)
+                    }
+                }
             }
         }
-        diagnosticIo.shutdownNow()
+        // Let an already queued final diagnostic snapshot finish without blocking the UI thread.
+        diagnosticIo.shutdown()
         io.shutdownNow()
         super.onDestroy()
     }
