@@ -1,7 +1,11 @@
 package com.shilapi.xcertplay
 
 import android.content.Context
+import com.shilapi.xcertplay.mfi.MfiAuthenticationClient
 import com.shilapi.xcertplay.mfi.MfiAuthenticator
+import com.shilapi.xcertplay.mfi.MfiSelfCheck
+import com.shilapi.xcertplay.mfi.MfiProtocolMajorResult
+import com.shilapi.xcertplay.transport.LinuxI2cTransport
 import java.io.Closeable
 import java.io.File
 
@@ -28,11 +32,17 @@ internal object CrvMfiProvider {
             "MFi identity missing" -> "MFi local identity=absent"
             else -> raw.replace("MFi identity ", "MFi local identity=")
         }
+        val configured = configuredI2cNode(context)
         val nodes = i2cNodes()
-        return if (nodes.isNotEmpty()) {
-            identity + "; source=local; onboard-i2c-visible=" + nodes.joinToString { it.name }
-        } else {
-            identity + "; source=local"
+        return buildString {
+            append(identity)
+            append("; source=")
+            append(if (configured != null) "onboard-i2c-preferred" else "local")
+            if (configured != null) append("; onboard-i2c-configured=").append(configured)
+            if (nodes.isNotEmpty()) {
+                append("; onboard-i2c-visible=")
+                append(nodes.joinToString { it.name })
+            }
         }
     }
 
@@ -41,11 +51,56 @@ internal object CrvMfiProvider {
         report: (String) -> Unit,
     ): Lease {
         reportOnboardI2cAvailability(report)
+        configuredI2cNode(context)?.let { path ->
+            val transport = try {
+                LinuxI2cTransport.open(path)
+            } catch (error: Exception) {
+                report("MFi onboard I2C open failed node=$path type=${error.javaClass.simpleName}; falling back to local identity")
+                null
+            }
+            if (transport != null) {
+                try {
+                    val selfCheck = MfiSelfCheck(transport).run()
+                    val chip = selfCheck.chip
+                    if (chip != null) {
+                        val protocol = when (val result = chip.protocolMajor) {
+                            is MfiProtocolMajorResult.Value -> result.major
+                            is MfiProtocolMajorResult.MfiFailure -> null
+                            is MfiProtocolMajorResult.TransportFailure -> null
+                        }
+                        report(
+                            "MFi onboard I2C ready node=$path address=0x" +
+                                chip.address7Bit.toString(16) +
+                                " deviceVersion=0x" + chip.deviceVersion.toString(16) +
+                                " protocolMajor=" + (protocol?.toString() ?: "unknown"),
+                        )
+                        return Lease(
+                            client = MfiAuthenticationClient(transport, chip.address7Bit),
+                            source = "onboard-i2c",
+                            closeable = transport,
+                        )
+                    }
+                    report("MFi onboard I2C node=$path has no authentication coprocessor at 0x10/0x11; falling back to local identity")
+                } catch (error: Exception) {
+                    report("MFi onboard I2C probe failed node=$path type=${error.javaClass.simpleName}; falling back to local identity")
+                }
+                runCatching { transport.close() }
+            }
+        }
+
         report("MFi source=local; external CH341 disabled for CR-V")
         return Lease(
             client = CrvMfiAssets.load(context),
             source = "local",
         )
+    }
+
+    private fun configuredI2cNode(context: Context): String? {
+        val external = context.getExternalFilesDir(null) ?: return null
+        val file = File(File(external, com.shilapi.xcertplay.mfi.LocalMfiAuthenticationClient.DIRECTORY), I2C_NODE_CONFIG)
+        if (!file.isFile || file.length() !in 1..MAX_I2C_CONFIG_BYTES) return null
+        val value = runCatching { file.readText(Charsets.US_ASCII).trim() }.getOrNull() ?: return null
+        return value.takeIf { I2C_DEVICE_PATH.matches(it) }
     }
 
     private fun reportOnboardI2cAvailability(report: (String) -> Unit) {
@@ -72,5 +127,8 @@ internal object CrvMfiProvider {
             .take(MAX_I2C_NODES)
 
     private val I2C_NODE = Regex("i2c-[0-9]+")
+    private val I2C_DEVICE_PATH = Regex("/dev/i2c-[0-9]+")
+    private const val I2C_NODE_CONFIG = "i2c-node.txt"
+    private const val MAX_I2C_CONFIG_BYTES = 64L
     private const val MAX_I2C_NODES = 16
 }
