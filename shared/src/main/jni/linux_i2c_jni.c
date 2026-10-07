@@ -181,3 +181,33 @@ Java_com_shilapi_xcertplay_CrvNativeDeviceProbe_nativeStat(
     }
     return (*env)->NewStringUTF(env, buffer);
 }
+
+/* Permission-only probe: open and close the node without selecting an address or issuing I2C. */
+JNIEXPORT jstring JNICALL
+Java_com_shilapi_xcertplay_CrvNativeDeviceProbe_nativeOpenAccess(
+        JNIEnv *env, jobject receiver, jstring device_path) {
+    (void) receiver;
+    if (device_path == NULL) {
+        return (*env)->NewStringUTF(env, "open-error errno=22 (Invalid argument)");
+    }
+
+    const char *path = (*env)->GetStringUTFChars(env, device_path, NULL);
+    if (path == NULL) return NULL;
+
+    int file_descriptor;
+    do {
+        file_descriptor = open(path, O_RDWR | O_CLOEXEC);
+    } while (file_descriptor < 0 && errno == EINTR);
+    int error_number = file_descriptor < 0 ? errno : 0;
+    if (file_descriptor >= 0) close(file_descriptor);
+    (*env)->ReleaseStringUTFChars(env, device_path, path);
+
+    char buffer[192];
+    if (error_number == 0) {
+        snprintf(buffer, sizeof(buffer), "open=ok mode=read-write no-transaction");
+    } else {
+        snprintf(buffer, sizeof(buffer), "open=denied errno=%d (%s)", error_number,
+                 strerror(error_number));
+    }
+    return (*env)->NewStringUTF(env, buffer);
+}

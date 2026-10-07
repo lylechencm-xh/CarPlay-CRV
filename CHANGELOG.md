@@ -1,6 +1,24 @@
 # Unreleased
 
-Add changes after 0.2.12 here.
+Add future CR-V changes after 0.2.27 here.
+
+# CarPlay CR-V 0.2.27 — 2026-10-07
+
+- Lock the Honda CR-V runtime baseline to Android 4.2.2 / API17 with package
+  `com.shihab.diplay`, version code 46 and target SDK 28.
+- Keep the production path wired-only while retaining the legacy Wi-Fi handoff implementation for
+  later vehicle validation.
+- Prefer the matching Honda kernel CDC-NCM interface and fall back to the userspace NCM bridge when
+  the kernel network device is not usable.
+- Support OEM Binder, explicitly configured onboard I2C and locally provisioned MFi authentication
+  sources without committing credentials.
+- Verify the API17 platform surface, DEX035/single-Dex constraints, package identity and v1/JAR
+  signature in CI.
+- Publish APKs only as GitHub Actions artifacts or GitHub Release assets; remove stale tracked APKs
+  from the source tree.
+
+See [the CR-V 0.2.27 release notes](docs/RELEASE-NOTES-0.2.27-CRV.md) for build,
+installation and hardware-validation limits.
 
 # DiPlay 0.2.12 — 2026-10-04
 

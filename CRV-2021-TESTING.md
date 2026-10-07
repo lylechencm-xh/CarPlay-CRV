@@ -1,147 +1,92 @@
-# 2021 Honda CR-V Android 4.4 Wired CarPlay Test
+# 2021 Honda CR-V Android 4.2.2 CarPlay Test
 
-This branch targets the 2021 Honda CR-V Android head unit on Android 4.4 / API 19.
+This branch targets the 2021 Honda CR-V head unit running Android 4.2.2 / API17.
 
-## Scope
+## Release under test
 
-- Wired USB CarPlay only
-- Android 4.4 / API 19
-- H.264 video via platform MediaCodec
-- Audio via legacy AudioTrack
-- Touch via AirPlay HID
-- USBMUX + Lockdown + iAP2 + USB NCM + IPv6/VPN + AirPlay
-- No BYD HUD/CAN integration
-- No wireless CarPlay
-- No Compose / Media3 / Android Auto dependency
+- Version: `0.2.27`
+- Version code: `46`
+- Package: `com.shihab.diplay`
+- Git tag: `v0.2.27-crv-api17`
+- Primary mode: wired USB CarPlay
 
-## APK
+Download the APK from the matching GitHub Release or GitHub Actions artifact. APK files are not
+stored in the source repository. Prefer the fixed-signed artifact when it is available; a
+debug-signed artifact is suitable for compile/install diagnostics but may not satisfy the Honda
+native installer.
 
-Install the debug APK built by the `CR-V 2021 Android 4.4 Build` workflow.
+## Installation
 
-Debug application id:
+Update the existing package instead of uninstalling it so saved Lockdown pairings and app-private
+MFi provisioning survive:
 
-`com.shihab.diplay.crv2021`
-
-Current CR-V test version:
-
-`0.2.11-crv-2021-api19`
-
-## Stable test signing
-
-CR-V test APKs use a fixed test signing identity so later test builds can update the installed app
-without changing the Android package signature.
-
-The private test keystore is intentionally **not** committed to this public repository. GitHub Actions
-expects these repository secrets:
-
-```
-CRV_TEST_KEYSTORE_BASE64
-CRV_TEST_STORE_PASSWORD
-CRV_TEST_KEY_ALIAS
-CRV_TEST_KEY_PASSWORD
+```sh
+adb install -r CarPlay-CRV-2021-v0.2.27-api17.apk
 ```
 
-Expected APK signing certificate SHA-256:
-
-```
-E4:E5:E2:47:FF:F3:AF:8E:BE:B1:0C:2A:C4:22:E9:E4:17:25:6A:29:50:A7:74:40:DB:F8:25:09:38:47:B9:FC
-```
-
-The workflow fails instead of publishing an APK if the stable signing secrets are missing or the
-certificate fingerprint changes.
-
-## First launch
-
-1. Start **CarPlay CR-V**.
-2. Approve the Android VPN dialog. The VPN is used only to bridge the iPhone USB-NCM IPv6 link into the local AirPlay server.
-3. If the MFi identity is not provisioned, the app will report the exact directory where it expects the files.
+Confirm that the selected artifact reports package `com.shihab.diplay` and `minSdk=17` before using
+it on the head unit.
 
 ## MFi identity provisioning
 
-No accessory private key is stored in this repository or ordinary CI APKs.
+Ordinary source and CI builds contain no accessory identity. A standalone authorized test requires:
 
-Place these two files in the app external-files directory:
-
-```
+```text
 offline-mfi/identity.pk8
 offline-mfi/certificate.p7b
 ```
 
-Typical KitKat debug-package path:
+Place both files in the external-files directory printed by the application. The app validates the
+pair, installs it into app-private storage and removes the external provisioning copy. Never commit,
+upload or attach these files to a diagnostic report.
 
-```
-/sdcard/Android/data/com.shihab.diplay.crv2021/files/offline-mfi/
-```
+## Honda OEM and onboard MFi diagnostics
 
-The actual path is reported by the app if it differs.
+The MFi section of the diagnostic log records whether `link_iap_adapter` is registered, whether its
+Binder can be obtained, its descriptor/AIDL candidates, and the unambiguous certificate/signature
+methods selected. It also records the app UID/GID/groups and, for each `/dev/i2c-N`, Unix ownership,
+mode, adapter/driver metadata, and the result of opening it read-write. The open probe immediately
+closes the node and performs no I2C transaction.
 
-On the next CarPlay start, the app validates the key/certificate pair and copies it into app-private storage.
+To test one known board bus, place a text file named `i2c-node.txt` beside the `offline-mfi`
+directory contents and put exactly one path such as `/dev/i2c-1` in it. Only that explicitly selected
+node is used for the MFi register self-check; visible buses are never scanned blindly.
 
-**Do not commit, upload, or share the accessory private key.**
+## Expected wired progression
 
-## iPhone bring-up
-
-Use a direct USB cable first. Avoid hubs during initial testing.
-
-Expected status progression:
-
-```
-Connect iPhone by USB
+```text
+iPhone detected
 Switching iPhone to CarPlay USB mode
-Waiting for iPhone CarPlay USB mode
-iPhone attached
 Opening CarPlay USB data paths
-USBMUX connected
-Starting wired CarPlay
-MFi identity ready
+USB bulk data path open
+Opening CDC-NCM data path
 USBMUX ready
-Using saved iPhone pairing
-  or: iPhone Lockdown paired and saved
 iPhone Lockdown ready
 iAP2 carkit channel ready
-AirPlay listening on fe80::2:<port>
+AirPlay listening
+Transport pre-auth ready
+MFi authentication ready
 Starting iAP2 identification/MFi
-iap2 identification accepted
-iap2 authentication accepted
-iap2 power/subscriptions sent
-iap2 tx=0x4301 carplay-start-session
 CarPlay active
 ```
 
-On first Lockdown pairing, keep the iPhone unlocked and accept the trust prompt if shown.
+The implementation first tries the matching Honda kernel CDC-NCM interface. If it is unavailable,
+it reports the reason and attempts the userspace NCM fallback.
 
-## Reconnect behavior
+## What to capture
 
-The app distinguishes Apple's intentional USB detach/re-attach during CarPlay mode switching from a real cable unplug.
-
-After a real unplug or wired transport failure, the old controller is released so the next USB connection can start a fresh CarPlay transition without killing the app.
-
-## Field diagnostics
-
-The app records stage/status diagnostics only. Raw MFi keys, certificates, challenges, signatures, Lockdown private keys, and raw protocol payloads are not written by the CR-V field logger.
-
-Current log:
-
-```
-/sdcard/Android/data/com.shihab.diplay.crv2021/files/carplay-crv.log
-```
-
-Previous rotated log:
-
-```
-/sdcard/Android/data/com.shihab.diplay.crv2021/files/carplay-crv.previous.log
-```
-
-The exact base directory can vary by ROM/storage mount.
-
-## What to capture from a failed test
-
-Record:
-
+- Exact APK filename and signing label (`fixed-signed` or `debug-signed`)
 - Last status shown on screen
-- `carplay-crv.log`
-- Whether the iPhone showed a Trust/CarPlay prompt
-- Whether the phone detached/re-attached after "Switching iPhone to CarPlay USB mode"
-- Whether audio, video, or touch failed independently
+- Complete `carplay-crv-v*.log` file from the app external-files directory
+- Head-unit Android/build information and iPhone/iOS version
+- Whether Trust, CarPlay, USB and VPN prompts appeared
+- Whether failure affected connection, video, audio, microphone or touch
 
-Do not include MFi identity files in bug reports.
+Do not include MFi identities, Lockdown records, hotspot passwords or other credentials.
+
+## Hardware acceptance
+
+CI cannot establish successful operation of the Honda USB controller, kernel CDC-NCM network
+device, MFi hardware/service, Android 4.2.2 VPN/TUN implementation, decoder, audio route or touch
+panel. A release remains a hardware-validation build until the complete wired progression is
+confirmed on the target CR-V and iPhone.

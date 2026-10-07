@@ -1,39 +1,58 @@
-# Building DiPlay
+# Building CarPlay CR-V 0.2.27
 
-Requirements: JDK 25, Android SDK 37, NDK 28.2.13676358 and the included Gradle wrapper.
+## Requirements
 
-## Source and CI builds
+- JDK 17
+- Android SDK 37 plus Android platform 17
+- Android NDK `23.2.8568313`
+- CMake `3.22.1`
+- Included Gradle wrapper
 
-```sh
-./gradlew :shared:testDebugUnitTest :common:testDebugUnitTest :mobile:lintDebug :mobile:assembleDebug
-```
+The runtime baseline is Android 4.2.2 / API17. Do not raise `minSdk` to work around build or lint
+errors.
 
-The resulting source-only APK contains no accessory identity. Standalone CarPlay requires runtime authentication provisioning. Tests generate synthetic identities at runtime; no test private-key files are tracked.
+## Source and CI build
 
-## Local release packaging
-
-Provide an external asset directory using `DIPLAY_AUTH_ASSETS_DIR`. The directory must contain exactly the intended runtime files under `offline-mfi/identity.pk8` and `offline-mfi/certificate.p7b`. Neither file belongs in Git. The build permits those two files only when this explicit input is set and rejects unexpected credential containers elsewhere in APK assets.
-
-Set `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and `ANDROID_KEY_PASSWORD` locally for your Android signing key. Never commit these values or the keystore. Different signing keys cannot update an existing project-signed installation.
-
-```sh
-./gradlew :shared:testDebugUnitTest :common:testDebugUnitTest :mobile:lintRelease :mobile:assembleRelease
-```
-
-Output: `mobile/build/outputs/apk/release/mobile-release.apk`. The release APK deliberately contains the experimental identity described in the notices; it is extractable by recipients. The separate Android signing key is not included. The retired build-beta.py helper is not used; this Gradle workflow uses explicit environment inputs.
-
-The public release source archive corresponds to the tagged source and excludes runtime identities, signing keys, local configuration and build output.
-
-## Standalone car-test APK
-
-Use `:mobile:assembleStandaloneDebug` for a test APK that must connect to an iPhone:
+Run the same core checks as the CR-V workflow:
 
 ```sh
-DIPLAY_AUTH_ASSETS_DIR=/absolute/path/to/runtime-assets ./gradlew :mobile:assembleStandaloneDebug
+python3 .github/scripts/check-crv-baseline.py
+python3 .github/scripts/check-api17-java.py
+python3 scripts/check_public_tree.py
+./gradlew :shared:testDebugUnitTest :crvlegacy:assembleDebug
+./gradlew :crvlegacy:lintDebug :mobile:lintDebug
+./gradlew :mobile:assembleDebug
 ```
 
-This task refuses missing or empty runtime inputs. `assembleDebug` remains an identity-free
-source/CI build when the explicit asset input is absent; do not install that output as a
-standalone car-test package. Before delivery, verify both `assets/offline-mfi/identity.pk8`
-and `assets/offline-mfi/certificate.p7b` in the APK against the selected local inputs.
-Update the existing test app without uninstalling it to preserve its settings.
+Output: `mobile/build/outputs/apk/debug/mobile-debug.apk`.
+
+The ordinary APK contains no MFi identity. It can validate compilation, installation and transport
+pre-authentication, but standalone CarPlay authentication requires an authorized runtime identity.
+
+## Standalone car-test build
+
+Set `DIPLAY_AUTH_ASSETS_DIR` to a directory containing exactly:
+
+```text
+offline-mfi/identity.pk8
+offline-mfi/certificate.p7b
+```
+
+Then run:
+
+```sh
+./gradlew :mobile:assembleStandaloneDebug
+```
+
+The build rejects missing, empty or unexpected credential containers. These files and the Android
+signing keystore must never enter Git.
+
+## Signing and publication
+
+The GitHub workflow uses the fixed CR-V test key when its four signing secrets are configured;
+otherwise it labels the output `debug-signed`. CI verifies package `com.shihab.diplay`, `minSdk=17`,
+the API17 platform surface, DEX035/single-Dex constraints and an Android 4.2.2-compatible v1/JAR
+signature.
+
+Installable APKs are distributed only through GitHub Actions artifacts or the
+`v0.2.27-crv-api17` GitHub Release. They are deliberately excluded from the source tree.

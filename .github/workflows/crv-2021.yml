@@ -44,6 +44,9 @@ jobs:
       - name: Check Android 4.2.2 Java library surface
         run: python3 .github/scripts/check-api17-java.py
 
+      - name: Reject credentials and installable artifacts in source
+        run: python3 scripts/check_public_tree.py
+
       - name: Run upstream shared tests
         run: ./gradlew :shared:testDebugUnitTest --stacktrace
 

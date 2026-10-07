@@ -57,8 +57,9 @@ internal object CrvMfiProvider {
             )
         }
 
-        reportOnboardI2cAvailability(report)
-        configuredI2cNode(context)?.let { path ->
+        val configuredI2c = configuredI2cNode(context)
+        reportOnboardI2cAvailability(context, configuredI2c, report)
+        configuredI2c?.let { path ->
             val transport = try {
                 LinuxI2cTransport.open(path)
             } catch (error: Exception) {
@@ -110,7 +111,20 @@ internal object CrvMfiProvider {
         return value.takeIf { I2C_DEVICE_PATH.matches(it) }
     }
 
-    private fun reportOnboardI2cAvailability(report: (String) -> Unit) {
+    private fun reportOnboardI2cAvailability(
+        context: Context,
+        configuredPath: String?,
+        report: (String) -> Unit,
+    ) {
+        val configFile = context.getExternalFilesDir(null)?.let { external ->
+            File(File(external, com.shilapi.xcertplay.mfi.LocalMfiAuthenticationClient.DIRECTORY), I2C_NODE_CONFIG)
+        }
+        report(
+            "MFi onboard I2C config=" + (configuredPath ?: "absent") +
+                " file=" + (configFile?.absolutePath ?: "external-storage-unavailable"),
+        )
+        processIdentity().forEach { report("MFi process " + it) }
+
         val nodes = i2cNodes()
         if (nodes.isEmpty()) {
             report("Onboard I2C: no /dev/i2c-* nodes exposed")
@@ -118,13 +132,50 @@ internal object CrvMfiProvider {
         }
         report("Onboard I2C nodes=" + nodes.joinToString { it.absolutePath })
         for (node in nodes) {
+            val sysfsName = i2cAdapterName(node.name) ?: "unknown"
+            val driver = i2cDriver(node.name) ?: "unknown"
             report(
                 "Onboard I2C node ${node.name} visible " +
                     "r=${node.canRead()} w=${node.canWrite()} " +
-                    "(metadata only; no register access)",
+                    CrvNativeDeviceProbe.stat(node.absolutePath) +
+                    " adapter=$sysfsName driver=$driver",
+            )
+            report(
+                "Onboard I2C node ${node.name} permission " +
+                    CrvNativeDeviceProbe.openAccess(node.absolutePath),
             )
         }
     }
+
+    private fun processIdentity(): List<String> = runCatching {
+        File("/proc/self/status").useLines { lines ->
+            lines.filter { line ->
+                line.startsWith("Uid:") || line.startsWith("Gid:") || line.startsWith("Groups:")
+            }.take(3).map(String::trim).toList()
+        }
+    }.getOrElse { listOf("identity-unavailable type=${it.javaClass.simpleName}") }
+
+    private fun i2cAdapterName(nodeName: String): String? = listOf(
+        File("/sys/class/i2c-dev/$nodeName/name"),
+        File("/sys/class/i2c-adapter/$nodeName/name"),
+        File("/sys/bus/i2c/devices/$nodeName/name"),
+    ).firstNotNullOfOrNull(::readMetadata)
+
+    private fun i2cDriver(nodeName: String): String? {
+        val candidates = listOf(
+            File("/sys/class/i2c-dev/$nodeName/device/driver"),
+            File("/sys/bus/i2c/devices/$nodeName/driver"),
+        )
+        return candidates.firstNotNullOfOrNull { path ->
+            runCatching { path.canonicalFile.name.takeIf(String::isNotBlank) }.getOrNull()
+        }
+    }
+
+    private fun readMetadata(file: File): String? = runCatching {
+        if (!file.isFile || !file.canRead()) return@runCatching null
+        file.bufferedReader().use { reader -> reader.readLine()?.trim()?.take(MAX_METADATA_CHARS) }
+            ?.takeIf(String::isNotBlank)
+    }.getOrNull()
 
     private fun i2cNodes(): List<File> =
         File("/dev").listFiles()
@@ -138,4 +189,5 @@ internal object CrvMfiProvider {
     private const val I2C_NODE_CONFIG = "i2c-node.txt"
     private const val MAX_I2C_CONFIG_BYTES = 64L
     private const val MAX_I2C_NODES = 16
+    private const val MAX_METADATA_CHARS = 120
 }

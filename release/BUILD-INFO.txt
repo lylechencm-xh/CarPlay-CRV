@@ -1,8 +1,13 @@
-version=0.2.12
+version=0.2.27
+versionCode=46
 package=com.shihab.diplay
 minSdk=17
-signing=debug-signed
+targetSdk=28
+android_baseline=4.2.2
+artifact=GitHub Release or GitHub Actions artifact
+repository_apk=not-tracked
+signing=fixed-test-key-when-configured-otherwise-debug
 carplay_authentication=not-bundled
-test_scope=install-and-transport-preauth
-source_commit=dc9dc1ecaca1663f75fce265c365c40d623db102
-Upstream commit: fd9850c665feb5192ffb41e8b2b69e990b19558d
+release_tag=v0.2.27-crv-api17
+test_scope=CI-build-install-transport-preauth-and-hardware-validation
+source_commit=recorded-by-release-workflow

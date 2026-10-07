@@ -68,8 +68,15 @@ class CrvWiredCarPlayController(
     private val appContext = context.applicationContext
     private val executor: ExecutorService =
         Executors.newSingleThreadExecutor { task -> Thread(task, "crv-carplay-wired").apply { isDaemon = true } }
-    private val closed = AtomicBoolean(false)
+    private val closeRequested = AtomicBoolean(false)
     private val stoppedNotified = AtomicBoolean(false)
+    private val lifecycle = CrvCarPlayStateMachine { transition ->
+        report(
+            "Controller state ${transition.previous.phase} -> ${transition.current.phase} " +
+                "reason=${transition.reason}",
+        )
+    }
+    private val resources = CrvCarPlayResources()
 
     private val airPlayState = CrvAirPlayState(appContext)
     private val identity = airPlayState.identity
@@ -89,53 +96,46 @@ class CrvWiredCarPlayController(
         microphoneEnabled = true,
     )
 
-    @Volatile private var activeSession: AirPlaySession? = null
-    @Volatile private var mux: Iap2UsbMuxHost? = null
-    @Volatile private var csm: Iap2Session? = null
-    @Volatile private var ncm: NcmUsbBridge? = null
-    @Volatile private var vpnAttached = false
-    @Volatile private var wifiHotspot: CrvApi19WirelessHotspot? = null
-    @Volatile private var bonjour: CrvApi19BonjourAdvertiser? = null
-    @Volatile private var vpnService: CarPlayVpnService? = null
     @Volatile private var vpnBound = false
-    @Volatile private var mfiLease: CrvMfiProvider.Lease? = null
     private val vpnLatch = CountDownLatch(1)
 
     private val vpnConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
-            vpnService = (binder as CarPlayVpnService.LocalBinder).service
+            resources.vpnService = (binder as CarPlayVpnService.LocalBinder).service
             vpnLatch.countDown()
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
-            vpnService = null
+            resources.vpnService = null
             vpnLatch.countDown()
-            if (!closed.get()) {
+            if (!lifecycle.isStopping()) {
                 report("CarPlay network service disconnected")
-                runCatching { csm?.close() }
+                runCatching { resources.csm?.close() }
             }
         }
     }
 
     private val listener = object : AirPlaySessionListener {
         override fun onSessionActive(session: AirPlaySession) {
-            activeSession = session
-            val vpn = vpnService
+            resources.activeSession = session
+            lifecycle.sessionActive()
+            val vpn = resources.vpnService
             report("AirPlay transport attached=${vpn?.isAttached() == true} port=${vpn?.boundPort() ?: 0}")
             report("CarPlay active")
         }
 
         override fun onSessionEnded(session: AirPlaySession) {
-            if (activeSession === session) activeSession = null
+            if (resources.activeSession === session) resources.activeSession = null
+            lifecycle.sessionEnded()
             report("CarPlay session ended")
         }
 
         override fun onTransportError(message: String) {
-            val vpn = vpnService
+            val vpn = resources.vpnService
             report("AirPlay transport attached=${vpn?.isAttached() == true} port=${vpn?.boundPort() ?: 0}")
             report("CarPlay transport error: $message")
             // Break the blocking wired control loop so the worker can tear the complete stack down.
-            runCatching { csm?.close() }
+            runCatching { resources.csm?.close() }
         }
 
         override fun onDebugLog(message: String) {
@@ -150,11 +150,14 @@ class CrvWiredCarPlayController(
     }
 
     fun start(device: UsbDevice, usbSession: Iap2UsbSession) {
+        lifecycle.start()
         executor.execute {
             try {
                 runWired(device, usbSession)
             } catch (error: Throwable) {
-                if (!closed.get()) {
+                val userRequestedStop = lifecycle.isStopping()
+                if (!userRequestedStop) {
+                    lifecycle.fail(error.javaClass.simpleName)
                     reportFailure("CarPlay controller", error)
                     report(
                         "CarPlay failed: " + error.javaClass.name + ": " +
@@ -162,8 +165,10 @@ class CrvWiredCarPlayController(
                     )
                 }
             } finally {
-                cleanupAfterFailure()
+                lifecycle.requestStop("worker-finished")
+                resources.releaseTransport()
                 runCatching { usbSession.close() }
+                lifecycle.finishStop()
                 notifyStopped()
             }
         }
@@ -174,7 +179,7 @@ class CrvWiredCarPlayController(
     }
 
     fun sendTouch(x: Double, y: Double, down: Boolean): Boolean {
-        val session = activeSession ?: return false
+        val session = resources.activeSession ?: return false
         return session.sendTouch(
             listOf(
                 AirPlayContact(
@@ -188,7 +193,7 @@ class CrvWiredCarPlayController(
     }
 
     private fun runWired(device: UsbDevice, usbSession: Iap2UsbSession) {
-        check(!closed.get()) { "controller is closed" }
+        check(!lifecycle.isStopping()) { "controller is stopping" }
 
         report(CrvMfiProvider.status(appContext))
 
@@ -241,19 +246,21 @@ class CrvWiredCarPlayController(
             // the userspace bridge, which owns the USB interfaces directly.
             report("Honda kernel CDC-NCM not network-ready; userspace NCM fallback active")
             openNcm(device).also {
-                ncm = it
+                resources.ncm = it
                 report("CDC-NCM ready backend=userspace experimental")
             }
         } else {
             null
         }
+        if (mode == CrvConnectionMode.WIRED) lifecycle.ncmReady()
 
         val host = Iap2UsbMuxHost.open(
             pipe = usbSession,
             onDiagnostic = { report(it) },
         )
-        mux = host
+        resources.mux = host
         report("USBMUX ready")
+        lifecycle.usbMuxReady()
 
         val carKitClient = LockdownCarKitClient(host)
         var pairRecord = lockdownState.load()
@@ -274,17 +281,19 @@ class CrvWiredCarPlayController(
         }
         preflightLockdownTls(checkNotNull(pairRecord))
         report("iPhone Lockdown ready")
+        lifecycle.lockdownReady()
         val session = Iap2Session.open(
             underlying = carkit,
             traceContext = "crv-wired",
             onTrace = { line -> if (line.contains("FAIL") || line.contains("READY")) report(line) },
         )
-        csm = session
+        resources.csm = session
         report("iAP2 carkit channel ready")
+        lifecycle.iap2Ready()
 
         if (mode == CrvConnectionMode.WIFI_HANDOFF) {
             val mfi = loadMfi()
-            report("MFi authentication ready source=${mfiLease?.source ?: "unknown"}")
+            report("MFi authentication ready source=${resources.mfiLease?.source ?: "unknown"}")
             runWirelessHandoff(session, mfi)
             return
         }
@@ -376,7 +385,7 @@ class CrvWiredCarPlayController(
                 )
                 activeKernelNcm = null
                 val fallback = openNcm(device)
-                ncm = fallback
+                resources.ncm = fallback
                 activeNcmBridge = fallback
                 activeHostMac = fallback.hostMac ?: macBytes(deviceId)
                 activeLinkLocal = LINK_LOCAL
@@ -399,7 +408,7 @@ class CrvWiredCarPlayController(
                 throw IphoneUsbException.DeviceUnavailable(
                     "NCM/AirPlay attach failed: ${attached.message}",
                 )
-            else -> vpnAttached = true
+            else -> resources.vpnAttached = true
         }
 
         val airPlayPort = vpn.boundPort()
@@ -408,6 +417,7 @@ class CrvWiredCarPlayController(
             "AirPlay listening on $activeLinkLocal:$airPlayPort " +
                 "backend=${if (activeKernelNcm != null) "kernel" else "userspace"}",
         )
+        lifecycle.networkReady()
 
         val usbMuxInterfaceNumber = usbSession.usbMuxInterfaceNumber
         report("CarPlay USBMUX interface=$usbMuxInterfaceNumber (claimed)")
@@ -450,10 +460,12 @@ class CrvWiredCarPlayController(
             )
             throw error
         }
-        report("MFi authentication ready source=${mfiLease?.source ?: "unknown"}")
+        report("MFi authentication ready source=${resources.mfiLease?.source ?: "unknown"}")
         vpn.updateMfiAuthenticator(mfi)
+        lifecycle.authenticated()
 
         report("Starting iAP2 identification/MFi")
+        lifecycle.sessionControlStarted()
         Iap2WiredControlClient(
             session = session,
             mfi = Iap2MfiAuthenticationClient(mfi),
@@ -469,7 +481,7 @@ class CrvWiredCarPlayController(
     private fun runWirelessHandoff(session: Iap2Session, mfi: MfiAuthenticator) {
         report("Starting Wi-Fi CarPlay handoff")
         val hotspot = CrvApi19WirelessHotspot(appContext, report)
-        wifiHotspot = hotspot
+        resources.wifiHotspot = hotspot
         val hotspotInfo = hotspot.start()
 
         val airPlay = airPlayConfig(deviceId)
@@ -491,13 +503,13 @@ class CrvWiredCarPlayController(
                 throw IphoneUsbException.DeviceUnavailable(
                     "Wi-Fi/AirPlay attach failed: ${attached.message}",
                 )
-            else -> vpnAttached = true
+            else -> resources.vpnAttached = true
         }
 
         val airPlayPort = vpn.boundPort()
             ?: throw IphoneUsbException.DeviceUnavailable("Wi-Fi AirPlay listener did not bind")
 
-        bonjour = CrvApi19BonjourAdvertiser(
+        resources.bonjour = CrvApi19BonjourAdvertiser(
             context = appContext,
             serviceName = "Honda CR-V",
             port = airPlayPort,
@@ -539,7 +551,10 @@ class CrvWiredCarPlayController(
             "Wi-Fi CarPlay endpoint ready ssid=${hotspotInfo.ssid} " +
                 "port=$airPlayPort",
         )
+        lifecycle.networkReady()
+        lifecycle.authenticated()
 
+        lifecycle.sessionControlStarted()
         Iap2WirelessControlClient(
             session = session,
             mfi = Iap2MfiAuthenticationClient(mfi),
@@ -569,7 +584,7 @@ class CrvWiredCarPlayController(
             hostId = UUID.randomUUID().toString().uppercase(Locale.US),
             systemBuid = UUID.randomUUID().toString().uppercase(Locale.US),
             totalTimeoutMillis = PAIR_TIMEOUT_MILLIS,
-            isCancelled = { closed.get() },
+            isCancelled = { lifecycle.isStopping() },
         )
         lockdownState.save(paired.pairRecord)
         report("iPhone Lockdown paired and saved")
@@ -577,11 +592,15 @@ class CrvWiredCarPlayController(
     }
 
     private fun awaitVpnService(): CarPlayVpnService? {
-        vpnService?.let { return it }
+        resources.vpnService?.let { return it }
         report("Binding CarPlay network service")
         bindVpn()
         return try {
-            if (vpnLatch.await(VPN_CONNECT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) vpnService else null
+            if (vpnLatch.await(VPN_CONNECT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
+                resources.vpnService
+            } else {
+                null
+            }
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
             null
@@ -589,7 +608,7 @@ class CrvWiredCarPlayController(
     }
 
     private fun bindVpn() {
-        if (vpnBound || closed.get()) return
+        if (vpnBound || lifecycle.isStopping()) return
         vpnBound = true
         try {
             if (!appContext.bindService(
@@ -611,7 +630,7 @@ class CrvWiredCarPlayController(
         if (!vpnBound) return
         vpnBound = false
         runCatching { appContext.unbindService(vpnConnection) }
-        vpnService = null
+        resources.vpnService = null
     }
 
     private fun reportKernelNcmReady(network: CrvUsbKernelProbe.KernelNcmNetwork) {
@@ -722,9 +741,9 @@ class CrvWiredCarPlayController(
     }
 
     private fun loadMfi(): MfiAuthenticator {
-        mfiLease?.let { return it.client }
+        resources.mfiLease?.let { return it.client }
         return CrvMfiProvider.acquire(appContext, report).also {
-            mfiLease = it
+            resources.mfiLease = it
         }.client
     }
 
@@ -764,34 +783,16 @@ class CrvWiredCarPlayController(
         videoInCar = false,
     )
 
-    private fun cleanupAfterFailure() {
-        activeSession = null
-        runCatching { bonjour?.close() }
-        bonjour = null
-        if (vpnAttached) {
-            runCatching { vpnService?.detach() }
-            vpnAttached = false
-            ncm = null
-        } else {
-            runCatching { ncm?.close() }
-            ncm = null
-        }
-        runCatching { csm?.close() }
-        csm = null
-        runCatching { mux?.close() }
-        mux = null
-        runCatching { wifiHotspot?.close() }
-        wifiHotspot = null
-        runCatching { mfiLease?.close() }
-        mfiLease = null
-    }
-
     override fun close() {
-        if (!closed.compareAndSet(false, true)) return
-        cleanupAfterFailure()
+        if (!closeRequested.compareAndSet(false, true)) return
+        lifecycle.requestStop("close")
+        resources.releaseTransport()
         unbindVpn()
         sink.close()
         executor.shutdownNow()
+        if (lifecycle.snapshot().phase == CrvControllerPhase.STOPPING) {
+            lifecycle.finishStop()
+        }
         notifyStopped()
     }
 
