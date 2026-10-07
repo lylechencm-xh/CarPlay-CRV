@@ -50,11 +50,23 @@ internal class CrvHondaPlatformProbe(context: Context) {
             (listServices.invoke(null) as? Array<*>)
                 .orEmpty()
                 .mapNotNull { it as? String }
-                .filter(::interesting)
+                .distinct()
                 .sorted()
-                .take(MAX_MATCHES_PER_GROUP)
         }.getOrElse { emptyList() }
-        binderServices.forEach { results += "Honda Binder candidate=$it" }
+        binderServices.filter(::interesting).take(MAX_MATCHES_PER_GROUP).forEach {
+            results += "Honda Binder candidate=$it"
+        }
+        binderServices.filter(::vendorInteresting).take(MAX_VENDOR_BINDER_MATCHES).forEach {
+            results += "Honda Binder vendor-candidate=$it"
+        }
+
+        val selinux = runCatching {
+            val clazz = Class.forName("android.os.SELinux")
+            val enabled = clazz.getMethod("isSELinuxEnabled").invoke(null) as? Boolean
+            val enforced = clazz.getMethod("isSELinuxEnforced").invoke(null) as? Boolean
+            "enabled=$enabled enforced=$enforced"
+        }.getOrElse { "unavailable" }
+        results += "Honda SELinux $selinux"
 
         for (directory in SYSTEM_PATHS) {
             val matches = runCatching {
@@ -73,17 +85,19 @@ internal class CrvHondaPlatformProbe(context: Context) {
         val deviceNodes = runCatching {
             File("/dev").listFiles()
                 .orEmpty()
-                .map { it.name }
-                .filter { name ->
-                    val lower = name.lowercase(Locale.US)
-                    lower.startsWith("i2c-") ||
-                        interesting(lower)
+                .filter { file ->
+                    val lower = file.name.lowercase(Locale.US)
+                    lower.startsWith("i2c-") || interesting(lower)
                 }
-                .sorted()
+                .sortedBy { it.name }
                 .take(MAX_MATCHES_PER_GROUP)
         }.getOrElse { emptyList() }
         if (deviceNodes.isNotEmpty()) {
-            results += "Honda /dev candidates=" + deviceNodes.joinToString(",")
+            results += "Honda /dev candidates=" + deviceNodes.joinToString(",") { it.name }
+            deviceNodes.filter { it.name.startsWith("i2c-") }.forEach { node ->
+                val metadata = CrvNativeDeviceProbe.stat(node.absolutePath)
+                results += "Honda I2C metadata node=" + node.name + " " + metadata
+            }
         }
 
         return results
@@ -92,6 +106,12 @@ internal class CrvHondaPlatformProbe(context: Context) {
     private fun interesting(value: String): Boolean {
         val lower = value.lowercase(Locale.US)
         return KEYWORDS.any(lower::contains)
+    }
+
+    private fun vendorInteresting(value: String): Boolean {
+        val lower = value.lowercase(Locale.US)
+        return VENDOR_KEYWORDS.any(lower::contains) &&
+            SERVICE_KEYWORDS.any(lower::contains)
     }
 
     private companion object {
@@ -105,6 +125,31 @@ internal class CrvHondaPlatformProbe(context: Context) {
             "apple",
             "projection",
             "smartphone",
+            "accessory",
+            "authentication",
+            "auth",
+        )
+        val VENDOR_KEYWORDS = listOf(
+            "honda",
+            "mitsubishi",
+            "melsc",
+            "alpine",
+            "clarion",
+            "panasonic",
+            "pioneer",
+            "denso",
+            "jvc",
+            "kenwood",
+        )
+        val SERVICE_KEYWORDS = listOf(
+            "service",
+            "auth",
+            "usb",
+            "iap",
+            "apple",
+            "accessory",
+            "phone",
+            "smartphone",
         )
         val SYSTEM_PATHS = listOf(
             "/system/app",
@@ -117,6 +162,7 @@ internal class CrvHondaPlatformProbe(context: Context) {
             "/vendor/lib",
         )
         const val MAX_MATCHES_PER_GROUP = 32
+        const val MAX_VENDOR_BINDER_MATCHES = 48
         const val MAX_VALUE = 220
     }
 }
