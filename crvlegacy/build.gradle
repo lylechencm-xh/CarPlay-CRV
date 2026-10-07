@@ -83,7 +83,6 @@ def crvExcludedKotlin = [
     '**/com/shilapi/xcertplay/transport/Ch341I2cStreamEncoder.kt',
     '**/com/shilapi/xcertplay/transport/Ch341I2cTransport.kt',
     '**/com/shilapi/xcertplay/transport/Ch341UsbHost.kt',
-    '**/com/shilapi/xcertplay/transport/LinuxI2cTransport.kt',
     '**/com/shilapi/xcertplay/transport/IphoneCarPlayConfigurationApi21.kt',
     '**/com/shilapi/xcertplay/transport/UsbInterfaceApi21.kt',
     '**/com/shilapi/xcertplay/transport/AndroidApi33UsbCompat.kt',
