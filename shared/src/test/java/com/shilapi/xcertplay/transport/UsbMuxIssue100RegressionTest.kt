@@ -244,6 +244,20 @@ object UsbEvidenceReplay {
 class EvidenceUsbConnectionShadow {
     @Implementation fun bulkTransfer(endpoint: UsbEndpoint, buffer: ByteArray,
         length: Int, timeoutMillis: Int): Int {
+        if ((endpoint.address and 0x80) != 0) {
+            val bytes = UsbEvidenceReplay.transfers.pollFirst() ?: run {
+                Thread.sleep(timeoutMillis.toLong().coerceAtMost(50L))
+                UsbEvidenceReplay.timedOutReads++
+                return -1
+            }
+            val count = minOf(length, bytes.size)
+            bytes.copyInto(buffer, endIndex = count)
+            if (count < bytes.size) {
+                UsbEvidenceReplay.transfers.addFirst(bytes.copyOfRange(count, bytes.size))
+            }
+            UsbEvidenceReplay.completedReads++
+            return count
+        }
         UsbEvidenceReplay.writes.add(buffer.copyOf(length))
         return length
     }
