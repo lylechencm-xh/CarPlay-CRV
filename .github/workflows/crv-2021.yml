@@ -157,7 +157,8 @@ jobs:
           - Honda kernel CDC-NCM netdev is brought UP when the matching config-6 interface is bound; userspace NCM remains the safe fallback
           - Final APK is verified against the Android 4.2.2/API17 platform member surface and DEX035 single-Dex constraints
           - External CH341 authentication is disabled for the CR-V target
-          - CarPlay/MFi authentication assets are not bundled; this build validates installability and the pre-auth transport path only
+          - Optional onboard MFi authentication is supported through an explicitly configured /dev/i2c-N node
+          - Local MFi identity files remain an explicit fallback; credentials are never bundled by default
           - Source commit: ${GITHUB_SHA}
           EOF
           if gh release view "$TAG" >/dev/null 2>&1; then
