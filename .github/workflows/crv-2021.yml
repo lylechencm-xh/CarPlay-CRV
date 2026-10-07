@@ -119,7 +119,7 @@ jobs:
       - name: Upload CR-V 2021 APK
         uses: actions/upload-artifact@v4
         with:
-          name: CarPlay-CRV-2021-v0.2.24-api17-${{ steps.signing.outputs.label }}
+          name: CarPlay-CRV-2021-v0.2.25-api17-${{ steps.signing.outputs.label }}
           path: mobile/build/outputs/apk/debug/mobile-debug.apk
           if-no-files-found: error
 
@@ -134,16 +134,16 @@ jobs:
             echo "::notice::Skipping GitHub Release because this run is obsolete: $GITHUB_SHA != $CURRENT_MAIN"
           fi
 
-      - name: Publish GitHub Release v0.2.24 API17
+      - name: Publish GitHub Release v0.2.25 API17
         if: steps.release_guard.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="v0.2.24-crv-api17"
+          TAG="v0.2.25-crv-api17"
           SOURCE_APK="mobile/build/outputs/apk/debug/mobile-debug.apk"
-          RELEASE_NAME="CarPlay-CRV-2021-v0.2.24-api17.apk"
+          RELEASE_NAME="CarPlay-CRV-2021-v0.2.25-api17.apk"
           RELEASE_APK="$RUNNER_TEMP/$RELEASE_NAME"
-          TITLE="CarPlay CR-V 2021 v0.2.24 (Android 4.2.2 / API17)"
+          TITLE="CarPlay CR-V 2021 v0.2.25 (Android 4.2.2 / API17)"
           NOTES_FILE="$RUNNER_TEMP/crv-release-notes.txt"
           cp "$SOURCE_APK" "$RELEASE_APK"
           cat > "$NOTES_FILE" <<EOF
