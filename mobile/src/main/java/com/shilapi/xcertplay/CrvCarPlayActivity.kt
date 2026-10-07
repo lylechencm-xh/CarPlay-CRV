@@ -436,6 +436,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             displayWidth = surfaceWidth,
             displayHeight = surfaceHeight,
             report = ::reportStatus,
+            reportFailure = diagnostics::logFailure,
             mode = connectionMode,
             onStopped = {
                 runOnUiThread {
