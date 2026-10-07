@@ -80,6 +80,8 @@ internal class CrvHondaPlatformProbe(context: Context) {
         }.getOrElse { "unavailable" }
         results += "Honda SELinux $selinux"
 
+        inspectMediaCore().forEach(results::add)
+
         for (directory in SYSTEM_PATHS) {
             val matches = runCatching {
                 File(directory).listFiles()
@@ -192,6 +194,32 @@ internal class CrvHondaPlatformProbe(context: Context) {
         return results
     }
 
+    private fun inspectMediaCore(): List<String> {
+        val results = ArrayList<String>()
+        val packageInfo = runCatching {
+            appContext.packageManager.getPackageInfo(MEDIA_CORE_PACKAGE, PackageManager.GET_SERVICES)
+        }.getOrNull()
+        if (packageInfo == null) {
+            results += "Honda MediaCore package=absent"
+            return results
+        }
+
+        val service = packageInfo.services.orEmpty().firstOrNull { it.name == MEDIA_CORE_SERVICE }
+        results += "Honda MediaCore route=whole-session-auth package=$MEDIA_CORE_PACKAGE " +
+            "systemUid=${packageInfo.sharedUserId == "android.uid.system"} " +
+            "serviceExported=${service?.exported ?: false} " +
+            "servicePermission=${service?.permission ?: "none"}"
+        results += "Honda MediaCore contract=iAPauthStart(int storageHandle,int authKind):int " +
+            "callback=onIAPauthResult(int); raw-certificate-signature=false"
+
+        val jdev = File(JUNGO_DEVICE)
+        results += "Honda MediaCore Jungo device=$JUNGO_DEVICE exists=${jdev.exists()} " +
+            "r=${jdev.canRead()} w=${jdev.canWrite()} " +
+            CrvNativeDeviceProbe.stat(JUNGO_DEVICE) +
+            " openProbe=skipped-proprietary-device"
+        return results
+    }
+
     private fun binderDescriptor(name: String): String? = runCatching {
         val serviceManager = Class.forName("android.os.ServiceManager")
         val checkService = serviceManager.getDeclaredMethod("checkService", String::class.java)
@@ -223,6 +251,9 @@ internal class CrvHondaPlatformProbe(context: Context) {
             "accessory",
             "authentication",
             "auth",
+            "mediacore",
+            "mcservice",
+            "jdev",
         )
         val VENDOR_KEYWORDS = listOf(
             "honda",
@@ -261,5 +292,9 @@ internal class CrvHondaPlatformProbe(context: Context) {
         const val MAX_COMPONENTS_PER_PACKAGE = 48
         const val MAX_PROCESS_LIBRARIES = 48
         const val MAX_VALUE = 220
+        const val MEDIA_CORE_PACKAGE = "com.mitsubishielectric.ada.framework.mcservice"
+        const val MEDIA_CORE_SERVICE =
+            "com.mitsubishielectric.ada.framework.mcservice.MediaCoreService"
+        const val JUNGO_DEVICE = "/dev/jdev"
     }
 }

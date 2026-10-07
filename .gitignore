@@ -26,6 +26,7 @@ Thumbs.db
 
 # Local beta credentials and release signing (never commit)
 .private/
+/21crvfiles/
 *.jks
 *.keystore
 release-signing.properties

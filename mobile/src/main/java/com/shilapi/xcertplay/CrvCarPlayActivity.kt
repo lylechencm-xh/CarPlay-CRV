@@ -71,6 +71,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private var surfaceHeight = Crv2021Config.CARPLAY_HEIGHT
 
     private var controller: CrvWiredCarPlayController? = null
+    private var mediaCoreMonitor: CrvHondaMediaCoreMonitor? = null
     private lateinit var runtimeSnapshotProbe: CrvRuntimeSnapshotProbe
     private val snapshotReasons = HashSet<String>()
 
@@ -165,6 +166,9 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         })
 
         diagnostics = CrvDiagnostics(this)
+        mediaCoreMonitor = CrvHondaMediaCoreMonitor(applicationContext, diagnostics::log).also {
+            it.start()
+        }
         runtimeSnapshotProbe = CrvRuntimeSnapshotProbe(applicationContext)
         diagnostics.log("app started api=" + android.os.Build.VERSION.SDK_INT)
         val probeContext = applicationContext
@@ -512,7 +516,6 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         }
         diagnosticIo.execute {
             runtimeSnapshotProbe.collect(reason).forEach(diagnostics::log)
-            CrvHondaPlatformProbe(applicationContext).collect().forEach(diagnostics::log)
         }
     }
     private fun scheduleReconnect() {
@@ -711,6 +714,9 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
         videoSurface?.release()
         videoSurface = null
+
+        mediaCoreMonitor?.close()
+        mediaCoreMonitor = null
 
         if (::diagnostics.isInitialized) {
             diagnostics.log("app stopped")

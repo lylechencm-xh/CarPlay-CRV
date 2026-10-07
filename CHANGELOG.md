@@ -2,6 +2,12 @@
 
 Add future CR-V changes after 0.2.27 here.
 
+- Classify Honda `link_iap_adapter` as an iAP session transport rather than an MFi
+  certificate/signature service, report the factory MediaCore/Jungo route and `/dev/jdev`
+  access, and avoid repeating the full Honda platform scan at every connection milestone.
+- Add a guarded passive Honda MediaCore listener that observes iAP2 storage handles and
+  authentication results without starting OEM authentication or opening `/dev/jdev`.
+
 # CarPlay CR-V 0.2.27 — 2026-10-07
 
 - Lock the Honda CR-V runtime baseline to Android 4.2.2 / API17 with package

@@ -5,19 +5,18 @@ import android.content.pm.ApplicationInfo
 import android.os.IBinder
 import com.shilapi.xcertplay.mfi.MfiAuthenticator
 import com.shilapi.xcertplay.mfi.MfiInvalidDataException
-import dalvik.system.DexFile
 import dalvik.system.PathClassLoader
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
-import java.util.LinkedHashSet
-import java.util.Locale
 
 /**
- * Adapter for the factory Mitsubishi/Honda iAP authentication Binder service.
+ * Conservative adapter for a possible factory Mitsubishi/Honda MFi Binder service.
  *
  * The implementation deliberately avoids raw Binder transaction codes. It only calls methods
  * exposed by the factory AIDL Stub/Proxy when their Java signatures unambiguously match the
- * certificate/signature contract required by [MfiAuthenticator].
+ * certificate/signature contract required by [MfiAuthenticator]. The known CR-V
+ * `link_iap_adapter` descriptor is an iAP session transport, not an authentication service, and
+ * is rejected before any package-wide AIDL scan or Binder transaction is attempted.
  */
 internal object CrvOemMfiAuthenticator {
     data class Lease(
@@ -39,16 +38,17 @@ internal object CrvOemMfiAuthenticator {
             report("MFi OEM Binder link_iap_adapter has no readable interface descriptor")
         }
 
-        val descriptors = LinkedHashSet<String>()
-        binderDescriptor?.let(descriptors::add)
-        descriptors += discoverFactoryInterfaces(context, report)
-        if (descriptors.isEmpty()) {
-            report("MFi OEM AIDL interface discovery returned no candidates")
+        if (binderDescriptor == LINK_IAP_ADAPTER_DESCRIPTOR) {
+            report(
+                "MFi OEM Binder classified=iap-session-transport authContract=false " +
+                    "service=$SERVICE_NAME; factory authentication is owned by MediaCore/Jungo",
+            )
             return null
         }
+        val descriptor = binderDescriptor ?: return null
 
         val loaders = classLoaders(context, report)
-        for (descriptor in descriptors) for ((label, loader) in loaders) {
+        for ((label, loader) in loaders) {
             val resolved = resolveInterface(descriptor, binder, loader, report, label) ?: continue
             val methods = resolved.interfaceType.methods
                 .filterNot { it.declaringClass == Any::class.java }
@@ -182,44 +182,6 @@ internal object CrvOemMfiAuthenticator {
         return out
     }
 
-    /** Discover only AIDL-style interfaces; no class is instantiated and no transaction is sent. */
-    private fun discoverFactoryInterfaces(
-        context: Context,
-        report: (String) -> Unit,
-    ): List<String> {
-        val candidates = LinkedHashSet<String>()
-        for (packageName in FACTORY_PACKAGES) {
-            val sourcePath = trustedFactorySource(context, packageName, report) ?: continue
-            try {
-                val dex = DexFile(sourcePath)
-                try {
-                    val names = LinkedHashSet<String>()
-                    val entries = dex.entries()
-                    while (entries.hasMoreElements()) names += entries.nextElement()
-                    names.asSequence()
-                        .filter { it.endsWith("\$Stub") }
-                        .map { it.removeSuffix("\$Stub") }
-                        .filter { candidate ->
-                            val lower = candidate.lowercase(Locale.US)
-                            OEM_INTERFACE_KEYWORDS.any(lower::contains)
-                        }
-                        .filter { names.contains(it) }
-                        .take(MAX_DISCOVERED_INTERFACES)
-                        .forEach(candidates::add)
-                } finally {
-                    runCatching { dex.close() }
-                }
-            } catch (error: Throwable) {
-                report(
-                    "MFi OEM AIDL scan failed package=$packageName " +
-                        "type=${error.javaClass.simpleName}",
-                )
-            }
-        }
-        candidates.forEach { report("MFi OEM AIDL candidate=" + it) }
-        return candidates.toList()
-    }
-
     private fun trustedFactorySource(
         context: Context,
         packageName: String,
@@ -334,15 +296,15 @@ internal object CrvOemMfiAuthenticator {
     }
 
     private const val SERVICE_NAME = "link_iap_adapter"
+    private const val LINK_IAP_ADAPTER_DESCRIPTOR =
+        "com.honda.telematics.server.link.iap.ILinkManagerIAPAdapter"
     private val FACTORY_PACKAGES = listOf(
         "com.mitsubishielectric.ada.appservice.carplayapservice",
         "com.mitsubishielectric.ada.app.carplay",
     )
-    private val OEM_INTERFACE_KEYWORDS = listOf("iap", "mfi", "auth", "carplay")
     private const val DEFAULT_PROTOCOL_MAJOR = 3
     private const val BINDER_LOOKUP_ATTEMPTS = 8
     private const val BINDER_LOOKUP_RETRY_MILLIS = 250L
-    private const val MAX_DISCOVERED_INTERFACES = 32
     private const val MAX_CHALLENGE_BYTES = 128
     private const val MAX_SIGNATURE_BYTES = 4096
     private const val MAX_METHOD_LOGS = 96
