@@ -50,6 +50,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private var lastStatusMessage: String? = null
 
     private val io: ExecutorService = Executors.newSingleThreadExecutor()
+    private val diagnosticIo: ExecutorService = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var permissionReceiver: Closeable? = null
     private var attachReceiver: Closeable? = null
@@ -70,6 +71,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private var surfaceHeight = Crv2021Config.CARPLAY_HEIGHT
 
     private var controller: CrvWiredCarPlayController? = null
+    private lateinit var runtimeSnapshotProbe: CrvRuntimeSnapshotProbe
+    private val snapshotReasons = HashSet<String>()
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
@@ -162,11 +165,13 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         })
 
         diagnostics = CrvDiagnostics(this)
+        runtimeSnapshotProbe = CrvRuntimeSnapshotProbe(applicationContext)
         diagnostics.log("app started api=" + android.os.Build.VERSION.SDK_INT)
         val probeContext = applicationContext
-        io.execute {
+        diagnosticIo.execute {
             CrvSystemInfoProbe(probeContext).collect().forEach(diagnostics::log)
             CrvHondaPlatformProbe(probeContext).collect().forEach(diagnostics::log)
+            runtimeSnapshotProbe.collect("app-start").forEach(diagnostics::log)
         }
         appendStatusLine("App started (Android API " + android.os.Build.VERSION.SDK_INT + ")")
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
@@ -451,6 +456,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     private fun reportStatus(message: String) {
+        maybeCaptureRuntimeSnapshot(message)
         val stage = stageFor(message)
         val normalized = message.lowercase(java.util.Locale.US)
         if (
@@ -484,6 +490,29 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         }
     }
 
+    private fun maybeCaptureRuntimeSnapshot(message: String) {
+        val lower = message.lowercase(java.util.Locale.US)
+        val reason = when {
+            "opening cdc-ncm" in lower -> "before-ncm"
+            "cdc-ncm ready" in lower -> "ncm-ready"
+            "usbmux ready" in lower -> "usbmux-ready"
+            "lockdown ready" in lower -> "lockdown-ready"
+            "iap2 carkit channel ready" in lower -> "iap2-ready"
+            "airplay listening" in lower -> "airplay-listening"
+            "transport pre-auth ready" in lower -> "pre-auth-ready"
+            "mfi" in lower && ("failed" in lower || "missing" in lower || "invalid" in lower) -> "mfi-failure"
+            "carplay failed" in lower -> "carplay-failure"
+            "carplay active" in lower -> "carplay-active"
+            else -> null
+        } ?: return
+        synchronized(snapshotReasons) {
+            if (!snapshotReasons.add(reason)) return
+        }
+        diagnosticIo.execute {
+            runtimeSnapshotProbe.collect(reason).forEach(diagnostics::log)
+            CrvHondaPlatformProbe(applicationContext).collect().forEach(diagnostics::log)
+        }
+    }
     private fun scheduleReconnect() {
         if (destroyed || videoSurface == null) return
         if (reconnectBlockedForMfi) {
@@ -681,7 +710,13 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         videoSurface?.release()
         videoSurface = null
 
-        if (::diagnostics.isInitialized) diagnostics.log("app stopped")
+        if (::diagnostics.isInitialized) {
+            diagnostics.log("app stopped")
+            if (::runtimeSnapshotProbe.isInitialized) {
+                runCatching { runtimeSnapshotProbe.collect("app-stop").forEach(diagnostics::log) }
+            }
+        }
+        diagnosticIo.shutdownNow()
         io.shutdownNow()
         super.onDestroy()
     }
