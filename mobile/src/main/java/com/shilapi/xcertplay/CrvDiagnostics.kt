@@ -74,12 +74,13 @@ class CrvDiagnostics(context: Context) {
     private fun sanitize(message: String): String {
         var value = message
         val sensitiveWords = listOf(
-            "privatekey",
-            "identity.pk8",
-            "certificate.p7b",
-            "escrowbag",
+            "privatekey=",
+            "private-key=",
+            "escrowbag=",
             "challenge=",
             "signature=",
+            "password=",
+            "token=",
         )
         if (sensitiveWords.any { value.contains(it, ignoreCase = true) }) {
             value = "[sensitive diagnostic redacted]"
