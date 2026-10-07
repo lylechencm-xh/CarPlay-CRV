@@ -98,7 +98,8 @@ class CrvDiagnostics(context: Context) {
     }
 
     companion object {
-        private const val MAX_LINE = 4096        private const val MAX_STACK_FRAMES = 12
+        private const val MAX_LINE = 4096
+        private const val MAX_STACK_FRAMES = 12
         private const val DEDUPE_WINDOW_MILLIS = 1_000L
     }
 }
