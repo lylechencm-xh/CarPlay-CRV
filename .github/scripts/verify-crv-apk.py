@@ -27,10 +27,13 @@ with ZipFile(apk) as package:
     allowed_native = {
         "lib/armeabi-v7a/libcrvusbfs.so",
         "lib/x86/libcrvusbfs.so",
+        "lib/armeabi-v7a/libxcertplay_i2c.so",
+        "lib/x86/libxcertplay_i2c.so",
     }
     unexpected_native = sorted(set(native) - allowed_native)
     assert not unexpected_native, "Unexpected native libraries: " + str(unexpected_native)
     assert "lib/armeabi-v7a/libcrvusbfs.so" in native, "CR-V armeabi-v7a usbfs bridge missing"
+    assert "lib/armeabi-v7a/libxcertplay_i2c.so" in native, "CR-V armeabi-v7a onboard I2C bridge missing"
 
     dex_names = sorted(name for name in package.namelist() if name.endswith(".dex"))
     assert dex_names == ["classes.dex"], "API17 build must remain single-Dex: " + str(dex_names)
