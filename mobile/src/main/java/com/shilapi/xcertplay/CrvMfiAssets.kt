@@ -20,19 +20,29 @@ object CrvMfiAssets {
     @Synchronized
     fun load(context: Context): LocalMfiAuthenticationClient {
         val target = File(context.filesDir, LocalMfiAuthenticationClient.DIRECTORY)
-
-        if (hasCompleteIdentity(target)) {
-            return LocalMfiAuthenticationClient.load(target)
-        }
-
         val external = context.getExternalFilesDir(null)
             ?.let { File(it, LocalMfiAuthenticationClient.DIRECTORY) }
 
+        // An explicitly provisioned external identity is an update request. Check it before the
+        // installed copy so a replaced/revoked identity can be rotated without clearing app data.
+        // installValidated() verifies the new pair before preserving and replacing the old one.
         if (external != null && hasCompleteIdentity(external)) {
             installValidated(external, target)
             val installed = LocalMfiAuthenticationClient.load(target)
             removeExternalProvisioningCopy(external)
             return installed
+        }
+
+        if (hasCompleteIdentity(target)) {
+            return try {
+                LocalMfiAuthenticationClient.load(target)
+            } catch (installedFailure: Exception) {
+                // A standalone APK can repair an interrupted/corrupt earlier installation from
+                // its explicitly supplied assets. Ordinary source builds contain no such assets.
+                if (!assetsContainIdentity(context)) throw installedFailure
+                installFromAssets(context, target)
+                LocalMfiAuthenticationClient.load(target)
+            }
         }
 
         // Standalone builds may explicitly inject the two files into APK assets at build time.
@@ -49,22 +59,24 @@ object CrvMfiAssets {
     }
 
     fun status(context: Context): String {
-        val privateDirectory = File(context.filesDir, LocalMfiAuthenticationClient.DIRECTORY)
-        if (hasCompleteIdentity(privateDirectory)) {
-            return if (runCatching { LocalMfiAuthenticationClient.load(privateDirectory) }.isSuccess) {
-                "MFi identity valid source=private"
-            } else {
-                "MFi identity invalid source=private"
-            }
-        }
-
         val externalDirectory = context.getExternalFilesDir(null)
             ?.let { File(it, LocalMfiAuthenticationClient.DIRECTORY) }
         if (externalDirectory != null && hasCompleteIdentity(externalDirectory)) {
             return if (runCatching { LocalMfiAuthenticationClient.load(externalDirectory) }.isSuccess) {
-                "MFi identity valid source=external"
+                "MFi identity valid source=external-update"
             } else {
-                "MFi identity invalid source=external"
+                "MFi identity invalid source=external-update"
+            }
+        }
+
+        val privateDirectory = File(context.filesDir, LocalMfiAuthenticationClient.DIRECTORY)
+        if (hasCompleteIdentity(privateDirectory)) {
+            return if (runCatching { LocalMfiAuthenticationClient.load(privateDirectory) }.isSuccess) {
+                "MFi identity valid source=private"
+            } else if (assetsContainIdentity(context)) {
+                "MFi identity invalid source=private; repair=apk-assets"
+            } else {
+                "MFi identity invalid source=private"
             }
         }
 
@@ -112,6 +124,7 @@ object CrvMfiAssets {
         if (!staging.mkdirs()) {
             throw IllegalStateException("Could not prepare MFi private staging directory")
         }
+        restrictDirectory(staging)
 
         var movedOldTarget = false
         var installedNewTarget = false
@@ -120,6 +133,7 @@ object CrvMfiAssets {
                 File(source, name).inputStream().use { input ->
                     File(staging, name).outputStream().use { output -> input.copyTo(output) }
                 }
+                restrictFile(File(staging, name))
             }
             LocalMfiAuthenticationClient.load(staging)
 
@@ -136,6 +150,8 @@ object CrvMfiAssets {
                 throw IllegalStateException("Could not install MFi identity into private storage")
             }
             installedNewTarget = true
+            restrictDirectory(target)
+            requiredFiles.forEach { restrictFile(File(target, it)) }
             // Verify the final location before discarding the previous known-good copy.
             LocalMfiAuthenticationClient.load(target)
             backup.deleteRecursively()
@@ -164,7 +180,25 @@ object CrvMfiAssets {
         File(context.filesDir, "${LocalMfiAuthenticationClient.DIRECTORY}-asset-staging").also {
             it.deleteRecursively()
             if (!it.mkdirs()) throw IllegalStateException("Could not prepare local MFi authentication")
+            restrictDirectory(it)
         }
+
+    private fun restrictDirectory(directory: File) {
+        directory.setReadable(false, false)
+        directory.setWritable(false, false)
+        directory.setExecutable(false, false)
+        directory.setReadable(true, true)
+        directory.setWritable(true, true)
+        directory.setExecutable(true, true)
+    }
+
+    private fun restrictFile(file: File) {
+        file.setReadable(false, false)
+        file.setWritable(false, false)
+        file.setExecutable(false, false)
+        file.setReadable(true, true)
+        file.setWritable(true, true)
+    }
 
     private fun hasCompleteIdentity(directory: File): Boolean =
         directory.isDirectory && requiredFiles.all { name ->

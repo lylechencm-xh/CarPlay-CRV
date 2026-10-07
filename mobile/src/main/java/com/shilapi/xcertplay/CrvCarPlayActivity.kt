@@ -206,6 +206,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         detachReceiver = usbHost.registerDetachReceiver {
             if (!awaitingCarPlayReattach) {
                 runOnUiThread {
+                    usbTransitionGeneration.incrementAndGet()
                     controller?.close()
                     controller = null
                     pendingUsbSession?.close()
@@ -308,21 +309,24 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         val generation = usbTransitionGeneration.incrementAndGet()
         reportStatus("Switching iPhone to CarPlay USB mode")
         usbHost.requestCarPlayReenumerationAsync(device, io) { result ->
-            when (result) {
-                is IphoneUsbHost.TransitionResult.ReenumerationRequested -> {
-                    reportStatus("Waiting for iPhone CarPlay USB mode")
-                    mainHandler.post {
+            runOnUiThread {
+                // Re-enumeration may attach a new device before this worker completes.
+                // An old permission error must not cancel that new device's connection.
+                if (destroyed || generation != usbTransitionGeneration.get()) return@runOnUiThread
+                when (result) {
+                    is IphoneUsbHost.TransitionResult.ReenumerationRequested -> {
+                        reportStatus("Waiting for iPhone CarPlay USB mode")
                         pollForCarPlayReattach(
                             generation = generation,
                             deadlineMillis = android.os.SystemClock.elapsedRealtime() +
                                 USB_REENUMERATION_TIMEOUT_MILLIS,
                         )
                     }
-                }
-                is IphoneUsbHost.TransitionResult.Failed -> {
-                    awaitingCarPlayReattach = false
-                    usbTransitionGeneration.incrementAndGet()
-                    connectionError("USB setup failed: ${result.error.message ?: "unknown"}")
+                    is IphoneUsbHost.TransitionResult.Failed -> {
+                        awaitingCarPlayReattach = false
+                        usbTransitionGeneration.incrementAndGet()
+                        connectionError("USB setup failed: ${result.error.message ?: "unknown"}")
+                    }
                 }
             }
         }
@@ -362,26 +366,35 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     private fun openCarPlayUsb(device: UsbDevice) {
+        val generation = usbTransitionGeneration.incrementAndGet()
         connectionStatus("Opening CarPlay USB data paths")
         usbHost.openIap2UsbSessionAsync(device, io) { result ->
-            when (result) {
-                is IphoneUsbHost.Iap2SessionResult.Connected -> {
-                    openCarPlayAfterPermission = false
-                    awaitingCarPlayReattach = false
-                    usbTransitionGeneration.incrementAndGet()
-                    synchronized(this) {
-                        pendingUsbSession?.close()
-                        pendingUsbSession = result.session
-                        pendingDevice = device
-                    }
-                    connectionStatus("USB bulk data path open")
-                    runOnUiThread { maybeStartCarPlay() }
+            // Use Activity's UI dispatch so onDestroy's timer cancellation does not
+            // discard a queued result before its USB session can be closed.
+            runOnUiThread {
+                if (destroyed || generation != usbTransitionGeneration.get()) {
+                    if (result is IphoneUsbHost.Iap2SessionResult.Connected) result.session.close()
+                    return@runOnUiThread
                 }
-                is IphoneUsbHost.Iap2SessionResult.Failed -> {
-                    openCarPlayAfterPermission = false
-                    awaitingCarPlayReattach = false
-                    usbTransitionGeneration.incrementAndGet()
-                    connectionError("USBMUX failed: ${result.error.message ?: "unknown"}")
+                when (result) {
+                    is IphoneUsbHost.Iap2SessionResult.Connected -> {
+                        openCarPlayAfterPermission = false
+                        awaitingCarPlayReattach = false
+                        usbTransitionGeneration.incrementAndGet()
+                        synchronized(this) {
+                            pendingUsbSession?.close()
+                            pendingUsbSession = result.session
+                            pendingDevice = device
+                        }
+                        connectionStatus("USB bulk data path open")
+                        maybeStartCarPlay()
+                    }
+                    is IphoneUsbHost.Iap2SessionResult.Failed -> {
+                        openCarPlayAfterPermission = false
+                        awaitingCarPlayReattach = false
+                        usbTransitionGeneration.incrementAndGet()
+                        connectionError("USBMUX failed: ${result.error.message ?: "unknown"}")
+                    }
                 }
             }
         }

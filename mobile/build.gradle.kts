@@ -59,9 +59,20 @@ android {
 
     buildTypes {
         debug {
-            // Honda head-unit installer recognition depends on the legacy package identity.
-            // Do not append an applicationIdSuffix here: the final APK must remain
-            // exactly com.shihab.diplay.
+            // The debug APK is the local car-test package and has to install on a head unit that
+            // already carries a released build of this app. A released build is signed by CI with a
+            // throwaway debug key, so the two would share the id com.shihab.diplay without sharing a
+            // certificate, and the installer rejects the second one with
+            // INSTALL_FAILED_UPDATE_INCOMPATIBLE ("signatures do not match previously installed
+            // version"). The debug id therefore carries its own suffix and the two install side by
+            // side.
+            //
+            // The release build keeps the legacy id: Honda head-unit installer recognition depends
+            // on it. Everything derived from the id follows the suffix automatically, so the app's
+            // external files directory moves to Android/data/com.shihab.diplay.crvtest/files/ and
+            // the offline-mfi provisioning path and the crash log move with it. The app prints the
+            // resolved path.
+            applicationIdSuffix = ".crvtest"
             versionNameSuffix = "-crv"
             // API17 cannot tolerate unused dependency classes that reference post-Jelly-Bean
             // platform APIs. Shrink only: keep names and disable optimization so field logs,
@@ -96,6 +107,7 @@ android {
 dependencies {
     implementation(project(":crvlegacy"))
     testImplementation(libs.junit)
+    testImplementation(libs.bouncycastle)
 }
 
 // No implicit import. Only the two explicitly selected local runtime assets are allowed.

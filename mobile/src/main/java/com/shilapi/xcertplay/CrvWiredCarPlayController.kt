@@ -39,7 +39,6 @@ import com.shilapi.xcertplay.transport.NcmFunctionDiscovery
 import com.shilapi.xcertplay.transport.NcmUsbBridge
 import com.shilapi.xcertplay.transport.UsbActiveConfiguration
 import java.io.Closeable
-import java.security.GeneralSecurityException
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
@@ -258,7 +257,7 @@ class CrvWiredCarPlayController(
             try {
                 carKitClient.open(pairRecord, LABEL)
             } catch (error: Throwable) {
-                if (!isPairRejection(error)) throw error
+                if (!CrvPairingFailurePolicy.isPairRejection(error)) throw error
                 report("Saved iPhone pairing rejected; pairing again")
                 lockdownState.clear()
                 pairRecord = pairNew(host)
@@ -570,22 +569,6 @@ class CrvWiredCarPlayController(
         lockdownState.save(paired.pairRecord)
         report("iPhone Lockdown paired and saved")
         return paired.pairRecord
-    }
-
-    private fun isPairRejection(error: Throwable): Boolean {
-        var cause: Throwable? = error
-        while (cause != null) {
-            if (cause is GeneralSecurityException) return true
-            val message = cause.message.orEmpty()
-            if (
-                message.contains("InvalidHost", ignoreCase = true) ||
-                message.contains("InvalidPair", ignoreCase = true) ||
-                message.contains("PairRecord", ignoreCase = true) ||
-                message.contains("HostID", ignoreCase = true)
-            ) return true
-            cause = cause.cause
-        }
-        return false
     }
 
     private fun awaitVpnService(): CarPlayVpnService? {

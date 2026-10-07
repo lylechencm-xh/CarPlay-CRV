@@ -2,18 +2,20 @@ package com.shilapi.xcertplay.transport
 
 import android.annotation.SuppressLint
 import java.io.ByteArrayInputStream
+import java.net.Socket
 import java.nio.charset.Charset
 import java.security.GeneralSecurityException
 import java.security.KeyFactory
-import java.security.KeyStore
+import java.security.Principal
+import java.security.PrivateKey
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.spec.PKCS8EncodedKeySpec
 import org.bouncycastle.util.encoders.Base64
-import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLEngine
 import javax.net.ssl.SSLSocket
+import javax.net.ssl.X509ExtendedKeyManager
 import javax.net.ssl.X509TrustManager
 
 /**
@@ -25,39 +27,16 @@ import javax.net.ssl.X509TrustManager
 object LockdownTlsEngineFactory {
     @Throws(GeneralSecurityException::class)
     fun create(pairRecord: LockdownPairRecord): SSLEngine {
-        val password = charArrayOf('l', 'o', 'c', 'k', 'd', 'o', 'w', 'n')
-        // Lockdown presents the root identity from the pair record for both the session and
-        // service TLS channels. HostCertificate is part of pairing, not this TLS identity.
-        val privateKeyPem = pairRecord.rootPrivateKeyPem
-        val certificatePem = pairRecord.rootCertificatePem
-        var privateKeyDer: ByteArray? = null
-        try {
-            privateKeyDer = decodePkcs8Pem(privateKeyPem)
-            val privateKey = KeyFactory.getInstance("RSA")
-                .generatePrivate(PKCS8EncodedKeySpec(privateKeyDer))
-            val certificate = CertificateFactory.getInstance("X.509")
-                .generateCertificate(ByteArrayInputStream(certificatePem)) as X509Certificate
-            val keyStore = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
-                load(null, password)
-                setKeyEntry(KEY_ALIAS, privateKey, password, arrayOf(certificate))
-            }
-            val keyManagers = createKeyManagers(keyStore, password)
-            return createContext(keyManagers).createSSLEngine(PEER_HOST, PEER_PORT).apply {
-                useClientMode = true
-                // SSLEngine has no hostname verification enabled by default. Avoid the
-                // SSLParameters endpoint-identification setter, which is API24 on Android.
-            }
-        } finally {
-            password.fill('\u0000')
-            privateKeyPem.fill(0)
-            certificatePem.fill(0)
-            privateKeyDer?.fill(0)
+        return createContext(pairRecord).createSSLEngine(PEER_HOST, PEER_PORT).apply {
+            useClientMode = true
+            // SSLEngine has no hostname verification enabled by default. Avoid the
+            // SSLParameters endpoint-identification setter, which is API24 on Android.
         }
     }
 
     @Throws(GeneralSecurityException::class)
     fun createContext(pairRecord: LockdownPairRecord): SSLContext {
-        val password = charArrayOf('l', 'o', 'c', 'k', 'd', 'o', 'w', 'n')
+        // Present the same root identity on session and service TLS channels.
         val privateKeyPem = pairRecord.rootPrivateKeyPem
         val certificatePem = pairRecord.rootCertificatePem
         var privateKeyDer: ByteArray? = null
@@ -67,13 +46,10 @@ object LockdownTlsEngineFactory {
                 .generatePrivate(PKCS8EncodedKeySpec(privateKeyDer))
             val certificate = CertificateFactory.getInstance("X.509")
                 .generateCertificate(ByteArrayInputStream(certificatePem)) as X509Certificate
-            val keyStore = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
-                load(null, password)
-                setKeyEntry(KEY_ALIAS, privateKey, password, arrayOf(certificate))
-            }
-            return createContext(createKeyManagers(keyStore, password))
+            // Honda API17 firmware can advertise PKIX without providing its factory.
+            // There is exactly one paired identity, so no keystore/factory is necessary.
+            return createContext(arrayOf(PairedIdentityKeyManager(privateKey, certificate)))
         } finally {
-            password.fill('\u0000')
             privateKeyPem.fill(0)
             certificatePem.fill(0)
             privateKeyDer?.fill(0)
@@ -95,32 +71,34 @@ object LockdownTlsEngineFactory {
             init(keyManagers, arrayOf(UsbLockdownTrustManager), null)
         }
 
-    private fun createKeyManagers(
-        keyStore: KeyStore,
-        password: CharArray,
-    ): Array<javax.net.ssl.KeyManager> {
-        val algorithms = linkedSetOf<String>().apply {
-            KeyManagerFactory.getDefaultAlgorithm()
-                ?.takeIf { it.isNotBlank() }
-                ?.let(::add)
-            add("X509")
-            add("PKIX")
-            add("SunX509")
-        }
-        var lastFailure: GeneralSecurityException? = null
-        for (algorithm in algorithms) {
-            try {
-                val factory = KeyManagerFactory.getInstance(algorithm)
-                factory.init(keyStore, password)
-                return factory.keyManagers
-            } catch (error: GeneralSecurityException) {
-                lastFailure = error
-            }
-        }
-        throw GeneralSecurityException(
-            "No compatible KeyManagerFactory implementation: " + algorithms.joinToString(","),
-            lastFailure,
-        )
+    private class PairedIdentityKeyManager(
+        private val key: PrivateKey,
+        private val certificate: X509Certificate,
+    ) : X509ExtendedKeyManager() {
+        private fun matches(keyType: String?, issuers: Array<out Principal>?): Boolean =
+            keyType == key.algorithm &&
+                (issuers.isNullOrEmpty() || issuers.any { it == certificate.issuerX500Principal })
+
+        override fun getClientAliases(keyType: String?, issuers: Array<out Principal>?): Array<String>? =
+            if (matches(keyType, issuers)) arrayOf(KEY_ALIAS) else null
+
+        override fun chooseClientAlias(
+            keyType: Array<out String>?, issuers: Array<out Principal>?, socket: Socket?,
+        ): String? = if (keyType?.any { matches(it, issuers) } == true) KEY_ALIAS else null
+
+        override fun chooseEngineClientAlias(
+            keyType: Array<out String>?, issuers: Array<out Principal>?, engine: SSLEngine?,
+        ): String? = chooseClientAlias(keyType, issuers, null)
+
+        override fun getCertificateChain(alias: String?): Array<X509Certificate>? =
+            if (alias == KEY_ALIAS) arrayOf(certificate) else null
+
+        override fun getPrivateKey(alias: String?): PrivateKey? = if (alias == KEY_ALIAS) key else null
+
+        // This identity is only used as a client on the dedicated USB channel.
+        override fun getServerAliases(keyType: String?, issuers: Array<out Principal>?): Array<String>? = null
+        override fun chooseServerAlias(keyType: String?, issuers: Array<out Principal>?, socket: Socket?): String? = null
+        override fun chooseEngineServerAlias(keyType: String?, issuers: Array<out Principal>?, engine: SSLEngine?): String? = null
     }
 
     private fun decodePkcs8Pem(pem: ByteArray): ByteArray {
