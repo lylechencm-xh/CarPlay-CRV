@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Manually publish the verified APK as a GitHub Release'
+        required: true
+        type: boolean
+        default: false
 
 concurrency:
   group: crv-main-api17
@@ -123,19 +129,20 @@ jobs:
           path: mobile/build/outputs/apk/debug/mobile-debug.apk
           if-no-files-found: error
 
-      - name: Check release commit is current main
+      - name: Check manual release eligibility
         id: release_guard
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true
         run: |
           CURRENT_MAIN="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
           if [ "$CURRENT_MAIN" = "$GITHUB_SHA" ]; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping GitHub Release because this run is obsolete: $GITHUB_SHA != $CURRENT_MAIN"
+            echo "::notice::Skipping manual GitHub Release because this run is obsolete: $GITHUB_SHA != $CURRENT_MAIN"
           fi
 
       - name: Publish GitHub Release v0.2.26 API17
-        if: steps.release_guard.outputs.publish == 'true'
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release == true && steps.release_guard.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
