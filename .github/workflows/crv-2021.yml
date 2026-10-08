@@ -4,6 +4,8 @@ name: CR-V 2021 Android 4.2.2 Build
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       publish_release:
@@ -13,7 +15,7 @@ on:
         default: false
 
 concurrency:
-  group: crv-main-api17
+  group: crv-main-api17-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
