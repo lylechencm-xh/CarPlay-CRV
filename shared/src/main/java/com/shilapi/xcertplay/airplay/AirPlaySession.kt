@@ -84,6 +84,8 @@ class AirPlaySession(
     @Volatile private var mainScreenToken: Any? = null
 
     private val closed = AtomicBoolean(false)
+    /** Matches upstream DiPlay's thread-safe session lifecycle signal. */
+    internal val isClosed: Boolean get() = closed.get()
     private val notified = AtomicBoolean(false)
     private var eventServer: ServerSocket? = null
     private var eventSocket: Socket? = null
