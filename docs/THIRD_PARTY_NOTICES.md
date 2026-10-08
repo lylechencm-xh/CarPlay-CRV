@@ -25,6 +25,7 @@ CarPlay and the CarPlay icon are Apple Inc. marks/assets. This asset is not cove
 - Bouncy Castle 1.79 — The Legion of the Bouncy Castle Inc.; Bouncy Castle license (MIT-style).
 - JmDNS 3.6.3 — JmDNS contributors; Apache License 2.0.
 - SLF4J — QOS.ch; MIT license.
+- Concentus 1.0.2 (Java Opus codec) — Opus/Xiph contributors and Logan Stromberg; BSD-style 3-clause license. https://github.com/lostromb/concentus
 
 Gradle dependency declarations and version catalog accompany the source. License files available in the resolved artifacts are included under `docs/licenses/dependencies/`.
 

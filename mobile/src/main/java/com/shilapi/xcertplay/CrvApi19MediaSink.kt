@@ -6,6 +6,7 @@ import android.media.AudioManager
 import android.media.AudioTrack
 import android.media.MediaCodec
 import android.media.MediaFormat
+import android.os.Process
 import android.view.Surface
 import com.shilapi.xcertplay.airplay.AudioCodecKind
 import com.shilapi.xcertplay.airplay.AudioFormat
@@ -213,6 +214,7 @@ class CrvApi19MediaSink(
         private sealed class Job {
             data class Config(val codec: VideoCodec, val data: ByteArray) : Job()
             data class Frame(val data: ByteArray) : Job()
+            data class Recover(val reason: String) : Job()
         }
 
         private val queue = LinkedBlockingQueue<Job>(VIDEO_QUEUE_CAPACITY)
@@ -237,6 +239,7 @@ class CrvApi19MediaSink(
             if (queue.offer(Job.Frame(data.copyOf()))) return
             queue.clear()
             waitingForKeyFrame = true
+            queue.offer(Job.Recover("video queue overflow"))
             requestKeyFrameIfDue()
         }
 
@@ -254,10 +257,13 @@ class CrvApi19MediaSink(
 
         private fun run() {
             try {
+                // Best-effort: OEM firmware can reject priority changes; decoding must continue.
+                runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY) }
                 while (running.get()) {
                     when (val job = queue.poll(20, TimeUnit.MILLISECONDS)) {
                         is Job.Config -> configureNow(job.codec, job.data)
                         is Job.Frame -> feed(job.data)
+                        is Job.Recover -> recover(job.reason, preferFlush = true)
                         null -> Unit
                     }
                     drain()
@@ -373,8 +379,22 @@ class CrvApi19MediaSink(
             }
         }
 
-        private fun recover(reason: String) {
+        private fun recover(reason: String, preferFlush: Boolean = false) {
             diagnostic(reason)
+            val active = decoder
+            if (preferFlush && active != null) {
+                // Queue overflow is recoverable without destroying the hardware decoder.
+                // The next input must still be an IDR/key frame after flush.
+                val flushed = runCatching { active.flush() }
+                    .onFailure { diagnostic("video decoder flush failed: " + it.javaClass.simpleName) }
+                    .isSuccess
+                if (flushed) {
+                    waitingForKeyFrame = true
+                    diagnostic("video decoder flushed; requesting keyframe")
+                    requestKeyFrameIfDue()
+                    return
+                }
+            }
             releaseDecoder()
             waitingForKeyFrame = true
             requestKeyFrameIfDue()
@@ -412,6 +432,8 @@ class CrvApi19MediaSink(
 
         private var started = false
         private var decoder: MediaCodec? = null
+        private var softwareOpus: CrvSoftwareOpusDecoder? = null
+        private var rejectedOpusPackets = 0
         private var track: AudioTrack? = null
 
         fun start() {
@@ -511,22 +533,46 @@ class CrvApi19MediaSink(
                 setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 64 * 1024)
                 if (format.codec == AudioCodecKind.AAC_LC) {
                     setInteger("is-adts", 1)
-                    setByteBuffer(
-                        "csd-0",
-                        ByteBuffer.wrap(aacAudioSpecificConfig()),
-                    )
+                    setByteBuffer("csd-0", ByteBuffer.wrap(aacAudioSpecificConfig()))
                 }
             }
 
             decoder = try {
-                MediaCodec.createDecoderByType(mime).also { codec ->
-                    codec.configure(mediaFormat, null, null, 0)
-                    codec.start()
+                val candidate = MediaCodec.createDecoderByType(mime)
+                try {
+                    candidate.configure(mediaFormat, null, null, 0)
+                    candidate.start()
+                    candidate
+                } catch (error: Exception) {
+                    runCatching { candidate.release() }
+                    throw error
                 }
             } catch (error: Exception) {
-                report("Audio decoder unavailable: ${format.codec}")
+                if (!activateOpusFallback("hardware unavailable: " + error.javaClass.simpleName)) {
+                    report("Audio decoder unavailable: ${format.codec}")
+                }
                 null
             }
+        }
+
+        private fun activateOpusFallback(reason: String): Boolean {
+            if (format.codec != AudioCodecKind.OPUS) return false
+            if (softwareOpus != null) return true
+            decoder?.let { codec ->
+                runCatching { codec.stop() }
+                runCatching { codec.release() }
+            }
+            decoder = null
+            softwareOpus = runCatching {
+                CrvSoftwareOpusDecoder(format.sampleRate, format.channels)
+            }.onFailure { error ->
+                report("Opus software decoder failed: " + error.javaClass.simpleName)
+            }.getOrNull()
+            if (softwareOpus != null) {
+                report("Opus fallback=Concentus reason=" + reason)
+                return true
+            }
+            return false
         }
 
         private fun handle(packet: Packet) {
@@ -559,7 +605,21 @@ class CrvApi19MediaSink(
 
                 AudioCodecKind.OPUS -> {
                     if (payload.isNotEmpty()) {
-                        feedDecoder(payload, sampleTimestampUs(packet.sample))
+                        val software = softwareOpus
+                        if (software != null) {
+                            try {
+                                val decodedBytes = software.decode(payload)
+                                writePcm(software.pcm, decodedBytes)
+                            } catch (error: Exception) {
+                                rejectedOpusPackets++
+                                if (rejectedOpusPackets == 1 || rejectedOpusPackets % 100 == 0) {
+                                    report("Opus packet rejected count=" + rejectedOpusPackets +
+                                        " type=" + error.javaClass.simpleName)
+                                }
+                            }
+                        } else {
+                            feedDecoder(payload, sampleTimestampUs(packet.sample))
+                        }
                     }
                 }
             }
@@ -580,7 +640,9 @@ class CrvApi19MediaSink(
                 input.put(bytes)
                 codec.queueInputBuffer(index, 0, bytes.size, timestampUs, 0)
             } catch (error: Exception) {
-                report("Audio decoder input failed")
+                if (!activateOpusFallback("hardware input failure: " + error.javaClass.simpleName)) {
+                    report("Audio decoder input failed")
+                }
             }
         }
 
@@ -610,16 +672,18 @@ class CrvApi19MediaSink(
                     }
                 }
             } catch (error: Exception) {
-                report("Audio decoder output failed")
+                if (!activateOpusFallback("hardware output failure: " + error.javaClass.simpleName)) {
+                    report("Audio decoder output failed")
+                }
             }
         }
 
-        private fun writePcm(bytes: ByteArray) {
+        private fun writePcm(bytes: ByteArray, byteCount: Int = bytes.size) {
             val audio = track ?: return
             var offset = 0
-            while (offset < bytes.size && running.get()) {
+            while (offset < byteCount && running.get()) {
                 @Suppress("DEPRECATION")
-                val written = audio.write(bytes, offset, bytes.size - offset)
+                val written = audio.write(bytes, offset, byteCount - offset)
                 if (written <= 0) return
                 offset += written
             }
@@ -647,6 +711,7 @@ class CrvApi19MediaSink(
                 runCatching { codec.release() }
             }
             decoder = null
+            softwareOpus = null
 
             track?.let { audio ->
                 runCatching { audio.stop() }
