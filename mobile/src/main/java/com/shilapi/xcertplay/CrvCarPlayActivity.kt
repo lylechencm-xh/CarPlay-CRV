@@ -577,7 +577,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         pendingDevice = null
         pendingUsbSession = null
 
-        val next = CrvWiredCarPlayController(
+        lateinit var next: CrvWiredCarPlayController
+        next = CrvWiredCarPlayController(
             context = this,
             usbManager = usbManager,
             surface = surface,
@@ -589,8 +590,10 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             mode = connectionMode,
             onStopped = {
                 runOnUiThread {
-                    controller = null
-                    scheduleReconnect()
+                    if (controller === next) {
+                        controller = null
+                        scheduleReconnect()
+                    }
                 }
             },
         )
@@ -606,6 +609,11 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     private fun reportStatus(message: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { if (!destroyed) reportStatus(message) }
+            return
+        }
+        if (destroyed) return
         maybeCaptureRuntimeSnapshot(message)
         val stage = stageFor(message)
         val normalized = message.lowercase(java.util.Locale.US)

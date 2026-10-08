@@ -124,8 +124,11 @@ class CrvWiredCarPlayController(
 
     private val listener = object : AirPlaySessionListener {
         override fun onSessionActive(session: AirPlaySession) {
+            if (!lifecycle.sessionActive()) {
+                report("Ignoring AirPlay active before iAP2 authentication acceptance or during shutdown")
+                return
+            }
             resources.activeSession = session
-            lifecycle.sessionActive()
             protocolTrace.signal(CrvProtocolLayer.CARPLAY_SESSION, "active")
             val vpn = resources.vpnService
             report("AirPlay transport attached=${vpn?.isAttached() == true} port=${vpn?.boundPort() ?: 0}")
@@ -534,8 +537,7 @@ class CrvWiredCarPlayController(
         }
         report("MFi authentication ready source=${resources.mfiLease?.source ?: "unknown"}")
         vpn.updateMfiAuthenticator(mfi)
-        lifecycle.authenticated()
-        protocolTrace.signal(CrvProtocolLayer.MFI, "ready")
+        protocolTrace.signal(CrvProtocolLayer.MFI, "loaded")
 
         report("Starting iAP2 identification/MFi")
         lifecycle.sessionControlStarted()
@@ -548,8 +550,17 @@ class CrvWiredCarPlayController(
             endpoint = endpoint,
             availableCurrentMilliAmps = AVAILABLE_CURRENT_MA,
             timeoutMillis = Iap2WiredControlClient.NO_TIMEOUT_MILLIS,
-            onProgress = { report(it) },
-        )
+            onProgress = { message ->
+                if (message == "iap2 authentication accepted" && !lifecycle.isStopping()) {
+                    lifecycle.authenticated()
+                    protocolTrace.signal(CrvProtocolLayer.MFI, "accepted")
+                }
+                report(message)
+            },
+        ).also { result ->
+            report("iAP2 wired control ended terminal=${result.terminal} stage=${result.stage} " +
+                "carPlayStartSessions=${result.carPlayStartSessionsSent}")
+        }
     }
 
     private fun runWirelessHandoff(session: Iap2Session, mfi: MfiAuthenticator) {
@@ -626,8 +637,6 @@ class CrvWiredCarPlayController(
                 "port=$airPlayPort",
         )
         lifecycle.networkReady()
-        lifecycle.authenticated()
-
         lifecycle.sessionControlStarted()
         Iap2WirelessControlClient(
             session = session,
@@ -637,7 +646,13 @@ class CrvWiredCarPlayController(
             endpoint = endpoint,
             timeoutMillis = Iap2WirelessControlClient.NO_TIMEOUT_MILLIS,
             onReady = { report("Wi-Fi CarPlay credentials ready") },
-            onProgress = { report(it) },
+            onProgress = { message ->
+                if (message == "iap2 authentication accepted" && !lifecycle.isStopping()) {
+                    lifecycle.authenticated()
+                    protocolTrace.signal(CrvProtocolLayer.MFI, "accepted")
+                }
+                report(message)
+            },
         )
     }
 
@@ -876,8 +891,8 @@ class CrvWiredCarPlayController(
         CrvControllerPhase.IAP2_READY -> CrvProtocolLayer.USBMUX
         CrvControllerPhase.LOCKDOWN_READY -> CrvProtocolLayer.LOCKDOWN
         CrvControllerPhase.NETWORK_READY,
-        CrvControllerPhase.AUTHENTICATED -> CrvProtocolLayer.MFI
-        CrvControllerPhase.SESSION_CONTROL -> CrvProtocolLayer.CARPLAY_SESSION
+        CrvControllerPhase.SESSION_CONTROL -> CrvProtocolLayer.MFI
+        CrvControllerPhase.AUTHENTICATED -> CrvProtocolLayer.CARPLAY_SESSION
         CrvControllerPhase.FAILED,
         CrvControllerPhase.STOPPING,
         CrvControllerPhase.STOPPED -> CrvProtocolLayer.CARPLAY_SESSION

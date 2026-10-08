@@ -16,9 +16,11 @@ class CrvCarPlayStateMachineTest {
         state.lockdownReady()
         state.iap2Ready()
         state.networkReady()
-        assertTrue(state.sessionActive())
-        state.authenticated()
+        assertFalse(state.sessionActive())
         state.sessionControlStarted()
+        assertFalse(state.sessionActive())
+        state.authenticated()
+        assertTrue(state.sessionActive())
         assertTrue(state.sessionEnded())
         assertTrue(state.sessionActive())
         assertTrue(state.requestStop("test"))
@@ -36,8 +38,8 @@ class CrvCarPlayStateMachineTest {
         state.lockdownReady()
         state.iap2Ready()
         state.networkReady()
-        state.authenticated()
         state.sessionControlStarted()
+        state.authenticated()
         assertEquals(CrvControllerPhase.SESSION_CONTROL, state.snapshot().phase)
     }
 
@@ -48,8 +50,8 @@ class CrvCarPlayStateMachineTest {
         state.lockdownReady()
         state.iap2Ready()
         state.networkReady()
-        state.authenticated()
         state.sessionControlStarted()
+        state.authenticated()
 
         assertEquals(
             CrvSessionEndDisposition.HANDSHAKE_ENDED_BEFORE_ACTIVE,
@@ -59,6 +61,24 @@ class CrvCarPlayStateMachineTest {
 
         state.requestStop("test")
         assertEquals(CrvSessionEndDisposition.IGNORED, state.classifySessionEnd())
+    }
+
+    @Test fun authenticationRequiresIap2AcceptanceNotJustLocalMfiLoad() {
+        val state = CrvCarPlayStateMachine()
+        state.start()
+        state.usbMuxReady()
+        state.lockdownReady()
+        state.iap2Ready()
+        state.networkReady()
+        assertTrue(runCatching { state.authenticated() }.exceptionOrNull() is IllegalStateException)
+        assertFalse(state.sessionActive())
+        state.sessionControlStarted()
+        assertEquals(CrvControllerPhase.SESSION_CONTROL, state.snapshot().phase)
+        assertFalse(state.sessionActive())
+        assertEquals(CrvSessionEndDisposition.HANDSHAKE_ENDED_BEFORE_ACTIVE, state.classifySessionEnd())
+        state.authenticated()
+        assertEquals(CrvControllerPhase.AUTHENTICATED, state.snapshot().phase)
+        assertTrue(state.sessionActive())
     }
 
     @Test fun illegalStageSkipIsRejected() {

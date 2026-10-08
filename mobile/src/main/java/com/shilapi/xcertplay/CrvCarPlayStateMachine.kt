@@ -69,7 +69,7 @@ internal class CrvCarPlayStateMachine(
             update(snapshot.copy(sessionActive = false), "airplay-ended")
             return CrvSessionEndDisposition.ACTIVE_SESSION_ENDED
         }
-        return if (snapshot.phase == CrvControllerPhase.SESSION_CONTROL) {
+        return if (snapshot.phase == CrvControllerPhase.SESSION_CONTROL || snapshot.phase == CrvControllerPhase.AUTHENTICATED) {
             CrvSessionEndDisposition.HANDSHAKE_ENDED_BEFORE_ACTIVE
         } else {
             CrvSessionEndDisposition.IGNORED
@@ -134,11 +134,7 @@ internal class CrvCarPlayStateMachine(
     }
 
     private companion object {
-        val SESSION_PHASES = setOf(
-            CrvControllerPhase.NETWORK_READY,
-            CrvControllerPhase.AUTHENTICATED,
-            CrvControllerPhase.SESSION_CONTROL,
-        )
+        val SESSION_PHASES = setOf(CrvControllerPhase.AUTHENTICATED)
         val TERMINAL_OR_STOPPING = setOf(
             CrvControllerPhase.FAILED,
             CrvControllerPhase.STOPPING,
@@ -154,8 +150,8 @@ internal class CrvCarPlayStateMachine(
             CrvControllerPhase.USBMUX_READY to setOf(CrvControllerPhase.LOCKDOWN_READY),
             CrvControllerPhase.LOCKDOWN_READY to setOf(CrvControllerPhase.IAP2_READY),
             CrvControllerPhase.IAP2_READY to setOf(CrvControllerPhase.NETWORK_READY),
-            CrvControllerPhase.NETWORK_READY to setOf(CrvControllerPhase.AUTHENTICATED),
-            CrvControllerPhase.AUTHENTICATED to setOf(CrvControllerPhase.SESSION_CONTROL),
+            CrvControllerPhase.NETWORK_READY to setOf(CrvControllerPhase.SESSION_CONTROL),
+            CrvControllerPhase.SESSION_CONTROL to setOf(CrvControllerPhase.AUTHENTICATED),
         )
     }
 }
