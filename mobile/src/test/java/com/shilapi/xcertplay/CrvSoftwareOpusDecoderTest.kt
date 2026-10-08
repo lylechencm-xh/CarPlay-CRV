@@ -1,7 +1,7 @@
 package com.shilapi.xcertplay
 
-import org.concentus.OpusApplication
-import org.concentus.OpusEncoder
+import io.github.jaredmdobson.concentus.OpusApplication
+import io.github.jaredmdobson.concentus.OpusEncoder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
