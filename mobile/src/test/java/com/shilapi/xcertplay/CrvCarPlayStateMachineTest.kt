@@ -39,8 +39,9 @@ class CrvCarPlayStateMachineTest {
         state.iap2Ready()
         state.networkReady()
         state.sessionControlStarted()
-        state.authenticated()
         assertEquals(CrvControllerPhase.SESSION_CONTROL, state.snapshot().phase)
+        state.authenticated()
+        assertEquals(CrvControllerPhase.AUTHENTICATED, state.snapshot().phase)
     }
 
     @Test fun sessionEndBeforeActiveRequestsHandshakeRecovery() {
