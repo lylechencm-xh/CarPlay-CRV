@@ -95,6 +95,8 @@ android {
 
 dependencies {
     implementation(project(":crvlegacy"))
+    // API17 Opus fallback; decoder-only use, no native libraries required.
+    implementation("io.github.jaredmdobson:concentus:1.0.2")
     testImplementation(libs.junit)
     testImplementation(libs.bouncycastle)
 }

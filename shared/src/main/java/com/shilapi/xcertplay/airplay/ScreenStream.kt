@@ -1,6 +1,7 @@
 package com.shilapi.xcertplay.airplay
 
 import android.util.Log
+import android.os.Process
 import java.io.Closeable
 import java.io.InputStream
 import java.net.InetAddress
@@ -56,6 +57,12 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         try {
             val accepted = bound.accept()
             socket = accepted
+            // H52 P16-inspired tuning; nonfatal if the OEM TCP stack rejects a hint.
+            runCatching { accepted.tcpNoDelay = true }
+            runCatching { accepted.receiveBufferSize = VIDEO_RECEIVE_BUFFER_BYTES }
+            onDiagnostic("video tcp receiveBuffer=" +
+                runCatching { accepted.receiveBufferSize }.getOrDefault(0) +
+                " noDelay=" + runCatching { accepted.tcpNoDelay }.getOrDefault(false))
             run(accepted)
         } catch (error: Exception) {
             if (!closed.get()) listener.onClosed(error)
@@ -63,6 +70,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
     }
 
     private fun run(sock: Socket) {
+        runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY) }
         var failure: Throwable? = null
         val stats = StreamReceiveStats("video", onDiagnostic)
         try {
@@ -141,6 +149,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         const val OP_VIDEO_FRAME = 0
         const val OP_VIDEO_CONFIG = 1
         const val MAX_BODY = 8 * 1024 * 1024
+        const val VIDEO_RECEIVE_BUFFER_BYTES = 512 * 1024
     }
 }
 
