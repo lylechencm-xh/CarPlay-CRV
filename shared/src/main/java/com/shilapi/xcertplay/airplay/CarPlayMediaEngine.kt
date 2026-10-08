@@ -34,6 +34,29 @@ interface MediaSink {
  * decrypts their payloads, and hands decoded media to a [MediaSink]. Telephony and speech
  * streams can additionally return a PCM microphone uplink through the sink.
  */
+/**
+ * Adapts an AirPlay screen stream to the shared decoder only while it is the current
+ * stream for its session and screen type. Late frames from a replaced stream must not
+ * overwrite the new decoder's codec, configuration, or picture.
+ *
+ * Ported from upstream DiPlay's currentScreenListener; the API17 variant intentionally
+ * retains the original three video callbacks without higher-API frame pacing.
+ */
+internal fun currentScreenListener(type: Int, sink: MediaSink, isCurrent: () -> Boolean): ScreenStream.Listener =
+    object : ScreenStream.Listener {
+        override fun onCodec(codec: VideoCodec) {
+            if (isCurrent()) sink.onVideoCodec(type, codec)
+        }
+
+        override fun onConfig(codecData: ByteArray) {
+            if (isCurrent()) sink.onVideoConfig(type, codecData)
+        }
+
+        override fun onFrame(naluBytes: ByteArray) {
+            if (isCurrent()) sink.onVideoFrame(type, naluBytes)
+        }
+    }
+
 class CarPlayMediaEngine(
     private val sink: MediaSink,
     private val microphoneEnabled: Boolean = false,
@@ -94,10 +117,9 @@ class CarPlayMediaEngine(
             }
         }
         val port = screen.listen(
-            object : ScreenStream.Listener {
-                override fun onCodec(codec: VideoCodec) = sink.onVideoCodec(type, codec)
-                override fun onConfig(codecData: ByteArray) = sink.onVideoConfig(type, codecData)
-                override fun onFrame(naluBytes: ByteArray) = sink.onVideoFrame(type, naluBytes)
+            object : ScreenStream.Listener by currentScreenListener(
+                type, sink, isCurrent = { streams[streamKey] === screen },
+            ) {
                 override fun onClosed(cause: Throwable?) {
                     Log.w(
                         TAG,
@@ -105,8 +127,12 @@ class CarPlayMediaEngine(
                     )
                     if (streams.remove(streamKey, screen)) {
                         sink.onScreenStreamActive(type, false)
+                        // The active video stream ended unexpectedly, so the session must reconnect.
+                        session.close()
+                    } else {
+                        // Closing a replaced stream must not tear down its successor.
+                        session.logDebug("Ignoring ended superseded screen stream type=$type")
                     }
-                    session.close()
                 }
             },
         )
