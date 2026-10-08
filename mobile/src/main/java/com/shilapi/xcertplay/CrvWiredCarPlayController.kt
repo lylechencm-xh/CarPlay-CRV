@@ -61,6 +61,7 @@ class CrvWiredCarPlayController(
     private val displayWidth: Int,
     private val displayHeight: Int,
     private val report: (String) -> Unit,
+    private val recordProtocolTrace: (String) -> Unit = report,
     private val reportFailure: (String, Throwable) -> Unit = { _, _ -> },
     private val mode: CrvConnectionMode = CrvConnectionMode.WIRED,
     private val onStopped: () -> Unit = {},
@@ -77,6 +78,12 @@ class CrvWiredCarPlayController(
         )
     }
     private val resources = CrvCarPlayResources()
+    private val protocolTrace = CrvProtocolTraceRecorder(recordProtocolTrace)
+    private val recovery = CrvControllerRecovery(
+        closeControl = { resources.csm?.close() },
+        releaseTransport = resources::releaseTransport,
+        notifyStopped = ::notifyStopped,
+    )
 
     private val airPlayState = CrvAirPlayState(appContext)
     private val identity = airPlayState.identity
@@ -110,7 +117,7 @@ class CrvWiredCarPlayController(
             vpnLatch.countDown()
             if (!lifecycle.isStopping()) {
                 report("CarPlay network service disconnected")
-                runCatching { resources.csm?.close() }
+                recovery.breakBlockingControl()
             }
         }
     }
@@ -119,30 +126,78 @@ class CrvWiredCarPlayController(
         override fun onSessionActive(session: AirPlaySession) {
             resources.activeSession = session
             lifecycle.sessionActive()
+            protocolTrace.signal(CrvProtocolLayer.CARPLAY_SESSION, "active")
             val vpn = resources.vpnService
             report("AirPlay transport attached=${vpn?.isAttached() == true} port=${vpn?.boundPort() ?: 0}")
             report("CarPlay active")
         }
 
         override fun onSessionEnded(session: AirPlaySession) {
-            if (resources.activeSession === session) resources.activeSession = null
-            lifecycle.sessionEnded()
+            val activeSession = resources.activeSession
+            if (activeSession != null && activeSession !== session) {
+                report("Ignoring stale CarPlay session end while another session is active")
+                return
+            }
+            if (activeSession === session) resources.activeSession = null
+            val disposition = lifecycle.classifySessionEnd()
             report("CarPlay session ended")
+            if (disposition == CrvSessionEndDisposition.HANDSHAKE_ENDED_BEFORE_ACTIVE) {
+                protocolTrace.fault(
+                    CrvProtocolLayer.CARPLAY_SESSION,
+                    "session-ended",
+                    "peer-eof-before-active",
+                )
+            } else {
+                protocolTrace.signal(CrvProtocolLayer.CARPLAY_SESSION, "session-ended")
+            }
+            if (disposition == CrvSessionEndDisposition.HANDSHAKE_ENDED_BEFORE_ACTIVE) {
+                report("CarPlay handshake ended before active; restarting controller")
+                recovery.breakBlockingControl()?.let { error ->
+                    report(
+                        "CarPlay handshake recovery failed: ${error.javaClass.simpleName}: " +
+                            (error.message ?: "no message"),
+                    )
+                }
+            }
         }
 
         override fun onTransportError(message: String) {
             val vpn = resources.vpnService
+            protocolTrace.fault(
+                CrvProtocolLayer.CARPLAY_SESSION,
+                "transport",
+                transportFaultClass(message),
+            )
             report("AirPlay transport attached=${vpn?.isAttached() == true} port=${vpn?.boundPort() ?: 0}")
             report("CarPlay transport error: $message")
             // Break the blocking wired control loop so the worker can tear the complete stack down.
-            runCatching { resources.csm?.close() }
+            recovery.breakBlockingControl()
         }
 
         override fun onDebugLog(message: String) {
+            when {
+                message.startsWith("airplay rx SETUP", ignoreCase = true) ->
+                    protocolTrace.record(
+                        CrvProtocolLayer.CARPLAY_SESSION,
+                        CrvProtocolDirection.HOST_TO_DEVICE,
+                        "rtsp-setup",
+                        controlBodyBytes(message),
+                    )
+                message.startsWith("airplay tx SETUP", ignoreCase = true) ->
+                    protocolTrace.record(
+                        CrvProtocolLayer.CARPLAY_SESSION,
+                        CrvProtocolDirection.DEVICE_TO_HOST,
+                        "rtsp-setup",
+                        controlBodyBytes(message),
+                    )
+            }
             if (
                 message.contains("SETUP", ignoreCase = true) ||
                 message.contains("pair", ignoreCase = true) ||
-                message.contains("video", ignoreCase = true)
+                message.contains("video", ignoreCase = true) ||
+                message.contains("event", ignoreCase = true) ||
+                message.contains("handler failed", ignoreCase = true) ||
+                message.contains("control closing", ignoreCase = true)
             ) {
                 report(message)
             }
@@ -150,6 +205,7 @@ class CrvWiredCarPlayController(
     }
 
     fun start(device: UsbDevice, usbSession: Iap2UsbSession) {
+        protocolTrace.signal(CrvProtocolLayer.USB, "attached", detail = mode.name)
         lifecycle.start()
         executor.execute {
             try {
@@ -157,7 +213,13 @@ class CrvWiredCarPlayController(
             } catch (error: Throwable) {
                 val userRequestedStop = lifecycle.isStopping()
                 if (!userRequestedStop) {
+                    val failedLayer = traceLayerFor(lifecycle.snapshot().phase)
                     lifecycle.fail(error.javaClass.simpleName)
+                    protocolTrace.fault(
+                        failedLayer,
+                        "controller",
+                        error.javaClass.simpleName,
+                    )
                     reportFailure("CarPlay controller", error)
                     report(
                         "CarPlay failed: " + error.javaClass.name + ": " +
@@ -166,10 +228,14 @@ class CrvWiredCarPlayController(
                 }
             } finally {
                 lifecycle.requestStop("worker-finished")
-                resources.releaseTransport()
-                runCatching { usbSession.close() }
-                lifecycle.finishStop()
-                notifyStopped()
+                recovery.completeWorker(
+                    closeUsbSession = { usbSession.close() },
+                    finishLifecycle = {
+                        if (lifecycle.snapshot().phase == CrvControllerPhase.STOPPING) {
+                            lifecycle.finishStop()
+                        }
+                    },
+                )
             }
         }
     }
@@ -252,7 +318,10 @@ class CrvWiredCarPlayController(
         } else {
             null
         }
-        if (mode == CrvConnectionMode.WIRED) lifecycle.ncmReady()
+        if (mode == CrvConnectionMode.WIRED) {
+            lifecycle.ncmReady()
+            protocolTrace.signal(CrvProtocolLayer.NCM, "ready")
+        }
 
         val host = Iap2UsbMuxHost.open(
             pipe = usbSession,
@@ -261,6 +330,7 @@ class CrvWiredCarPlayController(
         resources.mux = host
         report("USBMUX ready")
         lifecycle.usbMuxReady()
+        protocolTrace.signal(CrvProtocolLayer.USBMUX, "ready")
 
         val carKitClient = LockdownCarKitClient(host)
         var pairRecord = lockdownState.load()
@@ -282,6 +352,7 @@ class CrvWiredCarPlayController(
         preflightLockdownTls(checkNotNull(pairRecord))
         report("iPhone Lockdown ready")
         lifecycle.lockdownReady()
+        protocolTrace.signal(CrvProtocolLayer.LOCKDOWN, "ready")
         val session = Iap2Session.open(
             underlying = carkit,
             traceContext = "crv-wired",
@@ -290,6 +361,7 @@ class CrvWiredCarPlayController(
         resources.csm = session
         report("iAP2 carkit channel ready")
         lifecycle.iap2Ready()
+        protocolTrace.signal(CrvProtocolLayer.USBMUX, "iap2-ready")
 
         if (mode == CrvConnectionMode.WIFI_HANDOFF) {
             val mfi = loadMfi()
@@ -463,9 +535,11 @@ class CrvWiredCarPlayController(
         report("MFi authentication ready source=${resources.mfiLease?.source ?: "unknown"}")
         vpn.updateMfiAuthenticator(mfi)
         lifecycle.authenticated()
+        protocolTrace.signal(CrvProtocolLayer.MFI, "ready")
 
         report("Starting iAP2 identification/MFi")
         lifecycle.sessionControlStarted()
+        protocolTrace.signal(CrvProtocolLayer.CARPLAY_SESSION, "control-start")
         Iap2WiredControlClient(
             session = session,
             mfi = Iap2MfiAuthenticationClient(mfi),
@@ -782,6 +856,32 @@ class CrvWiredCarPlayController(
         oemLabel = "Honda",
         videoInCar = false,
     )
+
+    private fun controlBodyBytes(message: String): Int =
+        Regex("""body=(\d+)""").find(message)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+
+    private fun transportFaultClass(message: String): String = when {
+        message.contains("EOF", ignoreCase = true) -> "peer-eof"
+        message.contains("timeout", ignoreCase = true) -> "timeout"
+        message.contains("SETUP", ignoreCase = true) -> "setup-error"
+        message.contains("closed", ignoreCase = true) -> "closed"
+        else -> "transport-error"
+    }
+
+    private fun traceLayerFor(phase: CrvControllerPhase): CrvProtocolLayer = when (phase) {
+        CrvControllerPhase.NEW,
+        CrvControllerPhase.STARTING -> CrvProtocolLayer.USB
+        CrvControllerPhase.NCM_READY -> CrvProtocolLayer.NCM
+        CrvControllerPhase.USBMUX_READY,
+        CrvControllerPhase.IAP2_READY -> CrvProtocolLayer.USBMUX
+        CrvControllerPhase.LOCKDOWN_READY -> CrvProtocolLayer.LOCKDOWN
+        CrvControllerPhase.NETWORK_READY,
+        CrvControllerPhase.AUTHENTICATED -> CrvProtocolLayer.MFI
+        CrvControllerPhase.SESSION_CONTROL -> CrvProtocolLayer.CARPLAY_SESSION
+        CrvControllerPhase.FAILED,
+        CrvControllerPhase.STOPPING,
+        CrvControllerPhase.STOPPED -> CrvProtocolLayer.CARPLAY_SESSION
+    }
 
     override fun close() {
         if (!closeRequested.compareAndSet(false, true)) return

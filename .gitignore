@@ -17,6 +17,7 @@ captures/
 
 # Local agent working notes
 /agent_docs/
+/.workbuddy-ai/
 
 # OS files
 .DS_Store

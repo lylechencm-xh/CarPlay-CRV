@@ -350,7 +350,10 @@ class AirPlaySession(
             output.flush()
             true
         } catch (error: Exception) {
-            Log.w(TAG, "airplay event command failed type=${command["type"]}", error)
+            debugLog(
+                "airplay event command failed type=" + command["type"] +
+                    " error=" + error.javaClass.simpleName,
+            )
             close()
             false
         }
@@ -510,15 +513,21 @@ class AirPlaySession(
                     val response = try {
                         handle(request)
                     } catch (error: Exception) {
+                        val detail = error.message ?: error.javaClass.simpleName
                         Log.e(
                             TAG,
                             "airplay handler failed ${request.method} ${request.path} cseq=$cseq",
                             error,
                         )
+                        debugLog(
+                            "airplay handler failed method=${request.method} path=${request.path} " +
+                                "cseq=$cseq error=${error.javaClass.simpleName}: $detail",
+                        )
                         RtspMessage.Response(status = 500)
                     }
                     debugLog(
-                        "airplay tx status=${response.status ?: 200} cseq=$cseq body=${response.body.size}",
+                        "airplay tx ${request.method} ${request.path} status=${response.status ?: 200} " +
+                            "cseq=$cseq body=${response.body.size}",
                         showInDebugOverlay,
                     )
                     if (showInDebugOverlay) debugLog(
@@ -685,6 +694,12 @@ class AirPlaySession(
         val videoDelivery = videoPlaybackAvailability.setFeatureEnabled(videoPlaybackEnabled)
         debugLog("airplay video playback negotiated=$videoPlaybackEnabled availability=$videoDelivery")
         response["enabledFeatures"] = features
+        debugLog(
+            "airplay SETUP response timingPort=${response["timingPort"]} " +
+                "eventPort=${response["eventPort"]} " +
+                "keepAlivePort=${response["keepAlivePort"] ?: "none"} " +
+                "enabledFeatures=$features",
+        )
         return RtspMessage.Response(
             headers = mapOf("Content-Type" to PLIST_CONTENT_TYPE),
             body = BplistCodec.encode(response),
@@ -853,7 +868,7 @@ class AirPlaySession(
             eventSocket = socket
             val shared = pairVerify.shared
             if (shared == null) {
-                Log.e(TAG, "airplay event rejected: pair-verify shared secret unavailable")
+                debugLog("airplay event rejected: pair-verify shared secret unavailable")
                 safeCloseSocket(socket)
                 close()
                 return
@@ -880,7 +895,10 @@ class AirPlaySession(
             runEventRead(socket)
         } catch (error: Exception) {
             if (!closed.get()) {
-                Log.e(TAG, "airplay event accept failed", error)
+                debugLog(
+                    "airplay event accept failed type=" + error.javaClass.simpleName +
+                        " message=" + (error.message ?: "none"),
+                )
                 close()
             }
         }
@@ -901,7 +919,10 @@ class AirPlaySession(
                 val decrypted = try {
                     cipher.decrypt(encrypted)
                 } catch (error: Exception) {
-                    Log.e(TAG, "airplay event decrypt failed encrypted=${encrypted.size}", error)
+                    debugLog(
+                        "airplay event decrypt failed encrypted=" + encrypted.size +
+                            " type=" + error.javaClass.simpleName,
+                    )
                     break
                 }
                 encrypted = decrypted.rest
@@ -926,7 +947,12 @@ class AirPlaySession(
                 }
             }
         } catch (error: Exception) {
-            if (!closed.get()) Log.e(TAG, "airplay event read failed", error)
+            if (!closed.get()) {
+                debugLog(
+                    "airplay event read failed type=" + error.javaClass.simpleName +
+                        " message=" + (error.message ?: "none"),
+                )
+            }
         } finally {
             debugLog("airplay event connection closed")
             videoPlaybackAvailability.setEventReady(false)

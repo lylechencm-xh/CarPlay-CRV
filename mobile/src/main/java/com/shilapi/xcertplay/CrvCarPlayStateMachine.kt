@@ -27,6 +27,12 @@ internal data class CrvControllerTransition(
     val reason: String,
 )
 
+internal enum class CrvSessionEndDisposition {
+    ACTIVE_SESSION_ENDED,
+    HANDSHAKE_ENDED_BEFORE_ACTIVE,
+    IGNORED,
+}
+
 /**
  * Thread-safe lifecycle for the CR-V controller.
  *
@@ -58,9 +64,21 @@ internal class CrvCarPlayStateMachine(
     }
 
     @Synchronized
+    fun classifySessionEnd(): CrvSessionEndDisposition {
+        if (snapshot.sessionActive) {
+            update(snapshot.copy(sessionActive = false), "airplay-ended")
+            return CrvSessionEndDisposition.ACTIVE_SESSION_ENDED
+        }
+        return if (snapshot.phase == CrvControllerPhase.SESSION_CONTROL) {
+            CrvSessionEndDisposition.HANDSHAKE_ENDED_BEFORE_ACTIVE
+        } else {
+            CrvSessionEndDisposition.IGNORED
+        }
+    }
+
+    @Synchronized
     fun sessionEnded(): Boolean {
-        if (!snapshot.sessionActive) return false
-        return update(snapshot.copy(sessionActive = false), "airplay-ended")
+        return classifySessionEnd() == CrvSessionEndDisposition.ACTIVE_SESSION_ENDED
     }
 
     @Synchronized

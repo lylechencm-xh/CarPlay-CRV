@@ -26,3 +26,4 @@ rootProject.name = "xcertplay"
 include(":mobile")
 include(":shared")
 include(":crvlegacy")
+includeBuild("crv-simulator")

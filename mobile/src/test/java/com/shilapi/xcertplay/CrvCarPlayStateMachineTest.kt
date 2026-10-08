@@ -41,6 +41,26 @@ class CrvCarPlayStateMachineTest {
         assertEquals(CrvControllerPhase.SESSION_CONTROL, state.snapshot().phase)
     }
 
+    @Test fun sessionEndBeforeActiveRequestsHandshakeRecovery() {
+        val state = CrvCarPlayStateMachine()
+        state.start()
+        state.usbMuxReady()
+        state.lockdownReady()
+        state.iap2Ready()
+        state.networkReady()
+        state.authenticated()
+        state.sessionControlStarted()
+
+        assertEquals(
+            CrvSessionEndDisposition.HANDSHAKE_ENDED_BEFORE_ACTIVE,
+            state.classifySessionEnd(),
+        )
+        assertFalse(state.snapshot().sessionActive)
+
+        state.requestStop("test")
+        assertEquals(CrvSessionEndDisposition.IGNORED, state.classifySessionEnd())
+    }
+
     @Test fun illegalStageSkipIsRejected() {
         val state = CrvCarPlayStateMachine()
         state.start()
