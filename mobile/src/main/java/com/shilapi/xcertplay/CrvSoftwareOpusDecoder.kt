@@ -1,6 +1,6 @@
 package com.shilapi.xcertplay
 
-import org.concentus.OpusDecoder
+import io.github.jaredmdobson.concentus.OpusDecoder
 
 /**
  * Stateful, per-stream pure Java Opus decoder for Android 4.2.2 / API17.
