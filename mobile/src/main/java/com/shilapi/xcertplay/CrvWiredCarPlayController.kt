@@ -836,7 +836,15 @@ class CrvWiredCarPlayController(
                 "in=0x${function.bulkIn.address.toString(16)} " +
                 "out=0x${function.bulkOut.address.toString(16)}",
         )
-        return NcmUsbBridge.open(connection, function, claimPolicy)
+        return NcmUsbBridge.open(connection, function, claimPolicy) {
+            // USB configuration/alternate-setting changes retain the same device address.
+            // Check the exact USB device rather than an unrelated usb0/CDC-NCM interface.
+            usbManager.deviceList.values.any { attached ->
+                attached.deviceName == device.deviceName &&
+                    attached.vendorId == device.vendorId &&
+                    attached.productId == device.productId
+            }
+        }
     }
 
     /**
