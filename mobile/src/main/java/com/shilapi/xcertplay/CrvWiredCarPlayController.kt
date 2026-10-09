@@ -266,14 +266,9 @@ class CrvWiredCarPlayController(
     fun sendTouch(x: Double, y: Double, down: Boolean): Boolean {
         val session = resources.activeSession ?: return false
         return session.sendTouch(
-            listOf(
-                AirPlayContact(
-                    id = 0,
-                    x = x.coerceIn(0.0, 1.0),
-                    y = y.coerceIn(0.0, 1.0),
-                    down = down,
-                ),
-            ),
+            x = x.coerceIn(0.0, 1.0),
+            y = y.coerceIn(0.0, 1.0),
+            down = down,
         )
     }
 
