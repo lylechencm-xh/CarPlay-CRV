@@ -81,10 +81,9 @@ internal class NcmUsbPresenceGuard(private val isAttached: (() -> Boolean)?) {
 
     @Synchronized
     fun disconnectedAfterFailures(consecutiveFailures: Int): Boolean {
-        if (isAttached == null || consecutiveFailures < 64 || consecutiveFailures % 64 != 0) {
-            return false
-        }
-        val stillAttached = runCatching { isAttached.invoke() }.getOrNull()
+        val observer = isAttached ?: return false
+        if (consecutiveFailures < 64 || consecutiveFailures % 64 != 0) return false
+        val stillAttached = runCatching { observer.invoke() }.getOrNull()
         missingChecks = if (stillAttached == false) missingChecks + 1 else 0
         return missingChecks >= 2
     }
