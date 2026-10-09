@@ -121,14 +121,18 @@ object AirPlayCrypto {
     }
 
     /** 12-byte nonce: four zero bytes followed by an eight-byte little-endian counter. */
-    fun nonce64(counter: Long): ByteArray {
-        val nonce = ByteArray(NONCE_SIZE)
+    fun nonce64(counter: Long): ByteArray =
+        nonce64(counter, ByteArray(NONCE_SIZE))
+
+    fun nonce64(counter: Long, target: ByteArray): ByteArray {
+        require(target.size >= NONCE_SIZE) { "nonce target must be at least 12 bytes" }
+        for (index in 0 until 4) target[index] = 0
         var value = counter
         for (index in 4 until NONCE_SIZE) {
-            nonce[index] = value.toByte()
+            target[index] = value.toByte()
             value = value ushr 8
         }
-        return nonce
+        return target
     }
 
     /** 12-byte nonce from an eight-byte ASCII label placed after four zero bytes. */
@@ -144,5 +148,38 @@ object AirPlayCrypto {
         val output = ByteArray(digest.digestSize)
         digest.doFinal(output, 0)
         return output
+    }
+}
+
+
+/**
+ * Reusable ChaCha20-Poly1305 opener for one media stream.
+ *
+ * Each ScreenStream/AudioStream owns its instance and calls it from one receive thread.
+ * Reinitializing the cipher for every nonce preserves AEAD semantics while avoiding a
+ * ChaCha20Poly1305 and KeyParameter allocation per frame/packet on legacy Android.
+ */
+internal class AirPlayChaChaOpener(key: ByteArray) {
+    private val cipher = ChaCha20Poly1305()
+    private val keyParameter = KeyParameter(key)
+
+    fun open(
+        nonce: ByteArray,
+        source: ByteArray,
+        offset: Int = 0,
+        length: Int = source.size - offset,
+        aad: ByteArray = ByteArray(0),
+    ): ByteArray {
+        require(offset >= 0 && length >= 0 && offset + length <= source.size)
+        cipher.init(false, AEADParameters(keyParameter, MAC_BITS, nonce, aad))
+        val output = ByteArray(cipher.getOutputSize(length))
+        val processed = cipher.processBytes(source, offset, length, output, 0)
+        val finalized = cipher.doFinal(output, processed)
+        val outputLength = processed + finalized
+        return if (outputLength == output.size) output else output.copyOf(outputLength)
+    }
+
+    private companion object {
+        const val MAC_BITS = 128
     }
 }
