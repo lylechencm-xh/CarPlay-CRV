@@ -22,10 +22,12 @@ class AirPlayInfoPlistTest {
 
         val latencies = (info["audioLatencies"] as List<*>).map { it as Map<*, *> }
         val media = latencies.single { it["type"] == 100 && it["audioType"] == "media" }
+        val highMedia = latencies.single { it["type"] == 102 && it["audioType"] == "media" }
         val telephony = latencies.single { it["type"] == 100 && it["audioType"] == "telephony" }
         val highDefault = latencies.single { it["type"] == 102 && it["audioType"] == "default" }
 
         assertEquals(300_000L, media["outputLatencyMicros"])
+        assertEquals(300_000L, highMedia["outputLatencyMicros"])
         assertEquals(0L, telephony["outputLatencyMicros"])
         assertEquals(0L, highDefault["outputLatencyMicros"])
     }
