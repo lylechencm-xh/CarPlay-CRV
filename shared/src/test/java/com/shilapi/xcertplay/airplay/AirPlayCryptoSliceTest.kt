@@ -46,4 +46,27 @@ class AirPlayCryptoSliceTest {
             assertArrayEquals(plain, opened)
         }
     }
+
+
+    @Test
+    fun reusableOpenerCanWritePlaintextAfterPrefix() {
+        val key = ByteArray(32) { (it + 11).toByte() }
+        val nonce = ByteArray(12) { (it + 2).toByte() }
+        val aad = byteArrayOf(4, 3, 2, 1)
+        val plain = byteArrayOf(10, 20, 30, 40, 50)
+        val prefix = byteArrayOf(1, 2, 3, 4, 5, 6)
+        val sealed = AirPlayCrypto.chachaSeal(key, nonce, plain, aad)
+
+        val combined = AirPlayChaChaOpener(key).openWithPrefix(
+            nonce = nonce,
+            source = sealed,
+            offset = 0,
+            length = sealed.size,
+            aad = aad,
+            prefixSource = prefix,
+            prefixLength = prefix.size,
+        )
+
+        assertArrayEquals(prefix + plain, combined)
+    }
 }
