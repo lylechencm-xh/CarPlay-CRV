@@ -213,7 +213,7 @@ class CrvApi19MediaSink(
     ) : Closeable {
         private sealed class Job {
             data class Config(val codec: VideoCodec, val data: ByteArray) : Job()
-            data class Frame(val data: ByteArray) : Job()
+            data class Frame(val data: ByteArray, val receivedNs: Long) : Job()
             data class Recover(val reason: String) : Job()
         }
 
@@ -231,6 +231,7 @@ class CrvApi19MediaSink(
         private var waitingForKeyFrame = true
         private var firstRendered = false
         private var lastKeyFrameRequestNs = 0L
+        private val backlogRecovery = CrvVideoBacklogRecovery()
 
         fun configure(codec: VideoCodec, data: ByteArray) {
             queue.offer(Job.Config(codec, data.copyOf()))
@@ -245,12 +246,14 @@ class CrvApi19MediaSink(
                 data.size <= VIDEO_QUEUE_MAX_BYTES &&
                 pendingBytes + data.size <= VIDEO_QUEUE_MAX_BYTES
             ) {
-                val frame = Job.Frame(data)
+                val frame = Job.Frame(data, System.nanoTime())
                 if (queue.offerLast(frame)) return
                 recoverQueue(frame, "video queue frame limit")
                 return
             }
-            val frame = if (data.size <= VIDEO_QUEUE_MAX_BYTES) Job.Frame(data) else null
+            val frame = if (data.size <= VIDEO_QUEUE_MAX_BYTES) {
+                Job.Frame(data, System.nanoTime())
+            } else null
             recoverQueue(frame, "video queue byte limit")
         }
 
@@ -282,9 +285,32 @@ class CrvApi19MediaSink(
                 runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY) }
                 while (running.get()) {
                     when (val job = queue.pollFirst(20, TimeUnit.MILLISECONDS)) {
-                        is Job.Config -> configureNow(job.codec, job.data)
-                        is Job.Frame -> feed(job.data)
-                        is Job.Recover -> recover(job.reason, preferFlush = true)
+                        is Job.Config -> {
+                            backlogRecovery.reset()
+                            configureNow(job.codec, job.data)
+                        }
+                        is Job.Frame -> {
+                            val backlog = backlogAfterCurrent()
+                            val overloaded = !waitingForKeyFrame && backlogRecovery.observe(
+                                nowNs = System.nanoTime(),
+                                currentReceivedNs = job.receivedNs,
+                                pendingFrames = backlog.pendingFrames,
+                                newestPendingReceivedNs = backlog.newestPendingReceivedNs,
+                            )
+                            if (overloaded) {
+                                discardCurrentFrameChain()
+                                recover(
+                                    "video backlog kept growing or exceeded hard limit",
+                                    preferFlush = true,
+                                )
+                            } else {
+                                feed(job)
+                            }
+                        }
+                        is Job.Recover -> {
+                            backlogRecovery.reset()
+                            recover(job.reason, preferFlush = true)
+                        }
                         null -> Unit
                     }
                     drain()
@@ -336,7 +362,8 @@ class CrvApi19MediaSink(
             requestKeyFrameIfDue()
         }
 
-        private fun feed(packet: ByteArray) {
+        private fun feed(frame: Job.Frame) {
+            val packet = frame.data
             val config = lastConfig ?: return
             if (decoder == null) configureNow(lastCodec, config)
             val codec = decoder ?: return
@@ -363,7 +390,7 @@ class CrvApi19MediaSink(
                     attempt++
                 }
                 if (index < 0) {
-                    if (!queue.offerFirst(Job.Frame(packet))) {
+                    if (!queue.offerFirst(frame)) {
                         queue.clear()
                         queue.offerFirst(Job.Recover("video decoder input backpressure"))
                     }
@@ -411,6 +438,28 @@ class CrvApi19MediaSink(
                 }
             } catch (error: Exception) {
                 recover("video output failed: ${error.javaClass.simpleName}")
+            }
+        }
+
+        private data class Backlog(
+            val pendingFrames: Int,
+            val newestPendingReceivedNs: Long?,
+        )
+
+        private fun backlogAfterCurrent(): Backlog {
+            var pendingFrames = 0
+            var newest: Long? = null
+            for (job in queue) {
+                if (job !is Job.Frame) break
+                pendingFrames++
+                newest = newest?.let { maxOf(it, job.receivedNs) } ?: job.receivedNs
+            }
+            return Backlog(pendingFrames, newest)
+        }
+
+        private fun discardCurrentFrameChain() {
+            while (queue.peekFirst() is Job.Frame) {
+                queue.pollFirst()
             }
         }
 
@@ -921,7 +970,7 @@ class CrvApi19MediaSink(
     }
 
     private companion object {
-        const val VIDEO_QUEUE_CAPACITY = 8
+        const val VIDEO_QUEUE_CAPACITY = 32
         const val VIDEO_QUEUE_MAX_BYTES = 8 * 1024 * 1024
         const val AUDIO_QUEUE_CAPACITY = 96
         const val LOW_LATENCY_AUDIO_PRIME_MILLIS = 30
