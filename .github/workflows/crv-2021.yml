@@ -55,6 +55,9 @@ jobs:
       - name: Run upstream shared tests
         run: ./gradlew :shared:testDebugUnitTest --stacktrace
 
+      - name: Run CR-V mobile regression tests
+        run: ./gradlew :mobile:testDebugUnitTest --stacktrace
+
       - name: Compile CR-V Android 4.2.2 shared compatibility layer
         run: ./gradlew :crvlegacy:assembleDebug --stacktrace
 
