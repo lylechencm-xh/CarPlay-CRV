@@ -169,18 +169,6 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         return maxOf(required, size)
     }
 
-    private fun readFully(input: InputStream, length: Int): ByteArray? {
-        if (length < 0) return null
-        val output = ByteArray(length)
-        var offset = 0
-        while (offset < length) {
-            val read = input.read(output, offset, length - offset)
-            if (read < 0) return null
-            offset += read
-        }
-        return output
-    }
-
     private companion object {
         const val TAG = "xcertplay-usb"
         const val HEADER_LEN = 128
