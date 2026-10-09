@@ -28,6 +28,8 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         fun onClosed(cause: Throwable?) {}
     }
 
+    private val opener = AirPlayChaChaOpener(key)
+    private val frameNonce = ByteArray(12)
     private val closed = AtomicBoolean(false)
     private val frameCounter = AtomicLong(0)
     private val firstFrameLogged = AtomicBoolean(false)
@@ -108,9 +110,8 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         when (header[OPCODE_OFFSET].toInt() and 0xff) {
             OP_VIDEO_FRAME -> {
                 val payload = if (bodySize >= ScreenCodec.TAG_SIZE) {
-                    AirPlayCrypto.chachaOpen(
-                        key = key,
-                        nonce = AirPlayCrypto.nonce64(frameCounter.get()),
+                    opener.open(
+                        nonce = AirPlayCrypto.nonce64(frameCounter.get(), frameNonce),
                         source = body,
                         offset = 0,
                         length = bodySize,
