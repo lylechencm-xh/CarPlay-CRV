@@ -376,6 +376,21 @@ class CrvApi19MediaSink(
                     requestKeyFrameIfDue()
                     return
                 }
+                val backlog = backlogAfterCurrent()
+                if (
+                    CrvVideoRecoveryFrameAge.isObsolete(
+                        nowNs = System.nanoTime(),
+                        receivedNs = frame.receivedNs,
+                        pendingFrames = backlog.pendingFrames,
+                        newestPendingReceivedNs = backlog.newestPendingReceivedNs,
+                    )
+                ) {
+                    discardCurrentFrameChain()
+                    backlogRecovery.reset()
+                    diagnostic("obsolete recovery keyframe discarded; requesting fresh keyframe")
+                    requestKeyFrameIfDue()
+                    return
+                }
                 waitingForKeyFrame = false
             }
 
