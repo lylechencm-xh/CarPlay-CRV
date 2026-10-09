@@ -149,14 +149,12 @@ class NcmUsbBridge internal constructor(
                 val chunkLength =
                     readChunk((remainingNanos + NANOS_PER_MILLISECOND - 1) / NANOS_PER_MILLISECOND)
                         ?: continue
-                val blocks = try {
-                    wireDecoder.append(readBuffer, chunkLength)
+                val decodedFrames = try {
+                    wireDecoder.appendFrames(readBuffer, chunkLength)
                 } catch (error: IllegalArgumentException) {
                     throw failSession("Invalid NCM NTB16 wire framing", error)
                 }
-                for (block in blocks) {
-                    for (frame in Ntb16Codec.parse(block)) enqueueFrame(frame)
-                }
+                for (frame in decodedFrames) enqueueFrame(frame)
             }
         }
     }
