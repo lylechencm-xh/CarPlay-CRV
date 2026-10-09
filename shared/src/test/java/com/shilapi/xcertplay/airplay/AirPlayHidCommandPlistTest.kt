@@ -38,4 +38,37 @@ class AirPlayHidCommandPlistTest {
         assertArrayEquals(first, decodedFirst["hidReport"] as ByteArray)
         assertArrayEquals(second, decodedSecond["hidReport"] as ByteArray)
     }
+
+
+    @Test
+    fun reusableEncoderUpdatesSameBodyWithoutLeavingPreviousTouchBytes() {
+        val encoder = AirPlayHidCommandPlist.ReusableEncoder(
+            AirPlayHid.TOUCH_HID_UID,
+            AirPlayHid.TOUCH_REPORT_BYTES,
+        )
+        val first = ByteArray(AirPlayHid.TOUCH_REPORT_BYTES) { it.toByte() }
+        val second = ByteArray(AirPlayHid.TOUCH_REPORT_BYTES) { (90 + it).toByte() }
+
+        val firstSnapshot = encoder.encode(first).copyOf()
+        val secondBody = encoder.encode(second)
+        val expectedSecond = BplistCodec.encode(
+            linkedMapOf(
+                "type" to "hidSendReport",
+                "uuid" to AirPlayHid.TOUCH_HID_UID.toString(16),
+                "hidReport" to second,
+            ),
+        )
+
+        assertArrayEquals(
+            BplistCodec.encode(
+                linkedMapOf(
+                    "type" to "hidSendReport",
+                    "uuid" to AirPlayHid.TOUCH_HID_UID.toString(16),
+                    "hidReport" to first,
+                ),
+            ),
+            firstSnapshot,
+        )
+        assertArrayEquals(expectedSecond, secondBody)
+    }
 }
