@@ -46,6 +46,7 @@ class NcmUsbBridge internal constructor(
     private val statusEndpoint: UsbEndpoint?,
     private val claimedInterfaces: List<UsbInterface>,
     descriptorHostMac: ByteArray?,
+    isDeviceAttached: (() -> Boolean)? = null,
 ) : Closeable {
     private val descriptorMac = descriptorHostMac?.copyOf()
     val hostMac: ByteArray? get() = descriptorMac?.copyOf()
@@ -56,10 +57,12 @@ class NcmUsbBridge internal constructor(
     private var failure: IphoneUsbException? = null
     private var sequence = 0
     private var loggedWriteTimeout = false
+    private var consecutiveReadFailures = 0
+    private var consecutiveWriteFailures = 0
+    private val presenceGuard = NcmUsbPresenceGuard(isDeviceAttached)
     private val frames = ArrayDeque<ByteArray>()
     private var queuedBytes = 0
-    private var buffered = ByteArray(0)
-    private var bufferedSize = 0
+    private val wireDecoder = Ntb16WireDecoder()
     private val readBuffer = ByteArray(READ_CHUNK_BYTES)
     private val statusRunning = AtomicBoolean(statusEndpoint != null)
     private val statusThread = statusEndpoint?.let { endpoint ->
@@ -78,21 +81,46 @@ class NcmUsbBridge internal constructor(
             this.sequence.also { this.sequence = (this.sequence + 1) and 0xffff }
         }
         val block = Ntb16Codec.build(frame, sequence)
-        val transferred = connection.bulkTransfer(outEndpoint, block, block.size, timeoutMillis)
-        // Before StartCarPlaySession the phone keeps the NCM data path NAKed. Android reports the
-        // resulting timeout as -1; it is not a detach and later packets must be allowed to retry.
-        if (transferred <= 0) {
-            if (!loggedWriteTimeout) {
-                loggedWriteTimeout = true
-                Log.i(IphoneCarPlayConfiguration.TAG, "ncm bulk-out not ready; retaining bridge for retry")
+        // Android API17's four-argument bulkTransfer caps one transaction at 16 KiB.
+        // Keep each intermediate transfer packet-aligned and use the API12 overload.
+        var sent = 0
+        while (sent < block.size) {
+            val chunkSize = NcmLegacyUsbBulk.chunkSize(block.size - sent)
+            val chunk = if (sent == 0 && chunkSize == block.size) {
+                block
+            } else {
+                block.copyOfRange(sent, sent + chunkSize)
             }
-            return@synchronized
+            val transferred = try {
+                connection.bulkTransfer(outEndpoint, chunk, chunk.size, timeoutMillis)
+            } catch (error: RuntimeException) {
+                throw failSession("NCM write failed", error)
+            }
+            if (transferred <= 0) {
+                consecutiveWriteFailures++
+                if (presenceGuard.disconnectedAfterFailures(consecutiveWriteFailures)) {
+                    throw failSession("iPhone USB detached during NCM write")
+                }
+                // Before StartCarPlaySession the iPhone can NAK bulk OUT indefinitely.
+                // Retry only if no part of this NTB has already reached the device.
+                if (sent != 0) {
+                    throw failSession("Partial NCM NTB write interrupted after " + sent + " bytes")
+                }
+                if (!loggedWriteTimeout) {
+                    loggedWriteTimeout = true
+                    Log.i(IphoneCarPlayConfiguration.TAG, "ncm bulk-out not ready; retaining bridge for retry")
+                }
+                return@synchronized
+            }
+            if (transferred != chunkSize) {
+                throw failSession(
+                    "Partial NCM NTB write: " + transferred + " of " + chunkSize + " bytes",
+                )
+            }
+            sent += transferred
         }
-        if (transferred != block.size) {
-            throw IphoneUsbException.DeviceUnavailable(
-                "NCM write transferred $transferred of ${block.size} bytes",
-            )
-        }
+        consecutiveWriteFailures = 0
+        presenceGuard.reset()
         if (loggedWriteTimeout) {
             loggedWriteTimeout = false
             Log.i(IphoneCarPlayConfiguration.TAG, "ncm bulk-out became ready")
@@ -111,14 +139,20 @@ class NcmUsbBridge internal constructor(
 
             val deadline = System.nanoTime() + timeoutMillis * NANOS_PER_MILLISECOND
             while (true) {
-                drainFrames()
                 if (frames.isNotEmpty()) return pollFrame()
                 val remainingNanos = deadline - System.nanoTime()
                 if (remainingNanos <= 0) return null
                 val chunkLength =
                     readChunk((remainingNanos + NANOS_PER_MILLISECOND - 1) / NANOS_PER_MILLISECOND)
                         ?: continue
-                appendBuffered(readBuffer, chunkLength)
+                val blocks = try {
+                    wireDecoder.append(readBuffer, chunkLength)
+                } catch (error: IllegalArgumentException) {
+                    throw failSession("Invalid NCM NTB16 wire framing", error)
+                }
+                for (block in blocks) {
+                    for (frame in Ntb16Codec.parse(block)) enqueueFrame(frame)
+                }
             }
         }
     }
@@ -179,39 +213,6 @@ class NcmUsbBridge internal constructor(
     private fun ByteArray.hex(limit: Int): String =
         take(limit).joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
-    private fun drainFrames() {
-        while (true) {
-            if (bufferedSize < 12) return
-            if (readU32(buffered, 0) != Ntb16Codec.NTH16_SIG) {
-                throw failSession("NCM read buffer does not begin with an NTB16 header")
-            }
-            val blockLength = readU16(buffered, 8)
-            if (blockLength < 28) throw failSession("Invalid NTB16 block length $blockLength")
-            val padded = blockLength % USB_PACKET_SIZE == 0
-            val wireLength = blockLength + if (padded) 1 else 0
-            if (bufferedSize < wireLength) return
-            if (padded && buffered[blockLength].toInt() != 0) {
-                throw failSession("Invalid NTB16 short-packet pad")
-            }
-            for (frame in Ntb16Codec.parse(buffered, 0, blockLength)) enqueueFrame(frame)
-            val remaining = bufferedSize - wireLength
-            buffered.copyInto(buffered, 0, wireLength, bufferedSize)
-            bufferedSize = remaining
-        }
-    }
-
-    private fun appendBuffered(source: ByteArray, length: Int) {
-        val required = bufferedSize + length
-        if (required > buffered.size) {
-            val capacity = maxOf(required, maxOf(READ_CHUNK_BYTES, buffered.size * 2))
-            val grown = ByteArray(capacity)
-            buffered.copyInto(grown, 0, 0, bufferedSize)
-            buffered = grown
-        }
-        source.copyInto(buffered, bufferedSize, 0, length)
-        bufferedSize += length
-    }
-
     private fun enqueueFrame(frame: ByteArray) {
         if (frames.size >= MAX_QUEUED_FRAMES || queuedBytes + frame.size > MAX_QUEUED_BYTES) {
             throw failSession("NCM frame queue exceeded its bounds")
@@ -234,7 +235,20 @@ class NcmUsbBridge internal constructor(
         } catch (error: RuntimeException) {
             throw failSession("NCM read failed", error)
         }
-        return if (transferred <= 0) null else transferred
+        if (transferred <= 0) {
+            consecutiveReadFailures++
+            if (presenceGuard.disconnectedAfterFailures(consecutiveReadFailures)) {
+                throw failSession("iPhone USB detached during NCM read")
+            }
+            // Timeouts can be normal during setup or while the link is idle.
+            if (consecutiveReadFailures % 256 == 0) {
+                Log.i(IphoneCarPlayConfiguration.TAG, "ncm bulk-in idle attempts=" + consecutiveReadFailures)
+            }
+            return null
+        }
+        consecutiveReadFailures = 0
+        presenceGuard.reset()
+        return transferred
     }
 
     private fun failSession(message: String, cause: Throwable? = null): IphoneUsbException.DeviceUnavailable {
@@ -254,18 +268,8 @@ class NcmUsbBridge internal constructor(
         if (closed) throw IphoneUsbException.DeviceUnavailable("NCM bridge is closed")
     }
 
-    private fun readU16(source: ByteArray, offset: Int): Int =
-        (source[offset].toInt() and 0xff) or ((source[offset + 1].toInt() and 0xff) shl 8)
-
-    private fun readU32(source: ByteArray, offset: Int): Int =
-        (source[offset].toInt() and 0xff) or
-            ((source[offset + 1].toInt() and 0xff) shl 8) or
-            ((source[offset + 2].toInt() and 0xff) shl 16) or
-            ((source[offset + 3].toInt() and 0xff) shl 24)
-
     companion object {
-        private const val READ_CHUNK_BYTES = 32 * 1024
-        private const val USB_PACKET_SIZE = 512
+        private const val READ_CHUNK_BYTES = NcmLegacyUsbBulk.MAX_TRANSACTION_BYTES
         private const val STATUS_POLL_TIMEOUT_MILLIS = 20
         private const val STATUS_POLL_INTERVAL_MILLIS = 500L
         private const val MAX_QUEUED_FRAMES = 256
@@ -277,6 +281,7 @@ class NcmUsbBridge internal constructor(
             connection: UsbDeviceConnection,
             function: NcmFunctionDiscovery.NcmFunction,
             claimPolicy: NcmClaimPolicy,
+            isDeviceAttached: (() -> Boolean)? = null,
         ): NcmUsbBridge {
             val forceClaim = claimPolicy.force
             val claimed = ArrayList<UsbInterface>(2)
@@ -363,6 +368,7 @@ class NcmUsbBridge internal constructor(
                     function.statusIn,
                     claimed,
                     descriptorHostMac,
+                    isDeviceAttached,
                 )
             } catch (error: Throwable) {
                 for (usbInterface in claimed.asReversed()) {
