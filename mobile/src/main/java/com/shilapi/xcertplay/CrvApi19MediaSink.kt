@@ -526,9 +526,8 @@ class CrvApi19MediaSink(
         private val format: AudioFormat,
         private val report: (String) -> Unit,
     ) : Closeable {
-        private data class Packet(val rtp: ByteArray, val sample: Int)
-
-        private val queue = LinkedBlockingDeque<Packet>(AUDIO_QUEUE_CAPACITY)
+        private val queue = CrvAudioPacketQueue(AUDIO_QUEUE_CAPACITY)
+        private val packetHolder = CrvAudioPacketQueue.MutablePacket()
         private val running = AtomicBoolean(true)
         private val thread = Thread(::run, "crv-api19-audio").apply {
             isDaemon = true
@@ -561,11 +560,7 @@ class CrvApi19MediaSink(
         fun submit(rtp: ByteArray, sample: Int) {
             if (!running.get()) return
             lastPacketNs = System.nanoTime()
-            val packet = Packet(rtp, sample)
-            if (!queue.offerLast(packet)) {
-                queue.pollFirst()
-                queue.offerLast(packet)
-            }
+            queue.offer(rtp, sample)
         }
 
         override fun close() {
@@ -588,7 +583,9 @@ class CrvApi19MediaSink(
                 // Prime MODE_STREAM before play(); starting an empty track produces an
                 // immediate underrun on this older audio stack.
                 while (running.get()) {
-                    queue.pollFirst(20, TimeUnit.MILLISECONDS)?.let(::handle)
+                    if (queue.poll(20L, packetHolder)) {
+                        packetHolder.rtp?.let { handle(it, packetHolder.sample) }
+                    }
                     drainDecoder()
                     maintainPlaybackBuffer()
                 }
@@ -730,9 +727,9 @@ class CrvApi19MediaSink(
             return false
         }
 
-        private fun handle(packet: Packet) {
-            val payloadStart = CrvLegacyRtp.payloadStart(packet.rtp)
-            val payloadEnd = CrvLegacyRtp.payloadEnd(packet.rtp, payloadStart)
+        private fun handle(rtp: ByteArray, sample: Int) {
+            val payloadStart = CrvLegacyRtp.payloadStart(rtp)
+            val payloadEnd = CrvLegacyRtp.payloadEnd(rtp, payloadStart)
             if (payloadStart < 0 || payloadEnd <= payloadStart) return
             val payloadSize = payloadEnd - payloadStart
 
@@ -740,24 +737,24 @@ class CrvApi19MediaSink(
                 AudioCodecKind.LPCM -> {
                     var index = payloadStart
                     while (index + 1 < payloadEnd) {
-                        val first = packet.rtp[index]
-                        packet.rtp[index] = packet.rtp[index + 1]
-                        packet.rtp[index + 1] = first
+                        val first = rtp[index]
+                        rtp[index] = rtp[index + 1]
+                        rtp[index + 1] = first
                         index += 2
                     }
-                    writePcm(packet.rtp, payloadSize, payloadStart)
+                    writePcm(rtp, payloadSize, payloadStart)
                 }
 
                 AudioCodecKind.AAC_LC -> {
                     feedDecoder(
                         MediaCodecSupport.adtsFrame(
-                            packet.rtp,
+                            rtp,
                             payloadStart,
                             payloadSize,
                             format.sampleRate,
                             format.channels,
                         ),
-                        sampleTimestampUs(packet.sample),
+                        sampleTimestampUs(sample),
                     )
                 }
 
@@ -765,7 +762,7 @@ class CrvApi19MediaSink(
                     val software = softwareOpus
                     if (software != null) {
                         try {
-                            val decodedBytes = software.decode(packet.rtp, payloadStart, payloadSize)
+                            val decodedBytes = software.decode(rtp, payloadStart, payloadSize)
                             writePcm(software.pcm, decodedBytes)
                         } catch (error: Exception) {
                             rejectedOpusPackets++
@@ -776,8 +773,8 @@ class CrvApi19MediaSink(
                         }
                     } else {
                         feedDecoder(
-                            packet.rtp,
-                            sampleTimestampUs(packet.sample),
+                            rtp,
+                            sampleTimestampUs(sample),
                             payloadStart,
                             payloadSize,
                         )
