@@ -116,19 +116,31 @@ object MediaCodecSupport {
     }
 
     /** Wraps one raw AAC-LC access unit in an MPEG-4 ADTS frame. */
-    fun adtsFrame(accessUnit: ByteArray, sampleRate: Int, channels: Int): ByteArray {
+    fun adtsFrame(accessUnit: ByteArray, sampleRate: Int, channels: Int): ByteArray =
+        adtsFrame(accessUnit, 0, accessUnit.size, sampleRate, channels)
+
+    /** Slice variant used by the API17 CR-V renderer to avoid a payload copy. */
+    fun adtsFrame(
+        source: ByteArray,
+        offset: Int,
+        length: Int,
+        sampleRate: Int,
+        channels: Int,
+    ): ByteArray {
+        require(offset >= 0 && length >= 0 && offset + length <= source.size)
         val frequencyIndex = aacFrequencyIndex(sampleRate)
         val channelConfig = channels.coerceIn(1, 7)
-        val frameLength = accessUnit.size + 7
-        val header = ByteArray(7)
-        header[0] = 0xff.toByte()
-        header[1] = 0xf1.toByte()
-        header[2] = ((1 shl 6) or (frequencyIndex shl 2) or (channelConfig ushr 2)).toByte()
-        header[3] = (((channelConfig and 0x3) shl 6) or (frameLength ushr 11)).toByte()
-        header[4] = ((frameLength ushr 3) and 0xff).toByte()
-        header[5] = (((frameLength and 0x7) shl 5) or 0x1f).toByte()
-        header[6] = 0xfc.toByte()
-        return header + accessUnit
+        val frameLength = length + 7
+        val frame = ByteArray(frameLength)
+        frame[0] = 0xff.toByte()
+        frame[1] = 0xf1.toByte()
+        frame[2] = ((1 shl 6) or (frequencyIndex shl 2) or (channelConfig ushr 2)).toByte()
+        frame[3] = (((channelConfig and 0x3) shl 6) or (frameLength ushr 11)).toByte()
+        frame[4] = ((frameLength ushr 3) and 0xff).toByte()
+        frame[5] = (((frameLength and 0x7) shl 5) or 0x1f).toByte()
+        frame[6] = 0xfc.toByte()
+        source.copyInto(frame, 7, offset, offset + length)
+        return frame
     }
 
     /** Extracts one RFC 3640 AAC access unit from an RTP payload. */
