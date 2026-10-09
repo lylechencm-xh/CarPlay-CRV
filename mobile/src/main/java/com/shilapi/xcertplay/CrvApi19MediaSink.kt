@@ -486,6 +486,7 @@ class CrvApi19MediaSink(
         private var primeTargetBytes = 0
         private var lastPcmWriteNs = 0L
         private var rebufferCount = 0
+        private var rebuffering = false
 
         fun start() {
             if (started) return
@@ -816,6 +817,7 @@ class CrvApi19MediaSink(
                     if (primedBytes >= primeTargetBytes) {
                         audio.play()
                         playbackStarted = true
+                        rebuffering = false
                     }
                 }
             }
@@ -827,30 +829,42 @@ class CrvApi19MediaSink(
 
             val now = System.nanoTime()
             val lastPacket = lastPacketNs
+            val queuedBytes = if (playbackStarted) {
+                bufferProgress.queuedBytes(audio.playbackHeadPosition)
+            } else {
+                primedBytes.toLong()
+            }
+            val recoveryFloor = primeTargetBytes / 2L
             if (
-                playbackStarted &&
-                lastPacket != 0L &&
-                now - lastPacket >= MEDIA_REBUFFER_GAP_NS &&
-                queue.isEmpty()
+                CrvMediaRebufferPolicy.shouldPause(
+                    isMedia = true,
+                    playbackStarted = playbackStarted,
+                    compressedQueueEmpty = queue.isEmpty(),
+                    lastPacketNs = lastPacket,
+                    nowNs = now,
+                    queuedBytes = queuedBytes,
+                    recoveryFloorBytes = recoveryFloor,
+                    minimumPacketGapNs = MEDIA_REBUFFER_GAP_NS,
+                )
             ) {
-                val queuedBytes = bufferProgress.queuedBytes(audio.playbackHeadPosition)
-                val recoveryFloor = primeTargetBytes / 2L
-                if (queuedBytes <= recoveryFloor) {
-                    val paused = runCatching { audio.pause() }.isSuccess
-                    if (paused) {
-                        playbackStarted = false
-                        primedBytes = queuedBytes.coerceAtMost(primeTargetBytes.toLong()).toInt()
-                        lastPcmWriteNs = now
-                        rebufferCount++
-                        report(
-                            "Audio media rebuffer count=$rebufferCount queuedBytes=$queuedBytes " +
-                                "targetBytes=$primeTargetBytes",
-                        )
-                    }
+                val paused = runCatching { audio.pause() }.isSuccess
+                if (paused) {
+                    playbackStarted = false
+                    rebuffering = true
+                    primedBytes = queuedBytes.coerceAtMost(primeTargetBytes.toLong()).toInt()
+                    lastPcmWriteNs = now
+                    rebufferCount++
+                    report(
+                        "Audio media rebuffer count=$rebufferCount queuedBytes=$queuedBytes " +
+                            "targetBytes=$primeTargetBytes",
+                    )
                 }
             }
 
+            // Tail resume is only for a short stream that never reached the initial threshold.
+            // Starvation recovery must wait for fresh PCM to rebuild the full media prebuffer.
             if (
+                !rebuffering &&
                 !playbackStarted &&
                 primedBytes > 0 &&
                 queue.isEmpty() &&
