@@ -136,16 +136,21 @@ class Ipv6NcmBridge(
                     LockSupport.parkNanos(ZERO_READ_BACKOFF_NANOS)
                     continue
                 }
-                val tunPacket = buffer.copyOf(length)
-                val ipv6 = EthernetIpv6Codec.addNeighborAdvertisementTargetMac(tunPacket, hostMac)
-                if (ipv6.size != tunPacket.size) {
-                    Log.i(TAG, "ncm added target-link-layer option to neighbor advertisement")
+                var ipv6 = buffer
+                var ipv6Length = length
+                if (EthernetIpv6Codec.isNeighborAdvertisement(buffer, 0, length)) {
+                    val exactPacket = buffer.copyOf(length)
+                    ipv6 = EthernetIpv6Codec.addNeighborAdvertisementTargetMac(exactPacket, hostMac)
+                    ipv6Length = ipv6.size
+                    if (ipv6Length != length) {
+                        Log.i(TAG, "ncm added target-link-layer option to neighbor advertisement")
+                    }
                 }
                 if (outboundLogBudget > 0) {
                     outboundLogBudget--
-                    Log.i(TAG, "ncm outbound ${ipv6.summary(0)}")
+                    Log.i(TAG, "ncm outbound ${ipv6.summary(0, ipv6Length)}")
                 }
-                val multicastMac = EthernetIpv6Codec.multicastDestinationMac(ipv6)
+                val multicastMac = EthernetIpv6Codec.multicastDestinationMac(ipv6, 0, ipv6Length)
                 val mac = multicastMac ?: peerMac
                 if (mac == null) {
                     if (!loggedWaitingForPeer) {
@@ -158,10 +163,10 @@ class Ipv6NcmBridge(
                     loggedOutbound = true
                     Log.i(
                         TAG,
-                        "ncm first outbound ipv6 bytes=$length destination=${mac.macString()} multicast=${multicastMac != null}",
+                        "ncm first outbound ipv6 bytes=$ipv6Length destination=${mac.macString()} multicast=${multicastMac != null}",
                     )
                 }
-                val frame = EthernetIpv6Codec.build(hostMac, mac, ipv6)
+                val frame = EthernetIpv6Codec.build(hostMac, mac, ipv6, 0, ipv6Length)
                 if (!pendingFrame.send(frame)) return
             }
         } catch (error: IOException) {
@@ -184,8 +189,8 @@ class Ipv6NcmBridge(
     private fun ByteArray.macString(): String =
         joinToString(":") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
-    private fun ByteArray.summary(offset: Int): String {
-        val payloadBytes = size - offset
+    private fun ByteArray.summary(offset: Int, length: Int = size - offset): String {
+        val payloadBytes = length.coerceAtMost(size - offset).coerceAtLeast(0)
         if (payloadBytes < 40) return "truncated bytes=$payloadBytes"
         val source = InetAddress.getByAddress(copyOfRange(offset + 8, offset + 24)).hostAddress
         val destination = InetAddress.getByAddress(copyOfRange(offset + 24, offset + 40)).hostAddress
