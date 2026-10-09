@@ -158,13 +158,14 @@ internal class CrvApi19WirelessHotspot(
                 name.startsWith("ap") -> 1
                 name.startsWith("wlan") -> 2
                 name.startsWith("wifi") -> 3
-                isNew -> 4
                 else -> 5
             }
         }
         for (iface in preferred) {
             val usable = runCatching { iface.isUp }.getOrDefault(true)
             if (!usable) continue
+            val name = iface.name.orEmpty().lowercase()
+            if (!(name.startsWith("ap") || name.startsWith("wlan") || name.startsWith("wifi"))) continue
             val address = Collections.list(iface.inetAddresses)
                 .filterIsInstance<Inet4Address>()
                 .firstOrNull {
@@ -248,14 +249,26 @@ internal class CrvApi19BonjourAdvertiser(
     private val nsd = context.applicationContext
         .getSystemService(Context.NSD_SERVICE) as NsdManager
     private var registered = false
+    private var registrationRequested = false
+    private var closed = false
 
     private val listener = object : NsdManager.RegistrationListener {
         override fun onServiceRegistered(serviceInfo: NsdServiceInfo) {
-            registered = true
+            synchronized(this@CrvApi19BonjourAdvertiser) {
+                registered = true
+                if (closed) {
+                    runCatching { nsd.unregisterService(this) }
+                        .onFailure { report("Wi-Fi AirPlay late unregister failed") }
+                }
+            }
             report("Wi-Fi AirPlay advertised")
         }
 
         override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+            synchronized(this@CrvApi19BonjourAdvertiser) {
+                registrationRequested = false
+                registered = false
+            }
             report("Wi-Fi AirPlay advertisement failed code=$errorCode")
         }
 
@@ -268,19 +281,29 @@ internal class CrvApi19BonjourAdvertiser(
         }
     }
 
-    fun start() {
+    @Synchronized fun start() {
+        check(!closed && !registrationRequested) { "AirPlay advertiser already started or closed" }
         val info = NsdServiceInfo().apply {
             this.serviceName = this@CrvApi19BonjourAdvertiser.serviceName
             serviceType = "_airplay._tcp."
             port = this@CrvApi19BonjourAdvertiser.port
         }
-        nsd.registerService(info, NsdManager.PROTOCOL_DNS_SD, listener)
+        registrationRequested = true
+        try {
+            nsd.registerService(info, NsdManager.PROTOCOL_DNS_SD, listener)
+        } catch (error: Throwable) {
+            registrationRequested = false
+            throw error
+        }
     }
 
-    override fun close() {
-        if (registered) {
+    @Synchronized override fun close() {
+        closed = true
+        if (registrationRequested) {
             runCatching { nsd.unregisterService(listener) }
+                .onFailure { report("Wi-Fi AirPlay unregister pending or failed") }
         }
+        registrationRequested = false
         registered = false
     }
 }
