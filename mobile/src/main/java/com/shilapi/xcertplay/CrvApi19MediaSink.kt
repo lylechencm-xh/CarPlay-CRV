@@ -443,6 +443,7 @@ class CrvApi19MediaSink(
         private val outputInfo = MediaCodec.BufferInfo()
         private var softwareOpus: CrvSoftwareOpusDecoder? = null
         private var rejectedOpusPackets = 0
+        private var pcmScratch = ByteArray(0)
         private var track: AudioTrack? = null
         private var playbackStarted = false
         private var primedBytes = 0
@@ -677,11 +678,11 @@ class CrvApi19MediaSink(
                             if (outputInfo.size > 0) {
                                 @Suppress("DEPRECATION")
                                 val output = codec.outputBuffers[index]
-                                val pcm = ByteArray(outputInfo.size)
+                                if (pcmScratch.size < outputInfo.size) pcmScratch = ByteArray(outputInfo.size)
                                 output.position(outputInfo.offset)
                                 output.limit(outputInfo.offset + outputInfo.size)
-                                output.get(pcm)
-                                writePcm(pcm)
+                                output.get(pcmScratch, 0, outputInfo.size)
+                                writePcm(pcmScratch, outputInfo.size)
                             }
                             codec.releaseOutputBuffer(index, false)
                         }
