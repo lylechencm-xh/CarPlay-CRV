@@ -17,10 +17,14 @@ internal class CrvSoftwareOpusDecoder(sampleRate: Int, channels: Int) {
     val pcm = ByteArray(samples.size * 2)
 
     /** Returns the valid little-endian PCM byte count after decoding one Opus packet. */
-    fun decode(packet: ByteArray): Int {
-        require(packet.isNotEmpty()) { "empty Opus packet" }
+    fun decode(packet: ByteArray): Int = decode(packet, 0, packet.size)
+
+    fun decode(packet: ByteArray, offset: Int, length: Int): Int {
+        require(offset >= 0 && length > 0 && offset + length <= packet.size) {
+            "invalid Opus packet slice"
+        }
         val perChannel = decoder.decode(
-            packet, 0, packet.size, samples, 0, maxFrameSamples, false,
+            packet, offset, length, samples, 0, maxFrameSamples, false,
         )
         val sampleCount = perChannel * channelCount
         for (index in 0 until sampleCount) {
