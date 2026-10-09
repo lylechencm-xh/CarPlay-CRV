@@ -8,10 +8,11 @@
 - Android API baseline: **API 17**
 - Package name: `com.shihab.diplay`
 - Current source branch: `main`
-- Current source status: **post-v0.2.28 diagnostics**
-- Latest release: **v0.2.28-crv-api17**
+- Current source status: **v0.2.28 source + post-v0.2.28 diagnostics/compatibility improvements**
+- Release status: **当前没有已发布的 GitHub Release（历史 Releases 已清空）**
+- Build delivery: **GitHub Actions Artifact（成功构建后下载）**
 
-> 本项目当前仍处于真实车辆持续验证阶段。USB / USBMUX / Lockdown 主链路已经取得明确实车进展，当前主要阻塞点集中在 Honda 原厂 MFi / iAP 认证链路。
+> **实验性项目 / 尚未确认完整 CarPlay 实车可用。** 历史实车日志曾验证 USB、CDC-NCM、USBMUX、Lockdown/pairing 等阶段，认证和后续画面、音频、触控的完整闭环仍需复测。源码已支持受控的本地 MFi 身份配置及 Honda 原厂认证链路诊断；实现能力不等于实车认证成功。
 
 ## 项目目标
 
@@ -105,33 +106,25 @@ CR-V 专用运行层，目前包括：
 - Android 4.2.2 legacy Wi-Fi handoff
 - CR-V 诊断日志与自动重连
 
-## 当前实车链路状态
+## 当前实车链路状态（证据分级）
 
-目前实车测试已经确认或观察到以下阶段：
+| 层级 | 进展 | 证据边界 |
+| --- | --- | --- |
+| Android 4.2.2 / API17 | 源码及 CI 固定基线 | CI 不能证明车机可正确解码/运行全部功能 |
+| USB CarPlay config 6 / CDC-NCM | 历史实车日志出现配置切换及 NCM ready | 不代表所有 USB 线束/重连场景稳定 |
+| USBMUX / Lockdown | 历史实车日志出现 USBMUX ready、paired and saved | 只表示配对/传输阶段取得进展 |
+| MFi / iAP2 | 已支持本地凭据来源和原厂接口被动诊断 | 仍需新一轮真车日志证明握手结果 |
+| AirPlay / 音视频 / 触控 | 已有实现与模拟/自动化检查 | 尚无完整 CR-V 实车闭环验收记录 |
 
-```text
-iPhone USB detected
-        ↓
-USB CarPlay configuration / config 6
-        ↓
-CDC-NCM selected
-        ↓
-USBMUX ready
-        ↓
-Lockdown paired / pairing record saved
-        ↓
-MFi / iAP authentication
-        ↓
-CarPlay session
-```
+历史断点集中在 **MFi / iAP 认证**。之后本地打包身份文件的方案已纳入源码，不能再把“缺少本地证书”视为唯一原因，也不能把本地文件存在等同于认证成功。下一次测试应优先分析 Honda OEM 认证资源归属和会话是否真正进入 AirPlay。
 
-当前最主要的阻塞点是：
+连接路径（阶段示意，并非已全部通过）：
 
 ```text
-MFi / iAP authentication
+iPhone USB -> config 6 / CDC-NCM -> USBMUX -> Lockdown
+           -> iAP2 / MFi -> CarPlay session -> AirPlay
+           -> H.264 video / audio / touch
 ```
-
-因此现阶段代码优化重点已经从“USB 是否能通”转向“Honda 原厂认证链路到底由谁负责、如何安全复用”。
 
 ## 有线 CarPlay 主链路
 
@@ -263,7 +256,7 @@ candidateHandle
 
 ## MFi
 
-CR-V 目标明确**不优先依赖外接 CH341**。
+CR-V 目标明确**不优先依赖外接 CH341**。本地打包/安装有合法授权身份的测试方案已支持，但不意味着所有 iPhone 或原厂 MFi 会话已通过实车验收。
 
 上游 `shared/` 可能仍保留 CH341 通用实现，但 CR-V 主运行路径将 Honda 原厂认证基础设施作为优先调查方向。
 
@@ -315,15 +308,30 @@ Android 4.2.2 没有现代 `LocalOnlyHotspot` API，因此 CR-V 无线模式采�
 - Wi-Fi SSID / passphrase / channel handoff；
 - AirPlay listener。
 
-无线模式仍需要在真实 CR-V 车机和 iPhone 上持续验证。
+**当前主入口设置了 `Crv2021Config.WIRED_ONLY = true`，所以无线逻辑虽有源码实现，但不是当前默认可用功能。** 无线模式仍需真实 CR-V 车机与 iPhone 验证。
+
+## 旁支上游按模块吸收（2026-10-08）
+
+参考：[DiPlay-Geely-Android43](https://github.com/xikai6282/DiPlay-Geely-Android43)。本项目**不整体移植吉利车机代码**，只吸收与 Android 4.2.2 / API17 和 CR-V 主架构兼容的独立模块：
+
+- H.264 队列溢出时优先在解码线程尝试 `MediaCodec.flush()`，再请求关键帧；异常时重新创建解码器。
+- 改善画面接收/解码线程优先级，并为视频 TCP 设置低延迟选项。
+- 当车机缺少可用的 `audio/opus` MediaCodec 时，使用 Concentus 纯 Java Opus 解码后备方案。
+- 不合并吉利 H52 专用 USB、原厂 Binder、硬件特定流号或未知 MFi 身份材料。
+
+详见 [选择性吸收说明](docs/CRV-GEELY-SELECTIVE-PORT.md)。这些改进仅说明源码已包含相应策略，**尚不能证明 CR-V 已通过持续音视频测试**。
 
 ## 构建
+
+构建工具链：JDK 17、Android SDK（含 Android 17 平台与编译所需 SDK）、NDK `23.2.8568313`、CMake `3.22.1`，使用仓库内 Gradle wrapper。
 
 CR-V APK 构建：
 
 ```bash
 ./gradlew :mobile:assembleDebug
 ```
+
+输出：`mobile/build/outputs/apk/debug/mobile-debug.apk`。普通源码/CI APK **不默认携带 MFi 配件身份**；如果需要使用合法授权身份进行 standalone 测试，可根据 [构建说明](docs/BUILD.md) 配置 `DIPLAY_AUTH_ASSETS_DIR` 并运行 `./gradlew :mobile:assembleStandaloneDebug`。不要向公开仓库提交密钥、证书或包含它们的 APK。
 
 最终 APK 的关键要求：
 
@@ -336,79 +344,33 @@ Android baseline = 4.2.2
 
 CI 会检查最终 APK manifest，避免意外生成 API18/19+ APK。
 
-## GitHub Actions
+## GitHub Actions 与 APK 下载
 
-CR-V 主 CI：
+主构建工作流：[CR-V 2021 Android 4.2.2 Build](https://github.com/lylechencm-xh/CarPlay-CRV/actions/workflows/crv-2021.yml)。
 
-```text
-CR-V 2021 Android 4.2.2 Build
-```
+CI 主要运行：
 
-流水线主要执行：
+1. API17 / Java API / 源码凭据保护检查。
+2. `crv-simulator` 记录回放测试、`shared` 单元测试与 `crvlegacy` 编译。
+3. Android Lint、APK 构建、DEX / API17 surface、包名和 `minSdk` 验证。
+4. v1/JAR APK 签名检查及 GitHub Actions Artifact 上传。
 
-1. CR-V Android 4.2.2 / API17 基线检查；
-2. API17 Java / Android member surface 检查；
-3. 上游 `shared` 测试；
-4. `crvlegacy` 编译；
-5. Android Lint / NewApi 检查；
-6. CR-V APK 构建；
-7. APK 包名检查；
-8. APK `minSdk=17` 检查；
-9. DEX / API17 compatibility 检查；
-10. APK 签名信息检查；
-11. 上传 GitHub Actions Artifact；
-12. 发布或更新 GitHub Release。
+**下载步骤**：进入 Actions → `CR-V 2021 Android 4.2.2 Build` → 选择 `main` 分支的成功运行 → 在运行页面的 **Artifacts** 下载 `CarPlay-CRV-2021-...-api17-debug-signed` 或 `...-fixed-signed` 压缩包 → 解压后获取 APK。Artifact 可能需要登录 GitHub，也受 GitHub 保留期限限制。
+
+**签名说明**：未配置固定签名的 CI 构建使用 `debug-signed`，可用于构建/安装排查，但不保证被 Honda 安装器识别。仅在配置固定签名 secrets 时输出 `fixed-signed`。不同签名的 APK 不一定能直接覆盖安装。
+
+**发布规则**：正常 push 和 PR 只构建 Artifact，不自动创建 GitHub Release。工作流允许在 `workflow_dispatch` 中显式设置 `publish_release=true` 后发布历史配置的 `v0.2.28` 标签；需要重新正式发布前，应先核对当前版本号、标签、APK 和更新说明。
 
 ## 当前 Release 与源码状态
 
-最新正式 Release：
+2026-10-09 已清空本仓库历史 **17 个 GitHub Releases**；[Releases 页面](https://github.com/lylechencm-xh/CarPlay-CRV/releases)当前没有可下载的 APK。
 
-```text
-v0.2.28-crv-api17
-```
+- 当前 `mobile` 源码版本字段：`versionName = 0.2.28`、`versionCode = 47`（debug 构建带 `-crv` 名称后缀）。
+- 历史 Git 标签（如 `v0.2.28-crv-api17`）仍保留，但**标签不等于存在 Release 或可下载 APK**。
+- `main` 已包含后续 Honda MediaCore 被动诊断和吉利旁支的选择性音视频兼容优化；不能用旧 `v0.2.28` Release 的说明代表当前源码。
+- APK 不进入 `main` 源码树；下载请使用上方 GitHub Actions Artifacts，或自行构建。
 
-APK：
-
-```text
-CarPlay-CRV-2021-v0.2.28-api17.apk
-```
-
-Release 对应源码 commit：
-
-```text
-29c48ad22e1c6773c898c5020a2f068ef3ef58a0
-```
-
-当前 `main` 已经继续向前迭代。
-
-当前 post-v0.2.28 代码新增了：
-
-- Honda MediaCore 被动监听；
-- `storageHandle` / iAP2 event 诊断；
-- 原厂 `auth-result` 监听；
-- `/dev/jdev` 诊断；
-- `link_iap_adapter` 正确分类；
-- 减少重复全平台扫描。
-
-因此：
-
-> **v0.2.28 APK 不包含最新 Honda MediaCore passive diagnostics。**
-
-后续实车诊断应优先使用包含这些改动的新构建。
-
-## APK 产物
-
-正式 Release APK 不提交到 `main` 源码树。
-
-Release 说明应记录：
-
-- 版本号；
-- package；
-- minSdk；
-- Android 基线；
-- 签名模式；
-- 源码 commit；
-- 关键 CR-V 改动。
+后续若发布新 Release，应明确版本号、构建 commit、API17 基线、签名类型、认证来源及真车验证程度。
 
 ## CR-V 车机安装说明
 
@@ -439,9 +401,25 @@ Honda 原厂安装器有可能不会显示明确的 `INSTALL_FAILED_OLDER_SDK`�
 
 因此 CR-V 版本必须持续锁定 Android 4.2.2 / API17。
 
-## 日志与实车验证
+## 日志获取与实车复测
 
-下一轮真实车机测试重点关注：
+应用以每次会话唯一文件名记录诊断信息（包含版本、毫秒时间、PID、开机运行时长）：
+
+```text
+carplay-crv-v<version>-<yyyyMMdd-HHmmss-SSS>-p<PID>-b<bootMs>.log
+```
+
+优先保存在 `Context.getExternalFilesDir(null)`，典型路径为：
+
+```text
+/sdcard/Android/data/com.shihab.diplay/files/
+```
+
+如果应用专用外部目录不可用则回退到应用私有 `filesDir`；**实际路径由车机挂载方式决定，不能保证直接写入移动硬盘**。只有一个 USB 接口时，先插 iPhone 完成测试，拔出后再从车机导出日志；也可在已授权 ADB 的条件下通过 `adb pull` 提取。
+
+日志包含时间、序列号、阶段状态、异常及受限堆栈；不会主动记录原始配件私钥和完整协议载荷。日志仍可能包含设备或系统信息，**分享前请检查并脱敏**，不要公开 MFi 密钥、证书、Lockdown 配对记录、令牌或热点密码。
+
+下次实测优先搜索：
 
 ```text
 Honda MediaCore bind requested=
@@ -452,20 +430,14 @@ candidateHandle=
 Honda MediaCore iap2 state=
 Honda MediaCore auth-result=
 Honda MediaCore Jungo device=/dev/jdev
+USBMUX ready
+Lockdown paired
+CarPlay active
 ```
 
-同时继续保留：
+报告请包含：**APK 的 Actions 运行链接与 SHA/签名标签、车机 Android 固件、iPhone/iOS、连接步骤、车机界面最终状态、完整唯一命名 `.log`、故障发生时间**。同时关注 USB config6、NCM 后端、USBMUX、Lockdown、MFi、AirPlay、视频、音频和触控。
 
-- iPhone USB descriptor / config 记录；
-- USB interface claim；
-- NCM backend；
-- USBMUX；
-- Lockdown；
-- pairing；
-- iAP2；
-- CarPlay session；
-- AirPlay；
-- reconnect / disconnect reason。
+详细实车检查清单：[CRV-2021-TESTING.md](CRV-2021-TESTING.md)。历史测试文档中的旧版 Release/文件名仅供参考，下载路径请以上述 Actions 为准。
 
 ## 实机验证项目
 
@@ -489,9 +461,9 @@ Honda MediaCore Jungo device=/dev/jdev
 ## 当前开发优先级
 
 ```text
-P0  Honda MediaCore storageHandle / auth flow
-P0  MFi ownership / handoff
-P0  完整有线 CarPlay session
+P0  新一轮实车日志核验 Honda MediaCore storageHandle / auth flow
+P0  核验合法本地 MFi 身份在实际会话中的认证结果与 USB ownership / handoff
+P0  完整有线 CarPlay session（AirPlay 视频、音频、触控）
 
 P1  /dev/jdev 权限与 owner
 P1  Honda Binder transaction compatibility
