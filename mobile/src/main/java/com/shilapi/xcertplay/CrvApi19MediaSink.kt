@@ -815,15 +815,17 @@ class CrvApi19MediaSink(
                 val queuedBytes = bufferProgress.queuedBytes(audio.playbackHeadPosition)
                 val recoveryFloor = primeTargetBytes / 2L
                 if (queuedBytes <= recoveryFloor) {
-                    runCatching { audio.pause() }
-                    playbackStarted = false
-                    primedBytes = queuedBytes.coerceAtMost(primeTargetBytes.toLong()).toInt()
-                    lastPcmWriteNs = now
-                    rebufferCount++
-                    report(
-                        "Audio media rebuffer count=$rebufferCount queuedBytes=$queuedBytes " +
-                            "targetBytes=$primeTargetBytes",
-                    )
+                    val paused = runCatching { audio.pause() }.isSuccess
+                    if (paused) {
+                        playbackStarted = false
+                        primedBytes = queuedBytes.coerceAtMost(primeTargetBytes.toLong()).toInt()
+                        lastPcmWriteNs = now
+                        rebufferCount++
+                        report(
+                            "Audio media rebuffer count=$rebufferCount queuedBytes=$queuedBytes " +
+                                "targetBytes=$primeTargetBytes",
+                        )
+                    }
                 }
             }
 
@@ -835,9 +837,10 @@ class CrvApi19MediaSink(
                 now - lastPcmWriteNs >= MEDIA_TAIL_RESUME_NS &&
                 (lastPacket == 0L || now - lastPacket >= MEDIA_TAIL_RESUME_NS)
             ) {
-                runCatching { audio.play() }
-                playbackStarted = true
-                report("Audio media tail resumed bytes=$primedBytes")
+                if (runCatching { audio.play() }.isSuccess) {
+                    playbackStarted = true
+                    report("Audio media tail resumed bytes=$primedBytes")
+                }
             }
         }
 
