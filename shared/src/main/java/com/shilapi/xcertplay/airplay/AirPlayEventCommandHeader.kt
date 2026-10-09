@@ -18,41 +18,46 @@ internal object AirPlayEventCommandHeader {
         target: ByteArray,
     ): Int {
         require(contentLength >= 0)
-        require(cseq >= 0)
+        // eventCseq is an Int and can wrap after a very long-lived session. Preserve the
+        // legacy RTSP string representation even for negative values after overflow.
         require(target.size >= MAX_BYTES)
 
         var offset = 0
         prefixBytes.copyInto(target, offset)
         offset += prefixBytes.size
-        offset = writeDecimal(contentLength, target, offset)
+        offset = writeDecimal(contentLength.toLong(), target, offset)
         cseqBytes.copyInto(target, offset)
         offset += cseqBytes.size
-        offset = writeDecimal(cseq, target, offset)
+        offset = writeDecimal(cseq.toLong(), target, offset)
         endBytes.copyInto(target, offset)
         offset += endBytes.size
         return offset
     }
 
-    private fun writeDecimal(value: Int, target: ByteArray, offset: Int): Int {
-        if (value == 0) {
-            target[offset] = '0'.code.toByte()
-            return offset + 1
-        }
-
-        var divisor = 1
+    private fun writeDecimal(value: Long, target: ByteArray, offset: Int): Int {
         var remaining = value
-        while (remaining >= 10) {
-            remaining /= 10
-            divisor *= 10
+        var position = offset
+        if (remaining < 0L) {
+            target[position++] = '-'.code.toByte()
+            remaining = -remaining
+        }
+        if (remaining == 0L) {
+            target[position] = '0'.code.toByte()
+            return position + 1
         }
 
-        var position = offset
-        remaining = value
-        while (divisor > 0) {
-            val digit = remaining / divisor
+        var divisor = 1L
+        var digits = remaining
+        while (digits >= 10L) {
+            digits /= 10L
+            divisor *= 10L
+        }
+
+        while (divisor > 0L) {
+            val digit = (remaining / divisor).toInt()
             target[position++] = ('0'.code + digit).toByte()
             remaining %= divisor
-            divisor /= 10
+            divisor /= 10L
         }
         return position
     }
