@@ -59,6 +59,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private var connectionMode = CrvConnectionMode.WIRED
     @Volatile private var homeVisible = true
     @Volatile private var manualDisconnect = false
+    private val touchSlots = CrvTouchSlotState()
     private var displayedConnectionStage = CrvConnectionStage.IDLE
     private var lastProgressStep = 0
 
@@ -99,20 +100,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             isOpaque = true
             isClickable = true
             setOnTouchListener { view, event ->
-                val width = view.width.coerceAtLeast(1)
-                val height = view.height.coerceAtLeast(1)
-                val x = event.x.toDouble() / width.toDouble()
-                val y = event.y.toDouble() / height.toDouble()
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN,
-                    MotionEvent.ACTION_MOVE -> controller?.sendTouch(x, y, true)
-                    MotionEvent.ACTION_UP -> {
-                        controller?.sendTouch(x, y, false)
-                        view.performClick()
-                    }
-                    MotionEvent.ACTION_CANCEL -> controller?.sendTouch(x, y, false)
-                }
-                true
+                handleCarPlayTouch(view, event)
             }
         }
 
@@ -1011,6 +999,103 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         showHome()
         displayedConnectionStage = CrvConnectionStage.IDLE
         renderHome(displayedConnectionStage, "Disconnected")
+    }
+
+    private fun handleCarPlayTouch(view: View, event: MotionEvent): Boolean {
+        val width = view.width.coerceAtLeast(1).toDouble()
+        val height = view.height.coerceAtLeast(1).toDouble()
+
+        fun normalizedX(index: Int): Double = event.getX(index).toDouble() / width
+        fun normalizedY(index: Int): Double = event.getY(index).toDouble() / height
+
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                touchSlots.reset()
+                val index = event.actionIndex
+                touchSlots.press(event.getPointerId(index), normalizedX(index), normalizedY(index))
+            }
+
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                val index = event.actionIndex
+                touchSlots.press(event.getPointerId(index), normalizedX(index), normalizedY(index))
+                updateTouchMoves(event, width, height)
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                updateTouchMoves(event, width, height)
+            }
+
+            MotionEvent.ACTION_POINTER_UP -> {
+                updateTouchMoves(event, width, height)
+                val index = event.actionIndex
+                val pointerId = event.getPointerId(index)
+                touchSlots.lift(pointerId, normalizedX(index), normalizedY(index))
+                sendTouchSlots()
+                touchSlots.release(pointerId)
+                return true
+            }
+
+            MotionEvent.ACTION_UP -> {
+                val index = event.actionIndex
+                val pointerId = event.getPointerId(index)
+                touchSlots.lift(pointerId, normalizedX(index), normalizedY(index))
+                sendTouchSlots()
+                touchSlots.reset()
+                view.performClick()
+                return true
+            }
+
+            MotionEvent.ACTION_CANCEL -> {
+                for (slot in 0 until 2) {
+                    if (touchSlots.isDown(slot)) {
+                        // Preserve the last coordinates while sending both contacts released.
+                        val pointerId = findPointerIdForSlot(event, slot)
+                        if (pointerId >= 0) {
+                            touchSlots.lift(pointerId, touchSlots.x(slot), touchSlots.y(slot))
+                        }
+                    }
+                }
+                sendTouchSlots()
+                touchSlots.reset()
+                return true
+            }
+
+            else -> return true
+        }
+
+        sendTouchSlots()
+        return true
+    }
+
+    private fun updateTouchMoves(event: MotionEvent, width: Double, height: Double) {
+        for (index in 0 until event.pointerCount) {
+            val pointerId = event.getPointerId(index)
+            if (touchSlots.slotOf(pointerId) < 0) continue
+            touchSlots.move(
+                pointerId,
+                event.getX(index).toDouble() / width,
+                event.getY(index).toDouble() / height,
+            )
+        }
+    }
+
+    private fun findPointerIdForSlot(event: MotionEvent, slot: Int): Int {
+        for (index in 0 until event.pointerCount) {
+            val pointerId = event.getPointerId(index)
+            if (touchSlots.slotOf(pointerId) == slot) return pointerId
+        }
+        return -1
+    }
+
+    private fun sendTouchSlots() {
+        controller?.sendTouches(
+            x0 = touchSlots.x(0),
+            y0 = touchSlots.y(0),
+            down0 = touchSlots.isDown(0),
+            x1 = touchSlots.x(1),
+            y1 = touchSlots.y(1),
+            down1 = touchSlots.isDown(1),
+        )
     }
 
     private fun cardBackground(fill: Int, stroke: Int): GradientDrawable =
