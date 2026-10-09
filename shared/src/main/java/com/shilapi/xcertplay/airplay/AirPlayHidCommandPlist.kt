@@ -26,6 +26,29 @@ internal object AirPlayHidCommandPlist {
         return output
     }
 
+    /**
+     * Not thread-safe; intended to live behind AirPlaySession.eventWriteLock.
+     * Reuses the complete bplist body for a fixed HID type/report size.
+     */
+    class ReusableEncoder(
+        private val uid: Int,
+        reportSize: Int,
+    ) {
+        private val template = template(uid, reportSize)
+        private val body = template?.bytes?.copyOf()
+
+        fun encode(report: ByteArray): ByteArray {
+            val current = template
+            val output = body
+            if (current == null || output == null || report.size != current.reportSize) {
+                return generic(uid, report)
+            }
+            report.copyInto(output, current.reportOffset)
+            return output
+        }
+    }
+
+
     private fun template(uid: Int, reportSize: Int): Template? {
         val cached = when (uid) {
             AirPlayHid.TOUCH_HID_UID -> touch
