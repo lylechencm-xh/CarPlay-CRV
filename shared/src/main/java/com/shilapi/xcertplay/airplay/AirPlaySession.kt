@@ -358,7 +358,8 @@ class AirPlaySession(
             trace("airplay event tx headers=$head bodyHex=${body.toHex()}")
         }
         return try {
-            val bytes = cipher.encrypt(head.toByteArray(Charsets.US_ASCII) + body)
+            val headBytes = head.toByteArray(Charsets.US_ASCII)
+            val bytes = cipher.encrypt(headBytes, body)
             val output = socket.getOutputStream()
             output.write(bytes)
             output.flush()
