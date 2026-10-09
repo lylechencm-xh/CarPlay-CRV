@@ -2,6 +2,7 @@ package com.shilapi.xcertplay
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class CrvLegacyRtpTest {
@@ -9,6 +10,8 @@ class CrvLegacyRtpTest {
     fun fixedHeaderPayload() {
         val packet = header(0x80) + byteArrayOf(1, 2, 3)
         assertArrayEquals(byteArrayOf(1, 2, 3), CrvLegacyRtp.payload(packet))
+        assertEquals(12, CrvLegacyRtp.payloadStart(packet))
+        assertEquals(15, CrvLegacyRtp.payloadEnd(packet, 12))
     }
 
     @Test
@@ -37,6 +40,9 @@ class CrvLegacyRtpTest {
                 byteArrayOf(21, 22) +
                 byteArrayOf(0, 0, 0, 4)
         assertArrayEquals(byteArrayOf(21, 22), CrvLegacyRtp.payload(packet))
+        val start = CrvLegacyRtp.payloadStart(packet)
+        assertEquals(12, start)
+        assertEquals(14, CrvLegacyRtp.payloadEnd(packet, start))
     }
 
     @Test
