@@ -102,6 +102,24 @@ object AirPlayCrypto {
         return if (outputLength == output.size) output else output.copyOf(outputLength)
     }
 
+    fun chachaOpen(
+        key: ByteArray,
+        nonce: ByteArray,
+        source: ByteArray,
+        offset: Int,
+        length: Int,
+        aad: ByteArray = ByteArray(0),
+    ): ByteArray {
+        require(offset >= 0 && length >= 0 && offset + length <= source.size)
+        val cipher = ChaCha20Poly1305()
+        cipher.init(false, AEADParameters(KeyParameter(key), MAC_BITS, nonce, aad))
+        val output = ByteArray(cipher.getOutputSize(length))
+        val processed = cipher.processBytes(source, offset, length, output, 0)
+        val finalized = cipher.doFinal(output, processed)
+        val outputLength = processed + finalized
+        return if (outputLength == output.size) output else output.copyOf(outputLength)
+    }
+
     /** 12-byte nonce: four zero bytes followed by an eight-byte little-endian counter. */
     fun nonce64(counter: Long): ByteArray {
         val nonce = ByteArray(NONCE_SIZE)
