@@ -100,6 +100,9 @@ class AirPlaySession(
     private var keepAliveSocket: DatagramSocket? = null
     private var keepAliveThread: Thread? = null
     private val eventWriteLock = Any()
+    private val touchReportBuffer = ByteArray(AirPlayHid.TOUCH_REPORT_BYTES)
+    private val touchBodyEncoder =
+        AirPlayHidCommandPlist.ReusableEncoder(AirPlayHid.TOUCH_HID_UID, AirPlayHid.TOUCH_REPORT_BYTES)
     private val eventThreads = CopyOnWriteArrayList<Thread>()
 
     val host: String = socket.inetAddress?.hostAddress ?: ""
@@ -391,19 +394,20 @@ class AirPlaySession(
         x1: Double,
         y1: Double,
         down1: Boolean,
-    ): Boolean {
-        val report = AirPlayHid.touchReport(
-            x0,
-            y0,
-            down0,
-            x1,
-            y1,
-            down1,
-            config.main.widthPixels,
-            config.main.heightPixels,
+    ): Boolean = synchronized(eventWriteLock) {
+        AirPlayHid.writeTouchReport(
+            target = touchReportBuffer,
+            x0 = x0,
+            y0 = y0,
+            down0 = down0,
+            x1 = x1,
+            y1 = y1,
+            down1 = down1,
+            xMax = config.main.widthPixels,
+            yMax = config.main.heightPixels,
         )
-        return sendTouchReport(
-            report = report,
+        sendTouchReportLocked(
+            report = touchReportBuffer,
             contactCount = (if (down0) 1 else 0) + (if (down1) 1 else 0),
             firstX = if (down0) x0 * config.main.widthPixels else null,
             firstY = if (down0) y0 * config.main.heightPixels else null,
@@ -415,16 +419,20 @@ class AirPlaySession(
         x: Double,
         y: Double,
         down: Boolean,
-    ): Boolean {
-        val report = AirPlayHid.touchReport(
-            x,
-            y,
-            down,
-            config.main.widthPixels,
-            config.main.heightPixels,
+    ): Boolean = synchronized(eventWriteLock) {
+        AirPlayHid.writeTouchReport(
+            target = touchReportBuffer,
+            x0 = x,
+            y0 = y,
+            down0 = down,
+            x1 = 0.0,
+            y1 = 0.0,
+            down1 = false,
+            xMax = config.main.widthPixels,
+            yMax = config.main.heightPixels,
         )
-        return sendTouchReport(
-            report = report,
+        sendTouchReportLocked(
+            report = touchReportBuffer,
             contactCount = 1,
             firstX = x * config.main.widthPixels,
             firstY = y * config.main.heightPixels,
@@ -454,9 +462,19 @@ class AirPlaySession(
         firstX: Double?,
         firstY: Double?,
         firstDown: Boolean?,
+    ): Boolean = synchronized(eventWriteLock) {
+        sendTouchReportLocked(report, contactCount, firstX, firstY, firstDown)
+    }
+
+    private fun sendTouchReportLocked(
+        report: ByteArray,
+        contactCount: Int,
+        firstX: Double?,
+        firstY: Double?,
+        firstDown: Boolean?,
     ): Boolean {
         val sendStartNs = System.nanoTime()
-        val sent = sendHidReport(AirPlayHid.TOUCH_HID_UID, report)
+        val sent = sendHidReportLocked(AirPlayHid.TOUCH_HID_UID, report)
         if (sent) {
             com.shilapi.xcertplay.media.TouchLatencyProbe.onTouchSent(
                 sendStartNs,
@@ -548,12 +566,19 @@ class AirPlaySession(
     }
 
     private fun sendHidReport(uid: Int, report: ByteArray): Boolean =
-        synchronized(eventWriteLock) {
-            sendEncodedCommandLocked(
-                body = AirPlayHidCommandPlist.encode(uid, report),
-                commandType = "hidSendReport",
-            )
+        synchronized(eventWriteLock) { sendHidReportLocked(uid, report) }
+
+    private fun sendHidReportLocked(uid: Int, report: ByteArray): Boolean {
+        val body = if (uid == AirPlayHid.TOUCH_HID_UID && report.size == AirPlayHid.TOUCH_REPORT_BYTES) {
+            touchBodyEncoder.encode(report)
+        } else {
+            AirPlayHidCommandPlist.encode(uid, report)
         }
+        return sendEncodedCommandLocked(
+            body = body,
+            commandType = "hidSendReport",
+        )
+    }
 
     private fun runControl() {
         com.shilapi.xcertplay.network.TcpLiveness.configure(socket) { debugLog(it) }
