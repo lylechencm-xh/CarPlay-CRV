@@ -25,6 +25,10 @@ APK 输出：`mobile/build/outputs/apk/debug/mobile-debug.apk`。
 
 详细说明：[构建指南](docs/BUILD.md) · [实车测试清单](CRV-2021-TESTING.md)
 
+## 使用声明
+
+> **免责声明：本项目仅供测试与学习交流使用，请勿用于任何商业用途。**
+
 ## 致谢
 
 基于 [DiPlay](https://github.com/shihabal3amri/DiPlay)；保留原项目及第三方依赖的许可声明。
