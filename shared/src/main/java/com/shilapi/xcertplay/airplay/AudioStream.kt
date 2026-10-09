@@ -44,6 +44,7 @@ class AudioStream(
         ) {}
     }
 
+    private val opener = AirPlayChaChaOpener(key)
     private val closed = AtomicBoolean(false)
     private val receivedPackets = AtomicInteger()
     private val decryptedPackets = AtomicInteger()
@@ -134,8 +135,7 @@ class AudioStream(
                 val sample = readU32Be(buffer, 4)
 
                 val payload = try {
-                    AirPlayCrypto.chachaOpen(
-                        key = key,
+                    opener.open(
                         nonce = nonce,
                         source = buffer,
                         offset = RTP_HEADER_LEN,
