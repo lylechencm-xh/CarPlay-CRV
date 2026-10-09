@@ -271,6 +271,25 @@ class CrvWiredCarPlayController(
         )
     }
 
+    fun sendTouches(
+        x0: Double,
+        y0: Double,
+        down0: Boolean,
+        x1: Double,
+        y1: Double,
+        down1: Boolean,
+    ): Boolean {
+        val session = resources.activeSession ?: return false
+        return session.sendTouches(
+            x0 = x0.coerceIn(0.0, 1.0),
+            y0 = y0.coerceIn(0.0, 1.0),
+            down0 = down0,
+            x1 = x1.coerceIn(0.0, 1.0),
+            y1 = y1.coerceIn(0.0, 1.0),
+            down1 = down1,
+        )
+    }
+
     private fun runWired(device: UsbDevice, usbSession: Iap2UsbSession) {
         check(!lifecycle.isStopping()) { "controller is stopping" }
 
