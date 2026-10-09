@@ -352,7 +352,15 @@ class CrvApi19MediaSink(
             }
 
             try {
-                val index = codec.dequeueInputBuffer(VIDEO_INPUT_TIMEOUT_US)
+                var index = -1
+                var attempt = 0
+                while (running.get() && attempt < VIDEO_INPUT_RETRY_ATTEMPTS) {
+                    index = codec.dequeueInputBuffer(VIDEO_INPUT_TIMEOUT_US)
+                    if (index >= 0) break
+                    drain()
+                    if (decoder !== codec) return
+                    attempt++
+                }
                 if (index < 0) {
                     if (!queue.offerFirst(Job.Frame(packet))) {
                         queue.clear()
@@ -702,8 +710,19 @@ class CrvApi19MediaSink(
         private fun feedDecoder(bytes: ByteArray, timestampUs: Long) {
             val codec = decoder ?: return
             try {
-                val index = codec.dequeueInputBuffer(AUDIO_INPUT_TIMEOUT_US)
-                if (index < 0) return
+                var index = -1
+                var attempt = 0
+                while (running.get() && attempt < AUDIO_INPUT_RETRY_ATTEMPTS) {
+                    index = codec.dequeueInputBuffer(AUDIO_INPUT_TIMEOUT_US)
+                    if (index >= 0) break
+                    drainDecoder()
+                    if (decoder !== codec) return
+                    attempt++
+                }
+                if (index < 0) {
+                    report("Audio decoder input backpressure; packet dropped after retries")
+                    return
+                }
                 @Suppress("DEPRECATION")
                 val input = codec.inputBuffers[index]
                 input.clear()
@@ -811,7 +830,9 @@ class CrvApi19MediaSink(
         const val MIN_AUDIO_TRACK_BUFFER_BYTES = 16 * 1024
         const val MAX_VIDEO_INPUT = 8 * 1024 * 1024
         const val VIDEO_INPUT_TIMEOUT_US = 2_000L
+        const val VIDEO_INPUT_RETRY_ATTEMPTS = 3
         const val AUDIO_INPUT_TIMEOUT_US = 10_000L
+        const val AUDIO_INPUT_RETRY_ATTEMPTS = 3
         const val AAC_LC_OBJECT_TYPE = 2
         const val KEYFRAME_INTERVAL_NS = 1_000_000_000L
         const val WORKER_CLOSE_JOIN_MILLIS = 750L
