@@ -178,6 +178,8 @@ class CarPlayMediaEngine(
         val (dataPort, controlPort) = audio.listen(
             session.auxiliaryBindAddress,
             object : AudioStream.Listener {
+                override fun wantsPacketData(): Boolean = capture != null
+
                 override fun onStarted(firstSample: Int) {
                     meta.firstSample = firstSample
                     meta.originNs = System.nanoTime()
