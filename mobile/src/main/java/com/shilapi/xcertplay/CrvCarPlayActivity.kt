@@ -60,7 +60,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     @Volatile private var homeVisible = true
     @Volatile private var manualDisconnect = false
     private val touchSlots = CrvTouchSlotState()
-    private var displayedConnectionStage = CrvConnectionStage.IDLE
+    @Volatile private var displayedConnectionStage = CrvConnectionStage.IDLE
     private var lastProgressStep = 0
 
     private val io: ExecutorService = Executors.newSingleThreadExecutor()
@@ -583,13 +583,20 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     private fun reportStatus(message: String) {
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            mainHandler.post { if (!destroyed) reportStatus(message) }
-            return
-        }
         if (destroyed) return
         if (isCrvUiDiagnostic(message)) {
-            diagnostics.log(displayedConnectionStage, message)
+            val stage = displayedConnectionStage
+            if (!diagnosticIo.isShutdown) {
+                runCatching {
+                    diagnosticIo.execute {
+                        if (!destroyed) diagnostics.log(stage, message)
+                    }
+                }
+            }
+            return
+        }
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { if (!destroyed) reportStatus(message) }
             return
         }
         maybeCaptureRuntimeSnapshot(message)
