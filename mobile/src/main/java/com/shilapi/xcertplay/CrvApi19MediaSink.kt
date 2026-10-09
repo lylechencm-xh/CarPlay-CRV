@@ -470,6 +470,9 @@ class CrvApi19MediaSink(
         }
 
         private var started = false
+        private val frameBytes = format.channels.coerceAtLeast(1) * 2
+        private val bufferProgress = CrvAudioBufferProgress(frameBytes)
+        @Volatile private var lastPacketNs = 0L
         private var decoder: MediaCodec? = null
         private val outputInfo = MediaCodec.BufferInfo()
         private var softwareOpus: CrvSoftwareOpusDecoder? = null
@@ -480,6 +483,8 @@ class CrvApi19MediaSink(
         private var playbackStarted = false
         private var primedBytes = 0
         private var primeTargetBytes = 0
+        private var lastPcmWriteNs = 0L
+        private var rebufferCount = 0
 
         fun start() {
             if (started) return
@@ -489,6 +494,7 @@ class CrvApi19MediaSink(
 
         fun submit(rtp: ByteArray, sample: Int) {
             if (!running.get()) return
+            lastPacketNs = System.nanoTime()
             val packet = Packet(rtp, sample)
             if (!queue.offerLast(packet)) {
                 queue.pollFirst()
@@ -518,6 +524,7 @@ class CrvApi19MediaSink(
                 while (running.get()) {
                     queue.pollFirst(20, TimeUnit.MILLISECONDS)?.let(::handle)
                     drainDecoder()
+                    maintainPlaybackBuffer()
                 }
             } catch (_: InterruptedException) {
                 // Normal shutdown.
@@ -545,7 +552,6 @@ class CrvApi19MediaSink(
                 return
             }
 
-            val frameBytes = format.channels.coerceAtLeast(1) * 2
             val bytesPerSecond = format.sampleRate * frameBytes
             val isMedia = format.audioType == "media"
             val primeMillis = if (isMedia) MEDIA_AUDIO_PRIME_MILLIS else LOW_LATENCY_AUDIO_PRIME_MILLIS
@@ -782,6 +788,8 @@ class CrvApi19MediaSink(
                 val written = audio.write(bytes, offset, byteCount - offset)
                 if (written <= 0) return
                 offset += written
+                bufferProgress.written(written)
+                lastPcmWriteNs = System.nanoTime()
                 if (!playbackStarted) {
                     primedBytes += written
                     if (primedBytes >= primeTargetBytes) {
@@ -789,6 +797,47 @@ class CrvApi19MediaSink(
                         playbackStarted = true
                     }
                 }
+            }
+        }
+
+        private fun maintainPlaybackBuffer() {
+            val audio = track ?: return
+            if (format.audioType != "media") return
+
+            val now = System.nanoTime()
+            val lastPacket = lastPacketNs
+            if (
+                playbackStarted &&
+                lastPacket != 0L &&
+                now - lastPacket >= MEDIA_REBUFFER_GAP_NS &&
+                queue.isEmpty()
+            ) {
+                val queuedBytes = bufferProgress.queuedBytes(audio.playbackHeadPosition)
+                val recoveryFloor = primeTargetBytes / 2L
+                if (queuedBytes <= recoveryFloor) {
+                    runCatching { audio.pause() }
+                    playbackStarted = false
+                    primedBytes = queuedBytes.coerceAtMost(primeTargetBytes.toLong()).toInt()
+                    lastPcmWriteNs = now
+                    rebufferCount++
+                    report(
+                        "Audio media rebuffer count=$rebufferCount queuedBytes=$queuedBytes " +
+                            "targetBytes=$primeTargetBytes",
+                    )
+                }
+            }
+
+            if (
+                !playbackStarted &&
+                primedBytes > 0 &&
+                queue.isEmpty() &&
+                lastPcmWriteNs != 0L &&
+                now - lastPcmWriteNs >= MEDIA_TAIL_RESUME_NS &&
+                (lastPacket == 0L || now - lastPacket >= MEDIA_TAIL_RESUME_NS)
+            ) {
+                runCatching { audio.play() }
+                playbackStarted = true
+                report("Audio media tail resumed bytes=$primedBytes")
             }
         }
 
@@ -831,6 +880,8 @@ class CrvApi19MediaSink(
         const val LOW_LATENCY_AUDIO_PRIME_MILLIS = 30
         const val MEDIA_AUDIO_PRIME_MILLIS = 300
         const val MEDIA_AUDIO_HEADROOM_MILLIS = 200
+        const val MEDIA_REBUFFER_GAP_NS = 80_000_000L
+        const val MEDIA_TAIL_RESUME_NS = 180_000_000L
         const val MIN_AUDIO_TRACK_BUFFER_BYTES = 16 * 1024
         const val MAX_VIDEO_INPUT = 8 * 1024 * 1024
         const val VIDEO_INPUT_TIMEOUT_US = 2_000L
