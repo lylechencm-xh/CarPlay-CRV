@@ -103,6 +103,8 @@ class AirPlaySession(
     private val touchReportBuffer = ByteArray(AirPlayHid.TOUCH_REPORT_BYTES)
     private val touchBodyEncoder =
         AirPlayHidCommandPlist.ReusableEncoder(AirPlayHid.TOUCH_HID_UID, AirPlayHid.TOUCH_REPORT_BYTES)
+    private val touchEventHeaderBuffer = ByteArray(AirPlayEventCommandHeader.MAX_BYTES)
+    private val touchEventEncryptedBuffer = ByteArray(1024)
     private val eventThreads = CopyOnWriteArrayList<Thread>()
 
     val host: String = socket.inetAddress?.hostAddress ?: ""
@@ -569,15 +571,57 @@ class AirPlaySession(
         synchronized(eventWriteLock) { sendHidReportLocked(uid, report) }
 
     private fun sendHidReportLocked(uid: Int, report: ByteArray): Boolean {
-        val body = if (uid == AirPlayHid.TOUCH_HID_UID && report.size == AirPlayHid.TOUCH_REPORT_BYTES) {
-            touchBodyEncoder.encode(report)
-        } else {
-            AirPlayHidCommandPlist.encode(uid, report)
+        if (uid == AirPlayHid.TOUCH_HID_UID && report.size == AirPlayHid.TOUCH_REPORT_BYTES) {
+            return sendTouchHidLocked(touchBodyEncoder.encode(report))
         }
         return sendEncodedCommandLocked(
-            body = body,
+            body = AirPlayHidCommandPlist.encode(uid, report),
             commandType = "hidSendReport",
         )
+    }
+
+    private fun sendTouchHidLocked(body: ByteArray): Boolean {
+        val socket = eventSocket ?: return false
+        val cipher = eventCipher ?: return false
+        eventCseq++
+        val headerLength = AirPlayEventCommandHeader.write(
+            contentLength = body.size,
+            cseq = eventCseq,
+            target = touchEventHeaderBuffer,
+        )
+        eventHidReportsSent++
+        if (eventHidReportsSent == 1 || eventHidReportsSent % HID_REPORT_LOG_INTERVAL == 0) {
+            debugLog("airplay event HID reports sent=$eventHidReportsSent", false)
+        }
+
+        return try {
+            val encryptedBytes = cipher.encryptedSize(headerLength, body.size)
+            val target = if (encryptedBytes <= touchEventEncryptedBuffer.size) {
+                touchEventEncryptedBuffer
+            } else {
+                ByteArray(encryptedBytes)
+            }
+            val written = cipher.encryptInto(
+                first = touchEventHeaderBuffer,
+                firstOffset = 0,
+                firstLength = headerLength,
+                second = body,
+                secondOffset = 0,
+                secondLength = body.size,
+                target = target,
+            )
+            val output = socket.getOutputStream()
+            output.write(target, 0, written)
+            output.flush()
+            true
+        } catch (error: Exception) {
+            debugLog(
+                "airplay event command failed type=hidSendReport error=" +
+                    error.javaClass.simpleName,
+            )
+            close()
+            false
+        }
     }
 
     private fun runControl() {
