@@ -374,6 +374,33 @@ class AirPlaySession(
         }
     }
 
+    fun sendTouches(
+        x0: Double,
+        y0: Double,
+        down0: Boolean,
+        x1: Double,
+        y1: Double,
+        down1: Boolean,
+    ): Boolean {
+        val report = AirPlayHid.touchReport(
+            x0,
+            y0,
+            down0,
+            x1,
+            y1,
+            down1,
+            config.main.widthPixels,
+            config.main.heightPixels,
+        )
+        return sendTouchReport(
+            report = report,
+            contactCount = (if (down0) 1 else 0) + (if (down1) 1 else 0),
+            firstX = if (down0) x0 * config.main.widthPixels else null,
+            firstY = if (down0) y0 * config.main.heightPixels else null,
+            firstDown = if (down0) true else null,
+        )
+    }
+
     fun sendTouch(
         x: Double,
         y: Double,
