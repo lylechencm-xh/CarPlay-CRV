@@ -92,6 +92,7 @@ class AirPlaySession(
     private var eventSocket: Socket? = null
     private var eventCipher: ControlCipher? = null
     private var eventCseq = 0
+    private var eventHidReportsSent = 0
     private var pendingNightMode: Boolean? = null
     private val firstTouchSendLogged = AtomicBoolean(false)
     private val touchSendFailureLogged = AtomicBoolean(false)
@@ -347,7 +348,15 @@ class AirPlaySession(
             "Content-Type: $PLIST_CONTENT_TYPE\r\n" +
             "Content-Length: ${body.size}\r\n" +
             "CSeq: $eventCseq\r\n\r\n"
-        trace("airplay event tx headers=$head bodyHex=${body.toHex()}")
+        val hidReport = command["type"] == "hidSendReport"
+        if (hidReport) {
+            eventHidReportsSent++
+            if (eventHidReportsSent == 1 || eventHidReportsSent % HID_REPORT_LOG_INTERVAL == 0) {
+                debugLog("airplay event HID reports sent=$eventHidReportsSent", false)
+            }
+        } else {
+            trace("airplay event tx headers=$head bodyHex=${body.toHex()}")
+        }
         return try {
             val bytes = cipher.encrypt(head.toByteArray(Charsets.US_ASCII) + body)
             val output = socket.getOutputStream()
@@ -879,6 +888,7 @@ class AirPlaySession(
             socket.tcpNoDelay = true
             debugLog("airplay event connection accepted from ${socket.remoteSocketAddress} noDelay=${socket.tcpNoDelay}")
             eventSocket = socket
+            eventHidReportsSent = 0
             val shared = pairVerify.shared
             if (shared == null) {
                 debugLog("airplay event rejected: pair-verify shared secret unavailable")
@@ -999,6 +1009,7 @@ class AirPlaySession(
         const val ZOOM_DIRECTION_IN = 0
         const val ZOOM_DIRECTION_OUT = 1
         const val EVENT_READY_POLL_MILLIS = 25L
+        const val HID_REPORT_LOG_INTERVAL = 500
         const val MFI_INJECTION_WAIT_MILLIS = 3_000L
         const val NANOS_PER_MILLISECOND = 1_000_000L
     }
