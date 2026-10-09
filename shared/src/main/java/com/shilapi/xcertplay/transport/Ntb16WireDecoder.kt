@@ -13,7 +13,21 @@ internal class Ntb16WireDecoder {
     private var bufferedSize = 0
     private var optionalPadPending = false
 
-    fun append(source: ByteArray, length: Int = source.size): List<ByteArray> {
+    fun append(source: ByteArray, length: Int = source.size): List<ByteArray> =
+        appendInternal(source, length, framesOnly = false)
+
+    /**
+     * Reassembles NTB16 blocks but returns their Ethernet datagrams directly.
+     * This avoids copying each complete NTB only to copy its contained frame again.
+     */
+    fun appendFrames(source: ByteArray, length: Int = source.size): List<ByteArray> =
+        appendInternal(source, length, framesOnly = true)
+
+    private fun appendInternal(
+        source: ByteArray,
+        length: Int,
+        framesOnly: Boolean,
+    ): List<ByteArray> {
         require(length in 0..source.size) { "Invalid NCM USB read length" }
         if (length > 0) {
             val required = bufferedSize + length
@@ -26,7 +40,7 @@ internal class Ntb16WireDecoder {
             bufferedSize += length
         }
 
-        val blocks = ArrayList<ByteArray>()
+        val output = ArrayList<ByteArray>()
         while (true) {
             if (optionalPadPending) {
                 if (bufferedSize == 0) break
@@ -47,11 +61,16 @@ internal class Ntb16WireDecoder {
                 (buffered[8].toInt() and 0xff) or ((buffered[9].toInt() and 0xff) shl 8)
             require(blockLength >= 28) { "Invalid NTB16 block length " + blockLength }
             if (bufferedSize < blockLength) break
-            blocks.add(buffered.copyOfRange(0, blockLength))
+
+            if (framesOnly) {
+                output.addAll(Ntb16Codec.parse(buffered, 0, blockLength))
+            } else {
+                output.add(buffered.copyOfRange(0, blockLength))
+            }
             consume(blockLength)
             optionalPadPending = blockLength % 512 == 0
         }
-        return blocks
+        return output
     }
 
     private fun consume(count: Int) {
