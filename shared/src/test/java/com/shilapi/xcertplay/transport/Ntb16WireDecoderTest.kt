@@ -54,6 +54,21 @@ class Ntb16WireDecoderTest {
         assertArrayEquals(byteArrayOf(7, 8, 9), Ntb16Codec.parse(blocks.single()).single())
     }
 
+    @Test fun appendFramesSkipsCompleteNtbCopyAndKeepsFragmentReassembly() {
+        val decoder = Ntb16WireDecoder()
+        val firstFrame = byteArrayOf(7, 8, 9)
+        val first = Ntb16Codec.build(firstFrame, 12)
+        val secondFrame = byteArrayOf(4, 5, 6, 7)
+        val second = Ntb16Codec.build(secondFrame, 13)
+
+        assertTrue(decoder.appendFrames(first.copyOfRange(0, 9)).isEmpty())
+        val frames = decoder.appendFrames(first.copyOfRange(9, first.size) + second)
+
+        assertEquals(2, frames.size)
+        assertArrayEquals(firstFrame, frames[0])
+        assertArrayEquals(secondFrame, frames[1])
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun invalidNtbSignatureIsRejected() {
         Ntb16WireDecoder().append(ByteArray(28))
