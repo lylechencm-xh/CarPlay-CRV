@@ -12,6 +12,9 @@ class ControlCipher(private val readKey: ByteArray, private val writeKey: ByteAr
 
     private var readCounter = 0L
     private var writeCounter = 0L
+    private val writeSealer = AirPlayChaChaSealer(writeKey)
+    private val writeNonce = ByteArray(12)
+    private val writeHeader = ByteArray(HEADER_SIZE)
 
     fun decrypt(buffer: ByteArray): Decrypted {
         val output = ArrayList<ByteArray>()
@@ -27,6 +30,32 @@ class ControlCipher(private val readKey: ByteArray, private val writeKey: ByteAr
             offset = frameEnd
         }
         return Decrypted(concatBytes(*output.toTypedArray()), buffer.copyOfRange(offset, buffer.size))
+    }
+
+    /**
+     * Fast path for RTSP event headers plus bplist bodies. Small HID events fit one control frame,
+     * so encrypt both parts directly into the framed output without concatenating plaintext first.
+     */
+    fun encrypt(first: ByteArray, second: ByteArray): ByteArray {
+        val total = first.size + second.size
+        if (total > MAX_PAYLOAD) return encrypt(first + second)
+
+        writeHeader[0] = total.toByte()
+        writeHeader[1] = (total ushr 8).toByte()
+        val output = ByteArray(HEADER_SIZE + total + TAG_SIZE)
+        output[0] = writeHeader[0]
+        output[1] = writeHeader[1]
+        val sealed = writeSealer.sealInto(
+            nonce = AirPlayCrypto.nonce64(writeCounter, writeNonce),
+            aad = writeHeader,
+            first = first,
+            second = second,
+            target = output,
+            targetOffset = HEADER_SIZE,
+        )
+        check(sealed == total + TAG_SIZE) { "unexpected control cipher output length" }
+        writeCounter++
+        return output
     }
 
     fun encrypt(plaintext: ByteArray): ByteArray {
