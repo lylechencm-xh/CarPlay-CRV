@@ -50,6 +50,24 @@ object AirPlayHid {
         yMax: Int,
     ): ByteArray = touchReportInternal(contacts, xMax.toDouble(), yMax.toDouble())
 
+    /** Single-contact hot path used by the API17 CR-V activity. */
+    fun touchReport(
+        x: Double,
+        y: Double,
+        down: Boolean,
+        xMax: Int,
+        yMax: Int,
+    ): ByteArray {
+        val report = ByteArray(BYTES_PER_FINGER * TOUCH_CONTACTS)
+        report[0] = 0
+        report[1] = if (down) 0x01 else 0x00
+        writeU16Le(report, 2, Math.round((x * xMax).coerceAtLeast(0.0)).toInt())
+        writeU16Le(report, 4, Math.round((y * yMax).coerceAtLeast(0.0)).toInt())
+        report[BYTES_PER_FINGER] = 1
+        return report
+    }
+
+
     private fun touchReportInternal(
         contacts: List<AirPlayContact>,
         xScale: Double,
