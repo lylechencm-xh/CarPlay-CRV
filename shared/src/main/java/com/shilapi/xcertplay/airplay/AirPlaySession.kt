@@ -365,19 +365,27 @@ class AirPlaySession(
     }
 
     fun sendTouch(contacts: List<AirPlayContact>): Boolean {
-        val scaled = contacts.map {
-            it.copy(x = it.x * config.main.widthPixels, y = it.y * config.main.heightPixels)
-        }
-        val report = AirPlayHid.touchReport(scaled)
+        val report = AirPlayHid.touchReport(
+            contacts,
+            config.main.widthPixels,
+            config.main.heightPixels,
+        )
         val sendStartNs = System.nanoTime()
         val sent = sendHidReport(AirPlayHid.TOUCH_HID_UID, report)
-        if (sent) com.shilapi.xcertplay.media.TouchLatencyProbe.onTouchSent(sendStartNs, System.nanoTime() - sendStartNs)
+        if (sent) {
+            com.shilapi.xcertplay.media.TouchLatencyProbe.onTouchSent(
+                sendStartNs,
+                System.nanoTime() - sendStartNs,
+            )
+        }
         if (sent && firstTouchSendLogged.compareAndSet(false, true)) {
-            val first = scaled.firstOrNull()
+            val first = contacts.firstOrNull()
+            val firstX = first?.let { it.x * config.main.widthPixels }
+            val firstY = first?.let { it.y * config.main.heightPixels }
             Log.i(
                 TAG,
-                "airplay touch report sent contacts=${scaled.size} first=" +
-                    "(${first?.x},${first?.y},down=${first?.down}) report=${report.toHexString()}",
+                "airplay touch report sent contacts=${contacts.size} first=" +
+                    "($firstX,$firstY,down=${first?.down}) report=${report.toHexString()}",
             )
         } else if (!sent && touchSendFailureLogged.compareAndSet(false, true)) {
             Log.w(TAG, "airplay touch dropped: event channel is not ready")
