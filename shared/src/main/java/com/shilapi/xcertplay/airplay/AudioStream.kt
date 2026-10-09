@@ -86,9 +86,10 @@ class AudioStream(
         runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO) }
         val stats = StreamReceiveStats("audio type=$streamType", onDiagnostic)
         val buffer = ByteArray(DATAGRAM_BYTES)
+        val packet = DatagramPacket(buffer, buffer.size)
         try {
             while (!closed.get()) {
-                val packet = DatagramPacket(buffer, buffer.size)
+                packet.setLength(buffer.size)
                 try {
                     stats.reading()
                     socket.receive(packet)
@@ -144,7 +145,9 @@ class AudioStream(
                     stats.processed()
                     continue
                 }
-                val rtp = wire.copyOf(RTP_HEADER_LEN) + payload
+                val rtp = ByteArray(RTP_HEADER_LEN + payload.size)
+                wire.copyInto(rtp, 0, 0, RTP_HEADER_LEN)
+                payload.copyInto(rtp, RTP_HEADER_LEN)
                 val decryptedNumber = decryptedPackets.incrementAndGet()
                 if (decryptedNumber <= FIRST_PACKET_LOG_COUNT) {
                     android.util.Log.i(
