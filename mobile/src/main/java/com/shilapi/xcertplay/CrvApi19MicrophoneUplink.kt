@@ -150,6 +150,8 @@ internal class CrvApi19MicrophoneUplink(
         val frame = ByteArray(config.frameBytes)
         val readBuffer = ByteArray(maxOf(config.frameBytes, MIN_READ_BYTES))
         val counters = MicrophoneCounters()
+        val sealer = MicrophonePacketizer.ReusableSealer(config.key, config.payloadType)
+        val datagram = DatagramPacket(ByteArray(1), 1, config.host, config.port)
         var filled = 0
         try {
             while (running.get()) {
@@ -167,7 +169,15 @@ internal class CrvApi19MicrophoneUplink(
                     filled += copied
                     offset += copied
                     if (filled == frame.size) {
-                        sendFrame(udp, counters, frame)
+                        MicrophonePacketizer.toWirePcmInPlace(frame)
+                        val packet = sealer.seal(
+                            counters = counters,
+                            body = frame,
+                            samples = config.samplesPerPacket,
+                        )
+                        datagram.setData(packet)
+                        datagram.length = packet.size
+                        udp.send(datagram)
                         filled = 0
                     }
                 }
@@ -178,22 +188,6 @@ internal class CrvApi19MicrophoneUplink(
             running.set(false)
             releaseResources()
         }
-    }
-
-    private fun sendFrame(
-        udp: DatagramSocket,
-        counters: MicrophoneCounters,
-        pcm: ByteArray,
-    ) {
-        val body = MicrophonePacketizer.toWirePcm(pcm)
-        val packet = MicrophonePacketizer.sealPacket(
-            key = config.key,
-            payloadType = config.payloadType,
-            counters = counters,
-            body = body,
-            samples = config.samplesPerPacket,
-        )
-        udp.send(DatagramPacket(packet, packet.size, config.host, config.port))
     }
 
     override fun close() {
