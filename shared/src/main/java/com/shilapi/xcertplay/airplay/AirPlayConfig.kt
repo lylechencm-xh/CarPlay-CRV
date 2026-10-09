@@ -64,6 +64,8 @@ data class AirPlayConfig(
     val entertainmentSampleRate: Int = 48000,
     val hevc: Boolean = false,
     val disableAudioOutput: Boolean = false,
+    /** Media prebuffer held by the CR-V renderer; advertised so iPhone can compensate A/V timing. */
+    val mediaBufferMillis: Int = 0,
     val microphone: Boolean = false,
     /** Advertise Opus only when the platform has a usable Opus codec. */
     val opus: Boolean = true,
