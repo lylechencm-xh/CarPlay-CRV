@@ -87,6 +87,7 @@ import com.shilapi.xcertplay.transport.LockdownCarKitClient
 import com.shilapi.xcertplay.transport.LockdownPairingClient
 import com.shilapi.xcertplay.transport.LockdownPairRecord
 import com.shilapi.xcertplay.transport.NcmFunctionDiscovery
+import com.shilapi.xcertplay.transport.NcmClaimPolicy
 import com.shilapi.xcertplay.transport.NcmUsbBridge
 import java.io.Closeable
 import java.io.IOException
@@ -1834,7 +1835,7 @@ class CarPlayController(
         )
         val connection = usbManager.openDevice(device)
             ?: throw IphoneUsbException.DeviceUnavailable("Could not open the iPhone NCM connection")
-        return NcmUsbBridge.open(connection, function)
+        return NcmUsbBridge.open(connection, function, NcmClaimPolicy.DETACH_KERNEL_DRIVER)
     }
 
     private fun runStack(usbSession: Iap2UsbSession, ncm: NcmUsbBridge) {

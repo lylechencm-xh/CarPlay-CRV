@@ -36,6 +36,7 @@ import com.shilapi.xcertplay.transport.LockdownPairingClient
 import com.shilapi.xcertplay.transport.LockdownPairRecord
 import com.shilapi.xcertplay.transport.LockdownTlsEngineFactory
 import com.shilapi.xcertplay.transport.NcmFunctionDiscovery
+import com.shilapi.xcertplay.transport.NcmClaimPolicy
 import com.shilapi.xcertplay.transport.NcmUsbBridge
 import com.shilapi.xcertplay.transport.UsbActiveConfiguration
 import java.io.Closeable
@@ -117,7 +118,7 @@ class CrvWiredCarPlayController(
             vpnLatch.countDown()
             if (!lifecycle.isStopping()) {
                 report("CarPlay network service disconnected")
-                recovery.breakBlockingControl()
+                recovery.breakBlockingControl(CrvRecoveryTrigger.VPN_SERVICE_DISCONNECTED)
             }
         }
     }
@@ -153,14 +154,19 @@ class CrvWiredCarPlayController(
             } else {
                 protocolTrace.signal(CrvProtocolLayer.CARPLAY_SESSION, "session-ended")
             }
-            if (disposition == CrvSessionEndDisposition.HANDSHAKE_ENDED_BEFORE_ACTIVE) {
-                report("CarPlay handshake ended before active; restarting controller")
-                recovery.breakBlockingControl()?.let { error ->
-                    report(
-                        "CarPlay handshake recovery failed: ${error.javaClass.simpleName}: " +
-                            (error.message ?: "no message"),
-                    )
-                }
+            val recoveryMessage = if (
+                disposition == CrvSessionEndDisposition.HANDSHAKE_ENDED_BEFORE_ACTIVE
+            ) {
+                "CarPlay handshake ended before active; restarting controller"
+            } else {
+                "CarPlay TCP session ended; restarting controller"
+            }
+            report(recoveryMessage)
+            recovery.breakBlockingControl(CrvRecoveryTrigger.TCP_EOF)?.let { error ->
+                report(
+                    "CarPlay TCP recovery failed: ${error.javaClass.simpleName}: " +
+                        (error.message ?: "no message"),
+                )
             }
         }
 
@@ -174,7 +180,7 @@ class CrvWiredCarPlayController(
             report("AirPlay transport attached=${vpn?.isAttached() == true} port=${vpn?.boundPort() ?: 0}")
             report("CarPlay transport error: $message")
             // Break the blocking wired control loop so the worker can tear the complete stack down.
-            recovery.breakBlockingControl()
+            recovery.breakBlockingControl(recoveryTriggerForTransport(message))
         }
 
         override fun onDebugLog(message: String) {
@@ -311,17 +317,13 @@ class CrvWiredCarPlayController(
                     "Kernel USB configuration does not match active iPhone CarPlay configuration",
                 )
             }
-            val fallbackReason = if (kernelBringUp?.interfaceName != null) {
-                "kernel-driver-bound-netdev-not-ready"
-            } else {
-                "matching-kernel-driver-not-found"
-            }
+            val fallbackReason = checkNotNull(kernelBringUp).fallbackReason.diagnostic
             report(
                 "Honda kernel CDC-NCM fallback reason=$fallbackReason " +
                     "kernelDriverDetachAllowed=false",
             )
             try {
-                openNcm(device, forceClaim = false).also {
+                openNcm(device, NcmClaimPolicy.PRESERVE_KERNEL_DRIVER).also {
                     resources.ncm = it
                     report("CDC-NCM ready backend=userspace experimental safeClaim=true")
                 }
@@ -473,7 +475,7 @@ class CrvWiredCarPlayController(
                         "using userspace NCM fallback",
                 )
                 activeKernelNcm = null
-                val fallback = openNcm(device)
+                val fallback = openNcm(device, NcmClaimPolicy.PRESERVE_KERNEL_DRIVER)
                 resources.ncm = fallback
                 activeNcmBridge = fallback
                 activeHostMac = fallback.hostMac ?: macBytes(deviceId)
@@ -791,7 +793,7 @@ class CrvWiredCarPlayController(
         return bus to dev
     }
 
-    private fun openNcm(device: UsbDevice, forceClaim: Boolean = true): NcmUsbBridge {
+    private fun openNcm(device: UsbDevice, claimPolicy: NcmClaimPolicy): NcmUsbBridge {
         report(
             "USB layout " +
                 (0 until device.interfaceCount).joinToString(" ") { index ->
@@ -840,7 +842,7 @@ class CrvWiredCarPlayController(
                 "in=0x${function.bulkIn.address.toString(16)} " +
                 "out=0x${function.bulkOut.address.toString(16)}",
         )
-        return NcmUsbBridge.open(connection, function, forceClaim)
+        return NcmUsbBridge.open(connection, function, claimPolicy)
     }
 
     private fun loadMfi(): MfiAuthenticator {
@@ -912,9 +914,12 @@ class CrvWiredCarPlayController(
         CrvControllerPhase.STOPPED -> CrvProtocolLayer.CARPLAY_SESSION
     }
 
-    override fun close() {
+    override fun close() = close(CrvRecoveryTrigger.ACTIVE_DISCONNECT)
+
+    internal fun close(reason: CrvRecoveryTrigger) {
         if (!closeRequested.compareAndSet(false, true)) return
-        lifecycle.requestStop("close")
+        lifecycle.requestStop("close:${reason.name}")
+        recovery.breakBlockingControl(reason)
         resources.releaseTransport()
         unbindVpn()
         sink.close()

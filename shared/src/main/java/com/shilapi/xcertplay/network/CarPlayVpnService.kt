@@ -75,7 +75,12 @@ class CarPlayVpnService : VpnService() {
     }
 
     override fun onRevoke() {
-        detach()
+        val listener = synchronized(this) {
+            val current = attachment?.listener
+            releaseLocked()
+            current
+        }
+        listener?.onTransportError(VPN_REVOKED_MESSAGE)
         super.onRevoke()
     }
 
@@ -436,6 +441,7 @@ class CarPlayVpnService : VpnService() {
     }
 
     companion object {
+        internal const val VPN_REVOKED_MESSAGE = "CarPlay VPN permission revoked"
         private const val TAG = "xcertplay-usb"
         private const val LINK_PREFIX = 64
         private const val LINK_LOCAL_ROUTE = "fe80::"

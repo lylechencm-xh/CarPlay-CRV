@@ -94,6 +94,34 @@ class CarPlayVpnScopeTest {
         }
     }
 
+    /**
+     * Releasing the transport alone leaves the iAP2 control loop blocked. A system revocation must
+     * also hand the controller one explicit termination reason, and it must arrive exactly once.
+     */
+    @Test fun systemRevocationPropagatesOneExplicitTerminationReasonToTheController() {
+        val errors = mutableListOf<String>()
+        withService { service ->
+            assertEquals(
+                CarPlayVpnService.AttachResult.Started,
+                service.attachWireless(
+                    InetAddress.getLoopbackAddress(), config, identity, PairingStore(), null,
+                    object : AirPlaySessionListener {
+                        override fun onTransportError(message: String) {
+                            errors += message
+                        }
+                    },
+                    object : AirPlayMediaHandler {},
+                ),
+            )
+
+            service.onRevoke()
+            service.onRevoke()
+
+            assertEquals(listOf(CarPlayVpnService.VPN_REVOKED_MESSAGE), errors)
+            assertReleased(service)
+        }
+    }
+
     @Test fun rejectedWiredReplacementClosesWirelessListenerAndAllowsFreshWirelessAttach() {
         withService { service ->
             assertEquals(CarPlayVpnService.AttachResult.Started, attachWireless(service))

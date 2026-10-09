@@ -126,6 +126,11 @@ internal object CrvUsbKernelProbe {
             "usb=${hex4(expected.vendorId)}:${hex4(expected.productId)} " +
             "bus=${expected.busNumber ?: -1} dev=${expected.deviceNumber ?: -1}"
 
+    enum class KernelFallbackReason(val diagnostic: String) {
+        DRIVER_BOUND_NETWORK_NOT_READY("kernel-driver-bound-netdev-not-ready"),
+        MATCHING_DRIVER_NOT_FOUND("matching-kernel-driver-not-found"),
+    }
+
     data class KernelBringUpResult(
         val interfaceName: String?,
         val attempted: Boolean,
@@ -133,6 +138,11 @@ internal object CrvUsbKernelProbe {
         val error: String?,
     ) {
         val successful: Boolean get() = interfaceName != null && error == null && resultCode == 0
+        val fallbackReason: KernelFallbackReason get() = if (interfaceName != null) {
+            KernelFallbackReason.DRIVER_BOUND_NETWORK_NOT_READY
+        } else {
+            KernelFallbackReason.MATCHING_DRIVER_NOT_FOUND
+        }
     }
 
     /**

@@ -16,6 +16,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  * bridge claims only the NCM control/data interfaces and owns the connection thereafter. All
  * calls may block and must run away from the Android main thread.
  */
+enum class NcmClaimPolicy(internal val force: Boolean) {
+    PRESERVE_KERNEL_DRIVER(false),
+    DETACH_KERNEL_DRIVER(true),
+}
+
 class NcmUsbBridge internal constructor(
     private val connection: UsbDeviceConnection,
     private val outEndpoint: UsbEndpoint,
@@ -253,8 +258,9 @@ class NcmUsbBridge internal constructor(
         fun open(
             connection: UsbDeviceConnection,
             function: NcmFunctionDiscovery.NcmFunction,
-            forceClaim: Boolean = true,
+            claimPolicy: NcmClaimPolicy,
         ): NcmUsbBridge {
+            val forceClaim = claimPolicy.force
             val claimed = ArrayList<UsbInterface>(2)
             try {
                 val descriptorHostMac = readNcmHostMac(connection, function)

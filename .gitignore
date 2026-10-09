@@ -19,6 +19,9 @@ captures/
 /agent_docs/
 /.workbuddy-ai/
 
+# Local device log/screenshot dumps captured during bring-up
+/_carlogs/
+
 # OS files
 .DS_Store
 Thumbs.db

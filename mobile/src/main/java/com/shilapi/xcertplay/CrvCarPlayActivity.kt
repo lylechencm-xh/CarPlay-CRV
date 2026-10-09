@@ -362,7 +362,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             if (!awaitingCarPlayReattach) {
                 runOnUiThread {
                     usbTransitionGeneration.incrementAndGet()
-                    controller?.close()
+                    controller?.close(CrvRecoveryTrigger.USB_DETACHED)
                     controller = null
                     pendingUsbSession?.close()
                     pendingUsbSession = null

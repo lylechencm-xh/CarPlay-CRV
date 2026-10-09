@@ -7,6 +7,12 @@ Add future CR-V changes after 0.2.27 here.
   access, and avoid repeating the full Honda platform scan at every connection milestone.
 - Add a guarded passive Honda MediaCore listener that observes iAP2 storage handles and
   authentication results without starting OEM authentication or opening `/dev/jdev`.
+- Require an explicit NCM claim policy so the userspace fallback can never silently detach the
+  kernel CDC-NCM driver; report a busy interface, a rejected data alternate setting and a kernel
+  driver that is bound but never comes up as distinct, classified diagnostics.
+- Propagate a system VPN revocation to the iAP2 controller as one explicit termination reason, and
+  make disconnect recovery idempotent so a system revocation, a TCP close and a service disconnect
+  cannot run teardown more than once.
 
 # CarPlay CR-V 0.2.27 — 2026-10-07
 
