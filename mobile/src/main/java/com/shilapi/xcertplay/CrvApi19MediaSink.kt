@@ -237,9 +237,10 @@ class CrvApi19MediaSink(
         }
 
         fun submit(data: ByteArray) {
-            val pendingBytes = queue.asSequence()
-                .filterIsInstance<Job.Frame>()
-                .sumOf { it.data.size.toLong() }
+            var pendingBytes = 0L
+            for (job in queue) {
+                if (job is Job.Frame) pendingBytes += job.data.size
+            }
             if (
                 data.size <= VIDEO_QUEUE_MAX_BYTES &&
                 pendingBytes + data.size <= VIDEO_QUEUE_MAX_BYTES
