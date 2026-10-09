@@ -665,56 +665,67 @@ class CrvApi19MediaSink(
         }
 
         private fun handle(packet: Packet) {
-            val payload = CrvLegacyRtp.payload(packet.rtp) ?: return
+            val payloadStart = CrvLegacyRtp.payloadStart(packet.rtp)
+            val payloadEnd = CrvLegacyRtp.payloadEnd(packet.rtp, payloadStart)
+            if (payloadStart < 0 || payloadEnd <= payloadStart) return
+            val payloadSize = payloadEnd - payloadStart
+
             when (format.codec) {
                 AudioCodecKind.LPCM -> {
-                    val pcm = payload.copyOf()
-                    var index = 0
-                    while (index + 1 < pcm.size) {
-                        val first = pcm[index]
-                        pcm[index] = pcm[index + 1]
-                        pcm[index + 1] = first
+                    var index = payloadStart
+                    while (index + 1 < payloadEnd) {
+                        val first = packet.rtp[index]
+                        packet.rtp[index] = packet.rtp[index + 1]
+                        packet.rtp[index + 1] = first
                         index += 2
                     }
-                    writePcm(pcm)
+                    writePcm(packet.rtp, payloadSize, payloadStart)
                 }
 
                 AudioCodecKind.AAC_LC -> {
-                    if (payload.isNotEmpty()) {
-                        feedDecoder(
-                            MediaCodecSupport.adtsFrame(
-                                payload,
-                                format.sampleRate,
-                                format.channels,
-                            ),
-                            sampleTimestampUs(packet.sample),
-                        )
-                    }
+                    feedDecoder(
+                        MediaCodecSupport.adtsFrame(
+                            packet.rtp,
+                            payloadStart,
+                            payloadSize,
+                            format.sampleRate,
+                            format.channels,
+                        ),
+                        sampleTimestampUs(packet.sample),
+                    )
                 }
 
                 AudioCodecKind.OPUS -> {
-                    if (payload.isNotEmpty()) {
-                        val software = softwareOpus
-                        if (software != null) {
-                            try {
-                                val decodedBytes = software.decode(payload)
-                                writePcm(software.pcm, decodedBytes)
-                            } catch (error: Exception) {
-                                rejectedOpusPackets++
-                                if (rejectedOpusPackets == 1 || rejectedOpusPackets % 100 == 0) {
-                                    report("Opus packet rejected count=" + rejectedOpusPackets +
-                                        " type=" + error.javaClass.simpleName)
-                                }
+                    val software = softwareOpus
+                    if (software != null) {
+                        try {
+                            val decodedBytes = software.decode(packet.rtp, payloadStart, payloadSize)
+                            writePcm(software.pcm, decodedBytes)
+                        } catch (error: Exception) {
+                            rejectedOpusPackets++
+                            if (rejectedOpusPackets == 1 || rejectedOpusPackets % 100 == 0) {
+                                report("Opus packet rejected count=" + rejectedOpusPackets +
+                                    " type=" + error.javaClass.simpleName)
                             }
-                        } else {
-                            feedDecoder(payload, sampleTimestampUs(packet.sample))
                         }
+                    } else {
+                        feedDecoder(
+                            packet.rtp,
+                            sampleTimestampUs(packet.sample),
+                            payloadStart,
+                            payloadSize,
+                        )
                     }
                 }
             }
         }
 
-        private fun feedDecoder(bytes: ByteArray, timestampUs: Long) {
+        private fun feedDecoder(
+            bytes: ByteArray,
+            timestampUs: Long,
+            byteOffset: Int = 0,
+            byteCount: Int = bytes.size - byteOffset,
+        ) {
             val codec = decoder ?: return
             try {
                 var index = -1
@@ -736,12 +747,16 @@ class CrvApi19MediaSink(
                 @Suppress("DEPRECATION")
                 val input = codec.inputBuffers[index]
                 input.clear()
-                if (bytes.size > input.remaining()) {
+                if (byteOffset < 0 || byteCount <= 0 || byteOffset + byteCount > bytes.size) {
                     codec.queueInputBuffer(index, 0, 0, 0L, 0)
                     return
                 }
-                input.put(bytes)
-                codec.queueInputBuffer(index, 0, bytes.size, timestampUs, 0)
+                if (byteCount > input.remaining()) {
+                    codec.queueInputBuffer(index, 0, 0, 0L, 0)
+                    return
+                }
+                input.put(bytes, byteOffset, byteCount)
+                codec.queueInputBuffer(index, 0, byteCount, timestampUs, 0)
             } catch (error: Exception) {
                 if (!activateOpusFallback("hardware input failure: " + error.javaClass.simpleName)) {
                     report("Audio decoder input failed")
@@ -780,12 +795,17 @@ class CrvApi19MediaSink(
             }
         }
 
-        private fun writePcm(bytes: ByteArray, byteCount: Int = bytes.size) {
+        private fun writePcm(
+            bytes: ByteArray,
+            byteCount: Int = bytes.size,
+            byteOffset: Int = 0,
+        ) {
             val audio = track ?: return
+            if (byteOffset < 0 || byteCount <= 0 || byteOffset + byteCount > bytes.size) return
             var offset = 0
             while (offset < byteCount && running.get()) {
                 @Suppress("DEPRECATION")
-                val written = audio.write(bytes, offset, byteCount - offset)
+                val written = audio.write(bytes, byteOffset + offset, byteCount - offset)
                 if (written <= 0) return
                 offset += written
                 bufferProgress.written(written)
