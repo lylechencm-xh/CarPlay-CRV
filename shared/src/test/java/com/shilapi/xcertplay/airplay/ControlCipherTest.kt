@@ -33,4 +33,31 @@ class ControlCipherTest {
             assertArrayEquals(ByteArray(0), decrypted.rest)
         }
     }
+
+
+    @Test
+    fun encryptIntoMatchesTwoPartAllocationPathAcrossCounters() {
+        val key = ByteArray(32) { (it + 21).toByte() }
+        val legacy = ControlCipher(key, key)
+        val reusable = ControlCipher(key, key)
+
+        repeat(4) { index ->
+            val head = ByteArray(96) { (it + index).toByte() }
+            val body = ByteArray(32 + index) { (it * 3 + index).toByte() }
+            val expected = legacy.encrypt(head.copyOfRange(7, 83), body)
+            val target = ByteArray(256)
+
+            val written = reusable.encryptInto(
+                first = head,
+                firstOffset = 7,
+                firstLength = 76,
+                second = body,
+                secondOffset = 0,
+                secondLength = body.size,
+                target = target,
+            )
+
+            assertArrayEquals(expected, target.copyOf(written))
+        }
+    }
 }
