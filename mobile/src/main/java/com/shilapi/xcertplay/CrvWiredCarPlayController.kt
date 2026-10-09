@@ -322,17 +322,8 @@ class CrvWiredCarPlayController(
                 "Honda kernel CDC-NCM fallback reason=$fallbackReason " +
                     "kernelDriverDetachAllowed=false",
             )
-            try {
-                openNcm(device, NcmClaimPolicy.PRESERVE_KERNEL_DRIVER).also {
-                    resources.ncm = it
-                    report("CDC-NCM ready backend=userspace experimental safeClaim=true")
-                }
-            } catch (error: IphoneUsbException.InterfaceBusy) {
-                report(
-                    "Honda CDC-NCM fallback blocked classification=usb-interface-resource-conflict " +
-                        "kernelDriverDetachAllowed=false detail=${error.message}",
-                )
-                throw error
+            openNcmFallback(device, "kernel-bring-up-failed reason=$fallbackReason").also {
+                resources.ncm = it
             }
         } else {
             null
@@ -475,7 +466,10 @@ class CrvWiredCarPlayController(
                         "using userspace NCM fallback",
                 )
                 activeKernelNcm = null
-                val fallback = openNcm(device, NcmClaimPolicy.PRESERVE_KERNEL_DRIVER)
+                val fallback = openNcmFallback(
+                    device,
+                    "kernel-ncm-disappeared-after-bind-failure",
+                )
                 resources.ncm = fallback
                 activeNcmBridge = fallback
                 activeHostMac = fallback.hostMac ?: macBytes(deviceId)
@@ -843,6 +837,41 @@ class CrvWiredCarPlayController(
                 "out=0x${function.bulkOut.address.toString(16)}",
         )
         return NcmUsbBridge.open(connection, function, claimPolicy)
+    }
+
+    /**
+     * Opens the userspace NCM bridge for a kernel-NCM fallback.
+     *
+     * The kernel cdc_ncm driver is preserved first. Every caller reaches this path only because the
+     * kernel netdev is unusable, so a refused claim means the kernel driver owns the interface
+     * without providing a working network device. In that case the claim escalates once to detaching
+     * the kernel driver, because otherwise the interface stays unusable and CarPlay never starts.
+     * Both the refusal and the escalation are reported, so a detach is never silent.
+     */
+    private fun openNcmFallback(device: UsbDevice, context: String): NcmUsbBridge {
+        var policy = NcmClaimPolicy.PRESERVE_KERNEL_DRIVER
+        while (true) {
+            try {
+                return openNcm(device, policy).also {
+                    report(
+                        "CDC-NCM ready backend=userspace experimental " +
+                            "safeClaim=${!policy.detachesKernelDriver} policy=$policy",
+                    )
+                }
+            } catch (error: IphoneUsbException.InterfaceBusy) {
+                val escalation = policy.escalation ?: throw error
+                report(
+                    "Honda CDC-NCM fallback blocked classification=usb-interface-resource-conflict " +
+                        "policy=$policy context=$context detail=${error.message}",
+                )
+                report(
+                    "Honda CDC-NCM fallback escalating policy=$policy -> $escalation " +
+                        "context=$context " +
+                        "kernelDriverDetachAllowed=${escalation.detachesKernelDriver}",
+                )
+                policy = escalation
+            }
+        }
     }
 
     private fun loadMfi(): MfiAuthenticator {

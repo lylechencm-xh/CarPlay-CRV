@@ -17,8 +17,26 @@ import java.util.concurrent.atomic.AtomicBoolean
  * calls may block and must run away from the Android main thread.
  */
 enum class NcmClaimPolicy(internal val force: Boolean) {
+    /** Claims only when no kernel driver owns the interface; never detaches cdc_ncm. */
     PRESERVE_KERNEL_DRIVER(false),
+
+    /** Force-claims, detaching a bound kernel driver such as cdc_ncm from the interface. */
     DETACH_KERNEL_DRIVER(true),
+    ;
+
+    /** Whether a claim under this policy may detach a bound kernel driver. */
+    val detachesKernelDriver: Boolean get() = force
+
+    /**
+     * The policy to retry with when a claim under this policy was refused because the interface is
+     * busy. A forced claim has nothing left to escalate to, so it reports `null` and the caller must
+     * surface the failure instead of detaching again.
+     */
+    val escalation: NcmClaimPolicy?
+        get() = when (this) {
+            PRESERVE_KERNEL_DRIVER -> DETACH_KERNEL_DRIVER
+            DETACH_KERNEL_DRIVER -> null
+        }
 }
 
 class NcmUsbBridge internal constructor(

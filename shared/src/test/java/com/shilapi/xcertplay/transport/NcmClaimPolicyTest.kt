@@ -6,6 +6,7 @@ import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -81,6 +82,25 @@ class NcmClaimPolicyTest {
     @Test fun bothPoliciesCarryAnExplicitForceFlag() {
         assertFalse(NcmClaimPolicy.PRESERVE_KERNEL_DRIVER.force)
         assertTrue(NcmClaimPolicy.DETACH_KERNEL_DRIVER.force)
+    }
+
+    /**
+     * The kernel fallback preserves the kernel driver first and escalates to a forced claim only
+     * after that safe claim was refused. A forced claim has nothing left to escalate to, so a
+     * repeated detach can never happen.
+     */
+    @Test fun preservingPolicyEscalatesToDetachingAndTheForcedPolicyDoesNot() {
+        assertEquals(
+            NcmClaimPolicy.DETACH_KERNEL_DRIVER,
+            NcmClaimPolicy.PRESERVE_KERNEL_DRIVER.escalation,
+        )
+        assertNull(NcmClaimPolicy.DETACH_KERNEL_DRIVER.escalation)
+    }
+
+    /** The reported detach flag must match the claim the policy actually performs. */
+    @Test fun detachFlagMatchesTheClaimThePolicyPerforms() {
+        assertFalse(NcmClaimPolicy.PRESERVE_KERNEL_DRIVER.detachesKernelDriver)
+        assertTrue(NcmClaimPolicy.DETACH_KERNEL_DRIVER.detachesKernelDriver)
     }
 
     private fun open(policy: NcmClaimPolicy): NcmUsbBridge {

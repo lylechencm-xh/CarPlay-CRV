@@ -1,0 +1,29 @@
+version=0.2.28
+versionName_in_apk=0.2.28-crv
+versionCode=47
+package=com.shihab.diplay
+minSdk=17
+targetSdk=28
+compileSdk=37
+android_baseline=4.2.2-api17
+artifact=CarPlay-CRV-2021-v0.2.28-api17-mfi-ncm-claim-fix-20261009.apk
+apk_size_bytes=1988772
+apk_sha256=4f0ed6e34dc4440aff96db730779398447d0c484c4f396344ef99893c4989869
+signing=debug-key (CRV fixed test key not configured)
+signature_v1_jar=true
+signature_v2=true
+signature_sha256=1c2f3aef30ca18fb20847dc8f766131ea42583f11869b6587cca338cb462adc2
+carplay_authentication=bundled (assets/offline-mfi/identity.pk8 67B + certificate.p7b 607B)
+carplay_authentication_note=APK CONTAINS THE MFi PRIVATE KEY - local car testing only, never share/upload
+source_commit=48d550b2fae38228a1de84435be9898703f0f342
+source_commit_short=48d550b
+working_tree=dirty (uncommitted NCM claim escalation fix)
+launchable_activity=com.shilapi.xcertplay.CrvCarPlayActivity
+native_code=armeabi-v7a,x86
+dex=single classes.dex (DEX035 compliant)
+build_command=DIPLAY_AUTH_ASSETS_DIR=<dir containing offline-mfi/> ./gradlew :mobile:assembleStandaloneDebug --offline --configure-on-demand
+build_env=JDK 21 Temurin; Android SDK cmdline-tools; build-tools 37.0.0; ndk 23.2.8568313; cmake 3.22.1; platforms android-17 + android-37.0
+build_note=gradle/gradle-daemon-jvm.properties temporarily moved aside (it pins toolchainVersion=25, which cannot start the daemon in this environment); restored after the build. --offline is required: a plain run stalls for 20+ minutes in the test phase waiting on the network.
+unit_tests=:shared NcmClaimPolicyTest 7 passed / 0 failed; :mobile 41 passed / 0 failed
+fix=The kernel-NCM fallback no longer fails with InterfaceBusy when cdc_ncm is bound to the iPhone NCM interface but its netdev never becomes ready. openNcmFallback() preserves the kernel driver first and escalates once to an explicit detach when that claim is refused, reporting both steps.
+regression_source=854c02e changed the kernel-fallback claim from forceClaim=true to forceClaim=false; 48d550b made the policy explicit without changing the effective value.
