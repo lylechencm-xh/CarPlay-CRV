@@ -36,26 +36,64 @@ class ControlCipher(private val readKey: ByteArray, private val writeKey: ByteAr
      * Fast path for RTSP event headers plus bplist bodies. Small HID events fit one control frame,
      * so encrypt both parts directly into the framed output without concatenating plaintext first.
      */
-    fun encrypt(first: ByteArray, second: ByteArray): ByteArray {
-        val total = first.size + second.size
-        if (total > MAX_PAYLOAD) return encrypt(first + second)
+    fun encryptedSize(firstLength: Int, secondLength: Int): Int {
+        require(firstLength >= 0 && secondLength >= 0)
+        val total = firstLength + secondLength
+        require(total <= MAX_PAYLOAD) { "control payload exceeds one-frame fast path" }
+        return HEADER_SIZE + total + TAG_SIZE
+    }
+
+    fun encryptInto(
+        first: ByteArray,
+        firstOffset: Int,
+        firstLength: Int,
+        second: ByteArray,
+        secondOffset: Int,
+        secondLength: Int,
+        target: ByteArray,
+    ): Int {
+        require(firstOffset >= 0 && firstLength >= 0 && firstOffset + firstLength <= first.size)
+        require(secondOffset >= 0 && secondLength >= 0 && secondOffset + secondLength <= second.size)
+        val total = firstLength + secondLength
+        require(total <= MAX_PAYLOAD) { "control payload exceeds one-frame fast path" }
+        val required = HEADER_SIZE + total + TAG_SIZE
+        require(target.size >= required) { "control output target is too small" }
 
         writeHeader[0] = total.toByte()
         writeHeader[1] = (total ushr 8).toByte()
-        val output = ByteArray(HEADER_SIZE + total + TAG_SIZE)
-        output[0] = writeHeader[0]
-        output[1] = writeHeader[1]
+        target[0] = writeHeader[0]
+        target[1] = writeHeader[1]
         val sealed = writeSealer.sealInto(
             nonce = AirPlayCrypto.nonce64(writeCounter, writeNonce),
             aad = writeHeader,
             first = first,
+            firstOffset = firstOffset,
+            firstLength = firstLength,
             second = second,
-            target = output,
+            secondOffset = secondOffset,
+            secondLength = secondLength,
+            target = target,
             targetOffset = HEADER_SIZE,
         )
         check(sealed == total + TAG_SIZE) { "unexpected control cipher output length" }
         writeCounter++
-        return output
+        return required
+    }
+
+    fun encrypt(first: ByteArray, second: ByteArray): ByteArray {
+        val total = first.size + second.size
+        if (total > MAX_PAYLOAD) return encrypt(first + second)
+        return ByteArray(encryptedSize(first.size, second.size)).also { output ->
+            encryptInto(
+                first = first,
+                firstOffset = 0,
+                firstLength = first.size,
+                second = second,
+                secondOffset = 0,
+                secondLength = second.size,
+                target = output,
+            )
+        }
     }
 
     fun encrypt(plaintext: ByteArray): ByteArray {
