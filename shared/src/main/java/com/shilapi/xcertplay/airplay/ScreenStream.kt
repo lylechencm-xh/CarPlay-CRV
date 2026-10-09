@@ -79,9 +79,10 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         val stats = StreamReceiveStats("video", onDiagnostic)
         try {
             val input = sock.getInputStream()
+            val header = ByteArray(HEADER_LEN)
             while (!closed.get()) {
                 stats.reading()
-                val header = readFully(input, HEADER_LEN) ?: break
+                if (!readFully(input, header)) break
                 val bodySize = readU32Le(header, 0)
                 if (bodySize > MAX_BODY) break
                 val body = readFully(input, bodySize) ?: break
@@ -132,6 +133,17 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
 
     private fun closeServerSocket(value: ServerSocket?) {
         try { value?.close() } catch (_: Exception) { }
+    }
+
+    private fun readFully(input: InputStream, output: ByteArray): Boolean {
+        var offset = 0
+        while (offset < output.size) {
+            val read = input.read(output, offset, output.size - offset)
+            if (read < 0) return false
+            if (read == 0) continue
+            offset += read
+        }
+        return true
     }
 
     private fun readFully(input: InputStream, length: Int): ByteArray? {
