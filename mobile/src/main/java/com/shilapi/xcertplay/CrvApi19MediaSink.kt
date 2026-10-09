@@ -749,14 +749,11 @@ class CrvApi19MediaSink(
 
                 AudioCodecKind.AAC_LC -> {
                     feedDecoder(
-                        MediaCodecSupport.adtsFrame(
-                            rtp,
-                            payloadStart,
-                            payloadSize,
-                            format.sampleRate,
-                            format.channels,
-                        ),
-                        sampleTimestampUs(sample),
+                        bytes = rtp,
+                        timestampUs = sampleTimestampUs(sample),
+                        byteOffset = payloadStart,
+                        byteCount = payloadSize,
+                        addAdtsHeader = true,
                     )
                 }
 
@@ -790,6 +787,7 @@ class CrvApi19MediaSink(
             timestampUs: Long,
             byteOffset: Int = 0,
             byteCount: Int = bytes.size - byteOffset,
+            addAdtsHeader: Boolean = false,
         ) {
             val codec = decoder ?: return
             try {
@@ -816,12 +814,22 @@ class CrvApi19MediaSink(
                     codec.queueInputBuffer(index, 0, 0, 0L, 0)
                     return
                 }
-                if (byteCount > input.remaining()) {
+                val headerBytes = if (addAdtsHeader) CrvAacAdts.HEADER_BYTES else 0
+                val inputBytes = byteCount + headerBytes
+                if (inputBytes > input.remaining()) {
                     codec.queueInputBuffer(index, 0, 0, 0L, 0)
                     return
                 }
+                if (addAdtsHeader) {
+                    CrvAacAdts.putHeader(
+                        target = input,
+                        accessUnitBytes = byteCount,
+                        sampleRate = format.sampleRate,
+                        channels = format.channels,
+                    )
+                }
                 input.put(bytes, byteOffset, byteCount)
-                codec.queueInputBuffer(index, 0, byteCount, timestampUs, 0)
+                codec.queueInputBuffer(index, 0, inputBytes, timestampUs, 0)
             } catch (error: Exception) {
                 if (!activateOpusFallback("hardware input failure: " + error.javaClass.simpleName)) {
                     report("Audio decoder input failed")
