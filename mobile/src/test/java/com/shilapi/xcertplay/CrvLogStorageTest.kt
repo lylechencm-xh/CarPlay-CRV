@@ -29,6 +29,19 @@ class CrvLogStorageTest {
         assertEquals(2, directory.listFiles()!!.size)
     }
 
+    @Test fun closeFlushesAndRejectsLaterWrites() {
+        val directory = temporary.newFolder("logs-close")
+        val current = File(directory, logName(30))
+        val storage = CrvLogStorage(directory, current, maxFileBytes = 256L, maxFiles = 4)
+
+        storage.append("before-close")
+        storage.close()
+        storage.append("after-close")
+
+        assertTrue(current.readText().contains("before-close"))
+        assertFalse(current.readText().contains("after-close"))
+    }
+
     @Test fun startupPrunesOldAndOversizedSessionLogsWithoutTouchingOtherFiles() {
         val directory = temporary.newFolder("logs")
         val old = (1..8).map { index ->
