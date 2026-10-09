@@ -374,12 +374,50 @@ class AirPlaySession(
         }
     }
 
+    fun sendTouch(
+        x: Double,
+        y: Double,
+        down: Boolean,
+    ): Boolean {
+        val report = AirPlayHid.touchReport(
+            x,
+            y,
+            down,
+            config.main.widthPixels,
+            config.main.heightPixels,
+        )
+        return sendTouchReport(
+            report = report,
+            contactCount = 1,
+            firstX = x * config.main.widthPixels,
+            firstY = y * config.main.heightPixels,
+            firstDown = down,
+        )
+    }
+
     fun sendTouch(contacts: List<AirPlayContact>): Boolean {
         val report = AirPlayHid.touchReport(
             contacts,
             config.main.widthPixels,
             config.main.heightPixels,
         )
+        val first = contacts.firstOrNull()
+        return sendTouchReport(
+            report = report,
+            contactCount = contacts.size,
+            firstX = first?.let { it.x * config.main.widthPixels },
+            firstY = first?.let { it.y * config.main.heightPixels },
+            firstDown = first?.down,
+        )
+    }
+
+    private fun sendTouchReport(
+        report: ByteArray,
+        contactCount: Int,
+        firstX: Double?,
+        firstY: Double?,
+        firstDown: Boolean?,
+    ): Boolean {
         val sendStartNs = System.nanoTime()
         val sent = sendHidReport(AirPlayHid.TOUCH_HID_UID, report)
         if (sent) {
@@ -389,13 +427,10 @@ class AirPlaySession(
             )
         }
         if (sent && firstTouchSendLogged.compareAndSet(false, true)) {
-            val first = contacts.firstOrNull()
-            val firstX = first?.let { it.x * config.main.widthPixels }
-            val firstY = first?.let { it.y * config.main.heightPixels }
             Log.i(
                 TAG,
-                "airplay touch report sent contacts=${contacts.size} first=" +
-                    "($firstX,$firstY,down=${first?.down}) report=${report.toHexString()}",
+                "airplay touch report sent contacts=$contactCount first=" +
+                    "($firstX,$firstY,down=$firstDown) report=${report.toHexString()}",
             )
         } else if (!sent && touchSendFailureLogged.compareAndSet(false, true)) {
             Log.w(TAG, "airplay touch dropped: event channel is not ready")
