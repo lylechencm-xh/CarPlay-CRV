@@ -88,6 +88,36 @@ class MicrophonePacketizerTest {
     }
 
     @Test
+    fun reusableSealerCanWriteIntoCallerOwnedPacketBuffer() {
+        val key = ByteArray(32) { (it + 3).toByte() }
+        val body = byteArrayOf(1, 2, 3, 4, 5, 6)
+        val expectedCounters = MicrophoneCounters(sequence = 3, timestamp = 480, nonce = 2L)
+        val actualCounters = MicrophoneCounters(sequence = 3, timestamp = 480, nonce = 2L)
+        val expected = MicrophonePacketizer.sealPacket(
+            key = key,
+            payloadType = 100,
+            counters = expectedCounters,
+            body = body,
+            samples = 480,
+        )
+        val sealer = MicrophonePacketizer.ReusableSealer(key, 100)
+        val target = ByteArray(sealer.packetBytes(body.size))
+
+        val length = sealer.sealInto(
+            counters = actualCounters,
+            body = body,
+            samples = 480,
+            packet = target,
+        )
+
+        assertEquals(expected.size, length)
+        assertArrayEquals(expected, target.copyOf(length))
+        assertEquals(expectedCounters.sequence, actualCounters.sequence)
+        assertEquals(expectedCounters.timestamp, actualCounters.timestamp)
+        assertEquals(expectedCounters.nonce, actualCounters.nonce)
+    }
+
+    @Test
     fun opusTimestampsCountInTheClockTheIphoneChose() {
         // Siri asks for Opus 24 kHz (0x20000000) and calls for Opus 48 kHz (0x40000000); DiPlay still
         // captures 20 ms at 48 kHz, but each packet moves the RTP clock by 20 ms of the chosen rate.
