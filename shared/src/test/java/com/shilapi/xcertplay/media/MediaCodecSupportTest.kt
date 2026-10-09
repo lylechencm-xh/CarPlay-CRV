@@ -22,6 +22,14 @@ class MediaCodecSupportTest {
     }
 
     @Test
+    fun adtsSliceMatchesWholeAccessUnit() {
+        val source = byteArrayOf(9, 9, 1, 2, 3, 4, 9)
+        val sliced = MediaCodecSupport.adtsFrame(source, 2, 4, 48_000, 2)
+        val whole = MediaCodecSupport.adtsFrame(byteArrayOf(1, 2, 3, 4), 48_000, 2)
+        assertArrayEquals(whole, sliced)
+    }
+
+    @Test
     fun lengthPrefixedNalUnitsBecomeOneAnnexBBuffer() {
         val first = byteArrayOf(0x40, 0x01)
         val second = byteArrayOf(0x42, 0x01, 0x02)
