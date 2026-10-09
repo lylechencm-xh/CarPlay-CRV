@@ -408,9 +408,9 @@ class CrvApi19MediaSink(
         private fun recover(reason: String, preferFlush: Boolean = false) {
             diagnostic(reason)
             val active = decoder
-            if (preferFlush && active != null) {
-                // Queue overflow is recoverable without destroying the hardware decoder.
-                // The next input must still be an IDR/key frame after flush.
+            if (preferFlush && active != null && firstRendered) {
+                // Android's synchronous MediaCodec resumes after flush on the next dequeueInputBuffer.
+                // Start the new reference chain only from an IDR/key frame.
                 val flushed = runCatching { active.flush() }
                     .onFailure { diagnostic("video decoder flush failed: " + it.javaClass.simpleName) }
                     .isSuccess
@@ -420,9 +420,14 @@ class CrvApi19MediaSink(
                     requestKeyFrameIfDue()
                     return
                 }
+            } else if (preferFlush && active != null) {
+                // Android warns that flushing before the first output can discard codec-specific
+                // data. Recreate the API17 decoder so SPS/PPS are supplied again from lastConfig.
+                diagnostic("video early recovery rebuilding decoder before first output")
             }
             releaseDecoder()
             waitingForKeyFrame = true
+            firstRendered = false
             requestKeyFrameIfDue()
         }
 
