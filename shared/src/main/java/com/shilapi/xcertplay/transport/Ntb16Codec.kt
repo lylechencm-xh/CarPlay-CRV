@@ -18,29 +18,47 @@ object Ntb16Codec {
 
     /** Wraps one Ethernet frame in one NTB16 block, padding an exact 512-byte boundary. */
     fun build(frame: ByteArray, sequence: Int): ByteArray {
+        val output = ByteArray(encodedLength(frame.size))
+        val length = buildInto(frame, sequence, output)
+        return if (length == output.size) output else output.copyOf(length)
+    }
+
+    /** Total USB transfer bytes including the optional short-packet pad byte. */
+    fun encodedLength(frameSize: Int): Int {
+        require(frameSize in 1..MAX_DATAGRAM_BYTES) { "frame exceeds the NTB16 length field" }
+        val blockLength = DATAGRAM_INDEX + frameSize
+        return blockLength + if (blockLength % USB_PACKET_SIZE == 0) 1 else 0
+    }
+
+    /**
+     * Writes one NTB16 transfer into [target] and returns the valid transfer length.
+     * The NTH wBlockLength intentionally excludes the optional USB pad byte.
+     */
+    fun buildInto(frame: ByteArray, sequence: Int, target: ByteArray): Int {
         require(frame.isNotEmpty()) { "frame must not be empty" }
         require(frame.size <= MAX_DATAGRAM_BYTES) { "frame exceeds the NTB16 length field" }
         require(sequence in 0..0xffff) { "sequence must fit in u16" }
+        val transferLength = encodedLength(frame.size)
+        require(target.size >= transferLength) { "target is too small for NTB16 transfer" }
 
         val blockLength = DATAGRAM_INDEX + frame.size
-        val block = ByteArray(blockLength)
-        putU32(block, 0, NTH16_SIG)
-        putU16(block, 4, NTH_LENGTH)
-        putU16(block, 6, sequence)
-        putU16(block, 8, blockLength)
-        putU16(block, 10, NTH_LENGTH)
+        putU32(target, 0, NTH16_SIG)
+        putU16(target, 4, NTH_LENGTH)
+        putU16(target, 6, sequence)
+        putU16(target, 8, blockLength)
+        putU16(target, 10, NTH_LENGTH)
 
-        putU32(block, 12, NDP16_SIG)
-        putU16(block, 16, NDP_LENGTH)
-        putU16(block, 18, 0)
-        putU16(block, 20, DATAGRAM_INDEX)
-        putU16(block, 22, frame.size)
-        putU16(block, 24, 0)
-        putU16(block, 26, 0)
+        putU32(target, 12, NDP16_SIG)
+        putU16(target, 16, NDP_LENGTH)
+        putU16(target, 18, 0)
+        putU16(target, 20, DATAGRAM_INDEX)
+        putU16(target, 22, frame.size)
+        putU16(target, 24, 0)
+        putU16(target, 26, 0)
 
-        frame.copyInto(block, DATAGRAM_INDEX)
-        // A transfer that ends exactly on a USB packet boundary is read as a short packet.
-        return if (block.size % USB_PACKET_SIZE == 0) block + byteArrayOf(0) else block
+        frame.copyInto(target, DATAGRAM_INDEX)
+        if (transferLength > blockLength) target[blockLength] = 0
+        return transferLength
     }
 
     /**
