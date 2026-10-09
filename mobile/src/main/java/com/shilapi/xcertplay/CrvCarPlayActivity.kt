@@ -1111,15 +1111,22 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         mediaCoreMonitor?.close()
         mediaCoreMonitor = null
 
+        var diagnosticsCloseQueued = false
         if (::diagnostics.isInitialized) {
             diagnostics.log("app stopped")
             if (::runtimeSnapshotProbe.isInitialized && !diagnosticIo.isShutdown) {
-                runCatching {
+                diagnosticsCloseQueued = runCatching {
                     diagnosticIo.execute {
-                        runtimeSnapshotProbe.collect("app-stop").forEach(diagnostics::log)
+                        try {
+                            runtimeSnapshotProbe.collect("app-stop").forEach(diagnostics::log)
+                        } finally {
+                            diagnostics.close()
+                        }
                     }
-                }
+                    true
+                }.getOrDefault(false)
             }
+            if (!diagnosticsCloseQueued) diagnostics.close()
         }
         // Let an already queued final diagnostic snapshot finish without blocking the UI thread.
         diagnosticIo.shutdown()
