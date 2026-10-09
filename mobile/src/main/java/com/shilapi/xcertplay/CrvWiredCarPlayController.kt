@@ -11,7 +11,6 @@ import android.hardware.usb.UsbManager
 import android.os.IBinder
 import android.view.Surface
 import com.shilapi.xcertplay.airplay.AirPlayConfig
-import com.shilapi.xcertplay.airplay.AirPlayContact
 import com.shilapi.xcertplay.airplay.AirPlayDisplayConfig
 import com.shilapi.xcertplay.airplay.AirPlaySession
 import com.shilapi.xcertplay.airplay.AirPlaySessionListener
