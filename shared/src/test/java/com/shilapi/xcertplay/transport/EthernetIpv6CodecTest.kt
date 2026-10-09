@@ -7,6 +7,39 @@ import org.junit.Test
 
 class EthernetIpv6CodecTest {
     @Test
+    fun `builds Ethernet frame directly from IPv6 slice`() {
+        val sourceMac = byteArrayOf(2, 0, 0, 0, 0, 1)
+        val destinationMac = byteArrayOf(2, 0, 0, 0, 0, 2)
+        val storage = ByteArray(50)
+        val ipv6 = ByteArray(40)
+        ipv6[0] = 0x60
+        ipv6.copyInto(storage, 5)
+
+        val frame = EthernetIpv6Codec.build(sourceMac, destinationMac, storage, 5, 40)
+
+        assertEquals(54, frame.size)
+        assertArrayEquals(destinationMac, frame.copyOfRange(0, 6))
+        assertArrayEquals(sourceMac, frame.copyOfRange(6, 12))
+        assertArrayEquals(ipv6, frame.copyOfRange(14, frame.size))
+    }
+
+    @Test
+    fun `slice multicast lookup ignores bytes beyond packet length`() {
+        val storage = ByteArray(80)
+        storage[0] = 0x60
+        storage[24] = 0xff.toByte()
+        storage[36] = 1
+        storage[37] = 2
+        storage[38] = 3
+        storage[39] = 4
+        assertArrayEquals(
+            byteArrayOf(0x33, 0x33, 1, 2, 3, 4),
+            EthernetIpv6Codec.multicastDestinationMac(storage, 0, 40),
+        )
+        assertNull(EthernetIpv6Codec.multicastDestinationMac(storage, 0, 39))
+    }
+
+    @Test
     fun `maps IPv6 multicast destination to Ethernet multicast`() {
         val packet = ByteArray(40)
         packet[0] = 0x60
