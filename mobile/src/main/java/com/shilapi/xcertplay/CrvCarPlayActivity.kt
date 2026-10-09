@@ -1025,9 +1025,17 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
         videoSurface?.release()
+        // Keep the decoder/native buffer at the CarPlay protocol size. TextureView can scale the
+        // composed image to the physical Honda panel without making MediaCodec renegotiate buffers.
+        runCatching {
+            texture.setDefaultBufferSize(
+                Crv2021Config.CARPLAY_WIDTH,
+                Crv2021Config.CARPLAY_HEIGHT,
+            )
+        }
         videoSurface = Surface(texture)
-        surfaceWidth = width.coerceAtLeast(1)
-        surfaceHeight = height.coerceAtLeast(1)
+        surfaceWidth = Crv2021Config.CARPLAY_WIDTH
+        surfaceHeight = Crv2021Config.CARPLAY_HEIGHT
         controller?.updateSurface(videoSurface)
         maybeStartCarPlay()
         if (!manualDisconnect && controller == null && pendingUsbSession == null) {
@@ -1052,8 +1060,16 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         width: Int,
         height: Int,
     ) {
-        surfaceWidth = width.coerceAtLeast(1)
-        surfaceHeight = height.coerceAtLeast(1)
+        // View size is presentation-only. Keep AirPlay and MediaCodec fixed at 1280x720 so a
+        // layout resize cannot trigger a different encoded stream or decoder buffer geometry.
+        runCatching {
+            texture.setDefaultBufferSize(
+                Crv2021Config.CARPLAY_WIDTH,
+                Crv2021Config.CARPLAY_HEIGHT,
+            )
+        }
+        surfaceWidth = Crv2021Config.CARPLAY_WIDTH
+        surfaceHeight = Crv2021Config.CARPLAY_HEIGHT
     }
 
     override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
