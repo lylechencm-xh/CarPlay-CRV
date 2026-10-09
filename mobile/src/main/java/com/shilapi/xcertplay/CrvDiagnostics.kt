@@ -1,6 +1,7 @@
 package com.shilapi.xcertplay
 
 import android.content.Context
+import java.io.Closeable
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -12,7 +13,7 @@ import java.util.Locale
  * Only stage/status messages are recorded. MFi private keys, certificates, Lockdown keys and
  * raw protocol payloads are never written here.
  */
-class CrvDiagnostics(context: Context) {
+class CrvDiagnostics(context: Context) : Closeable {
     private val lock = Any()
     private val directory = context.getExternalFilesDir(null) ?: context.filesDir
     private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
@@ -50,6 +51,10 @@ class CrvDiagnostics(context: Context) {
                 // Diagnostics must never stop CarPlay bring-up.
             }
         }
+    }
+
+    override fun close() {
+        storage.close()
     }
 
     fun logFailure(label: String, error: Throwable) {
