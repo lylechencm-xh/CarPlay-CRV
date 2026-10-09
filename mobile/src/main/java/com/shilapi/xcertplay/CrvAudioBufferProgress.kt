@@ -21,3 +21,24 @@ internal class CrvAudioBufferProgress(private val frameBytes: Int) {
         return (writtenBytes - playedFrames * frameBytes).coerceAtLeast(0L)
     }
 }
+
+/** Pure API17 starvation policy so the legacy AudioTrack recovery gate is unit-testable. */
+internal object CrvMediaRebufferPolicy {
+    fun shouldPause(
+        isMedia: Boolean,
+        playbackStarted: Boolean,
+        compressedQueueEmpty: Boolean,
+        lastPacketNs: Long,
+        nowNs: Long,
+        queuedBytes: Long,
+        recoveryFloorBytes: Long,
+        minimumPacketGapNs: Long,
+    ): Boolean =
+        isMedia &&
+            playbackStarted &&
+            compressedQueueEmpty &&
+            lastPacketNs > 0L &&
+            nowNs >= lastPacketNs &&
+            nowNs - lastPacketNs >= minimumPacketGapNs &&
+            queuedBytes <= recoveryFloorBytes
+}
