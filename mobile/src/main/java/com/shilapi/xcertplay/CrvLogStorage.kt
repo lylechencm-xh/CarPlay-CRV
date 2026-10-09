@@ -1,6 +1,7 @@
 package com.shilapi.xcertplay
 
 import java.io.File
+import java.io.Closeable
 import java.io.FileOutputStream
 
 /**
@@ -12,9 +13,11 @@ internal class CrvLogStorage(
     val file: File,
     private val maxFileBytes: Long = MAX_FILE_BYTES,
     private val maxFiles: Int = MAX_FILES,
-) {
+) : Closeable {
     private val lock = Any()
     private val previousFile = File(directory, file.name.removeSuffix(".log") + "-previous.log")
+    private var output: FileOutputStream? = null
+    private var closed = false
 
     init {
         require(maxFileBytes > 0L)
@@ -22,11 +25,15 @@ internal class CrvLogStorage(
     }
 
     fun append(line: String) = synchronized(lock) {
+        if (closed) return@synchronized
         val bytes = (line + "\n").toByteArray(Charsets.UTF_8)
         if (bytes.size.toLong() > maxFileBytes) return@synchronized
         if (!directory.exists() && !directory.mkdirs()) return@synchronized
         if (file.length() + bytes.size > maxFileBytes && !rotate()) return@synchronized
-        FileOutputStream(file, true).use { it.write(bytes) }
+        val stream = output ?: FileOutputStream(file, true).also { output = it }
+        stream.write(bytes)
+        // Preserve field-log durability while avoiding an open/close cycle for every line.
+        stream.flush()
     }
 
     /** Reserve room for the active file and remove only older CR-V session logs. */
@@ -57,10 +64,24 @@ internal class CrvLogStorage(
     }
 
     private fun rotate(): Boolean {
+        closeOutput()
         if (previousFile.exists() && !previousFile.delete()) return false
         if (!file.renameTo(previousFile)) return false
         pruneOldLogs()
         return true
+    }
+
+    override fun close() = synchronized(lock) {
+        if (closed) return@synchronized
+        closed = true
+        closeOutput()
+    }
+
+    private fun closeOutput() {
+        val stream = output ?: return
+        output = null
+        runCatching { stream.flush() }
+        runCatching { stream.close() }
     }
 
     companion object {
