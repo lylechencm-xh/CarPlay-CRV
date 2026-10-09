@@ -1046,15 +1046,9 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             }
 
             MotionEvent.ACTION_CANCEL -> {
-                for (slot in 0 until 2) {
-                    if (touchSlots.isDown(slot)) {
-                        // Preserve the last coordinates while sending both contacts released.
-                        val pointerId = findPointerIdForSlot(event, slot)
-                        if (pointerId >= 0) {
-                            touchSlots.lift(pointerId, touchSlots.x(slot), touchSlots.y(slot))
-                        }
-                    }
-                }
+                // Some API17 touch stacks no longer expose every pointer on CANCEL. Release both
+                // HID slots directly so CarPlay never keeps a phantom finger pressed.
+                touchSlots.cancelAll()
                 sendTouchSlots()
                 touchSlots.reset()
                 return true
@@ -1077,14 +1071,6 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 event.getY(index).toDouble() / height,
             )
         }
-    }
-
-    private fun findPointerIdForSlot(event: MotionEvent, slot: Int): Int {
-        for (index in 0 until event.pointerCount) {
-            val pointerId = event.getPointerId(index)
-            if (touchSlots.slotOf(pointerId) == slot) return pointerId
-        }
-        return -1
     }
 
     private fun sendTouchSlots() {
