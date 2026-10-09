@@ -43,4 +43,29 @@ class AirPlayHidTest {
 
         assertArrayEquals(expected, actual)
     }
+
+
+    @Test
+    fun primitiveTwoTouchMatchesTwoContactReport() {
+        val width = 1280
+        val height = 720
+        val contacts = listOf(
+            AirPlayContact(0, 0.20, 0.30, true),
+            AirPlayContact(1, 0.80, 0.70, true),
+        )
+        val expected = AirPlayHid.touchReport(contacts, width, height)
+
+        val actual = AirPlayHid.touchReport(
+            x0 = 0.20,
+            y0 = 0.30,
+            down0 = true,
+            x1 = 0.80,
+            y1 = 0.70,
+            down1 = true,
+            xMax = width,
+            yMax = height,
+        )
+
+        assertArrayEquals(expected, actual)
+    }
 }
