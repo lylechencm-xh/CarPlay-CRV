@@ -163,6 +163,27 @@ internal class AirPlayChaChaOpener(key: ByteArray) {
     private val cipher = ChaCha20Poly1305()
     private val keyParameter = KeyParameter(key)
 
+    fun openWithPrefix(
+        nonce: ByteArray,
+        source: ByteArray,
+        offset: Int,
+        length: Int,
+        aad: ByteArray,
+        prefixSource: ByteArray,
+        prefixLength: Int,
+    ): ByteArray {
+        require(offset >= 0 && length >= 0 && offset + length <= source.size)
+        require(prefixLength >= 0 && prefixLength <= prefixSource.size)
+        cipher.init(false, AEADParameters(keyParameter, MAC_BITS, nonce, aad))
+        val plainCapacity = cipher.getOutputSize(length)
+        val output = ByteArray(prefixLength + plainCapacity)
+        if (prefixLength > 0) prefixSource.copyInto(output, 0, 0, prefixLength)
+        val processed = cipher.processBytes(source, offset, length, output, prefixLength)
+        val finalized = cipher.doFinal(output, prefixLength + processed)
+        val outputLength = prefixLength + processed + finalized
+        return if (outputLength == output.size) output else output.copyOf(outputLength)
+    }
+
     fun open(
         nonce: ByteArray,
         source: ByteArray,
