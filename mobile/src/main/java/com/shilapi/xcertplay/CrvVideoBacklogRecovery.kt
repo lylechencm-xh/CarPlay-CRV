@@ -75,3 +75,22 @@ internal class CrvVideoBacklogRecovery {
         const val FRAME_GROWTH = 4
     }
 }
+
+
+internal object CrvVideoRecoveryFrameAge {
+    fun isObsolete(
+        nowNs: Long,
+        receivedNs: Long,
+        pendingFrames: Int,
+        newestPendingReceivedNs: Long?,
+    ): Boolean =
+        nowNs >= receivedNs &&
+            nowNs - receivedNs >= HARD_AGE_NS &&
+            pendingFrames > 0 &&
+            newestPendingReceivedNs?.let {
+                it <= nowNs && it - receivedNs >= MIN_NEWER_SPAN_NS
+            } == true
+
+    private const val HARD_AGE_NS = 1_500_000_000L
+    private const val MIN_NEWER_SPAN_NS = 100_000_000L
+}
