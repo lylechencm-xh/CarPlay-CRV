@@ -134,13 +134,15 @@ class AudioStream(
                 buffer.copyInto(nonce, 4, sealedEnd, packetLength)
                 val sample = readU32Be(buffer, 4)
 
-                val payload = try {
-                    opener.open(
+                val rtp = try {
+                    opener.openWithPrefix(
                         nonce = nonce,
                         source = buffer,
                         offset = RTP_HEADER_LEN,
                         length = sealedEnd - RTP_HEADER_LEN,
                         aad = aad,
+                        prefixSource = buffer,
+                        prefixLength = RTP_HEADER_LEN,
                     )
                 } catch (error: Exception) {
                     val failureNumber = authenticationFailures.incrementAndGet()
@@ -157,16 +159,17 @@ class AudioStream(
                     stats.processed()
                     continue
                 }
-                val rtp = ByteArray(RTP_HEADER_LEN + payload.size)
-                buffer.copyInto(rtp, 0, 0, RTP_HEADER_LEN)
-                payload.copyInto(rtp, RTP_HEADER_LEN)
+                val payloadBytes = rtp.size - RTP_HEADER_LEN
                 val decryptedNumber = decryptedPackets.incrementAndGet()
                 if (decryptedNumber <= FIRST_PACKET_LOG_COUNT) {
                     android.util.Log.i(
                         TAG,
                         "audio stream type=$streamType packet=$decryptedNumber sample=$sample " +
-                            "wireBytes=$packetLength payloadBytes=${payload.size} " +
-                            "payloadHead=${payload.copyOf(minOf(payload.size, 16)).toHexString()}",
+                            "wireBytes=$packetLength payloadBytes=$payloadBytes " +
+                            "payloadHead=${rtp.copyOfRange(
+                                RTP_HEADER_LEN,
+                                minOf(rtp.size, RTP_HEADER_LEN + 16),
+                            ).toHexString()}",
                     )
                 } else if (decryptedNumber % PACKET_LOG_INTERVAL == 0) {
                     android.util.Log.i(
