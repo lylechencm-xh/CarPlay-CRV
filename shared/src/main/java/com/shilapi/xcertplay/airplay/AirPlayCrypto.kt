@@ -204,3 +204,38 @@ internal class AirPlayChaChaOpener(key: ByteArray) {
         const val MAC_BITS = 128
     }
 }
+
+
+/** Reusable one-thread ChaCha20-Poly1305 sealer for high-frequency control/event frames. */
+internal class AirPlayChaChaSealer(key: ByteArray) {
+    private val cipher = ChaCha20Poly1305()
+    private val keyParameter = KeyParameter(key)
+
+    fun sealInto(
+        nonce: ByteArray,
+        aad: ByteArray,
+        first: ByteArray,
+        second: ByteArray,
+        target: ByteArray,
+        targetOffset: Int,
+    ): Int {
+        require(targetOffset >= 0 && targetOffset <= target.size)
+        cipher.init(true, AEADParameters(keyParameter, MAC_BITS, nonce, aad))
+        val required = cipher.getOutputSize(first.size + second.size)
+        require(target.size - targetOffset >= required) { "target is too small for sealed output" }
+        var written = cipher.processBytes(first, 0, first.size, target, targetOffset)
+        written += cipher.processBytes(
+            second,
+            0,
+            second.size,
+            target,
+            targetOffset + written,
+        )
+        written += cipher.doFinal(target, targetOffset + written)
+        return written
+    }
+
+    private companion object {
+        const val MAC_BITS = 128
+    }
+}
