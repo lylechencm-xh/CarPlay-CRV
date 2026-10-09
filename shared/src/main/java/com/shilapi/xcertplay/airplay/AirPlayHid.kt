@@ -57,13 +57,31 @@ object AirPlayHid {
         down: Boolean,
         xMax: Int,
         yMax: Int,
+    ): ByteArray = touchReport(
+        x0 = x,
+        y0 = y,
+        down0 = down,
+        x1 = 0.0,
+        y1 = 0.0,
+        down1 = false,
+        xMax = xMax,
+        yMax = yMax,
+    )
+
+    /** Two-contact primitive path for CR-V pinch/zoom without allocating contact objects. */
+    fun touchReport(
+        x0: Double,
+        y0: Double,
+        down0: Boolean,
+        x1: Double,
+        y1: Double,
+        down1: Boolean,
+        xMax: Int,
+        yMax: Int,
     ): ByteArray {
         val report = ByteArray(BYTES_PER_FINGER * TOUCH_CONTACTS)
-        report[0] = 0
-        report[1] = if (down) 0x01 else 0x00
-        writeU16Le(report, 2, Math.round((x * xMax).coerceAtLeast(0.0)).toInt())
-        writeU16Le(report, 4, Math.round((y * yMax).coerceAtLeast(0.0)).toInt())
-        report[BYTES_PER_FINGER] = 1
+        writeTouchSlot(report, 0, x0, y0, down0, xMax, yMax)
+        writeTouchSlot(report, 1, x1, y1, down1, xMax, yMax)
         return report
     }
 
@@ -172,6 +190,30 @@ object AirPlayHid {
     )
 
     private fun descriptor(vararg bytes: Int): ByteArray = ByteArray(bytes.size) { bytes[it].toByte() }
+
+    private fun writeTouchSlot(
+        report: ByteArray,
+        slot: Int,
+        x: Double,
+        y: Double,
+        down: Boolean,
+        xMax: Int,
+        yMax: Int,
+    ) {
+        val offset = slot * BYTES_PER_FINGER
+        report[offset] = slot.toByte()
+        report[offset + 1] = if (down) 0x01 else 0x00
+        writeU16Le(
+            report,
+            offset + 2,
+            Math.round((x * xMax).coerceIn(0.0, xMax.toDouble())).toInt(),
+        )
+        writeU16Le(
+            report,
+            offset + 4,
+            Math.round((y * yMax).coerceIn(0.0, yMax.toDouble())).toInt(),
+        )
+    }
 
     private fun clampAxis(value: Int): Byte = value.coerceIn(-127, 127).toByte()
 
