@@ -39,6 +39,9 @@ enum class NcmClaimPolicy(internal val force: Boolean) {
         }
 }
 
+/** A timed-out bulk OUT has not accepted any bytes; the caller still owns the frame. */
+enum class NcmWriteResult { SENT, NOT_READY }
+
 class NcmUsbBridge internal constructor(
     private val connection: UsbDeviceConnection,
     private val outEndpoint: UsbEndpoint,
@@ -73,7 +76,7 @@ class NcmUsbBridge internal constructor(
     }
 
     /** Wraps one Ethernet frame in one NTB16 block and writes it to bulk OUT. */
-    fun send(frame: ByteArray, timeoutMillis: Int) = synchronized(writeLock) {
+    fun send(frame: ByteArray, timeoutMillis: Int): NcmWriteResult = synchronized(writeLock) {
         checkOpen()
         require(timeoutMillis > 0) { "timeoutMillis must be positive" }
         val sequence = synchronized(stateLock) {
@@ -110,7 +113,7 @@ class NcmUsbBridge internal constructor(
                     loggedWriteTimeout = true
                     Log.i(IphoneCarPlayConfiguration.TAG, "ncm bulk-out not ready; retaining bridge for retry")
                 }
-                return@synchronized
+                return@synchronized NcmWriteResult.NOT_READY
             }
             if (transferred != chunkSize) {
                 throw failSession(
@@ -125,6 +128,7 @@ class NcmUsbBridge internal constructor(
             loggedWriteTimeout = false
             Log.i(IphoneCarPlayConfiguration.TAG, "ncm bulk-out became ready")
         }
+        NcmWriteResult.SENT
     }
 
     /**

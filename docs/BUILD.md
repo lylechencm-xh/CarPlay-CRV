@@ -1,4 +1,4 @@
-# Building CarPlay CR-V 0.2.27
+# Building CarPlay CR-V 0.2.28
 
 ## Requirements
 
@@ -54,5 +54,5 @@ otherwise it labels the output `debug-signed`. CI verifies package `com.shihab.d
 the API17 platform surface, DEX035/single-Dex constraints and an Android 4.2.2-compatible v1/JAR
 signature.
 
-Installable APKs are distributed only through GitHub Actions artifacts or the
-`v0.2.27-crv-api17` GitHub Release. They are deliberately excluded from the source tree.
+For the current `0.2.28` source, build locally or use an artifact from a successful matching
+GitHub Actions run. The earlier `v0.2.27-crv-api17` release predates these changes. APKs are excluded from the source tree.

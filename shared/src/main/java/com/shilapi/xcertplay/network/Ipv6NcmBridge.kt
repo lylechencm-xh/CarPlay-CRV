@@ -111,6 +111,10 @@ class Ipv6NcmBridge(
     private fun runTunToNcm() {
         val input = FileInputStream(tun.fileDescriptor)
         val buffer = ByteArray(TUN_READ_BYTES)
+        val pendingFrame = NcmPendingFrameSender(
+            transmit = { frame -> ncm.send(frame, WRITE_TIMEOUT_MILLIS) },
+            isRunning = running::get,
+        )
         try {
             while (running.get()) {
                 val length = try {
@@ -158,7 +162,7 @@ class Ipv6NcmBridge(
                     )
                 }
                 val frame = EthernetIpv6Codec.build(hostMac, mac, ipv6)
-                ncm.send(frame, WRITE_TIMEOUT_MILLIS)
+                if (!pendingFrame.send(frame)) return
             }
         } catch (error: IOException) {
             if (running.get()) onError(error)

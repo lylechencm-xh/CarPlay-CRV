@@ -276,102 +276,20 @@ class CrvWiredCarPlayController(
         // accessory-authentication boundary. This does not bypass MFi: authentication is loaded
         // immediately before iAP2 identification and installed into the AirPlay listener first.
         // NCM is opened before Lockdown/iAP2 so the iPhone sees both CarPlay interfaces active.
-        val expectedKernelNcm = if (mode == CrvConnectionMode.WIRED) {
-            report("Opening CDC-NCM data path")
-            inspectExpectedKernelNcm(device).also { expected ->
-                report("Kernel NCM identity " + CrvUsbKernelProbe.describeExpected(expected))
-            }
+        val initialNcm = if (mode == CrvConnectionMode.WIRED) {
+            openInitialWiredNcm(device)
         } else {
-            null
+            WiredNcmPaths(null, null, null)
         }
-        var kernelNcm = expectedKernelNcm?.let { expected ->
-            CrvUsbKernelProbe.waitForKernelNcm(expected, KERNEL_NCM_WAIT_MILLIS)?.also { network ->
-                reportKernelNcmReady(network)
-            }
-        }
-        var kernelBringUp: CrvUsbKernelProbe.KernelBringUpResult? = null
-        if (mode == CrvConnectionMode.WIRED && kernelNcm == null && expectedKernelNcm != null) {
-            val bringUp = CrvUsbKernelProbe.tryBringUpKernelNcm(expectedKernelNcm)
-            kernelBringUp = bringUp
-            report(
-                "Honda kernel CDC-NCM bring-up interface=${bringUp.interfaceName ?: "none"} " +
-                    "attempted=${bringUp.attempted} result=${bringUp.resultCode ?: -1}" +
-                    (bringUp.error?.let { " detail=$it" } ?: ""),
-            )
-            if (bringUp.interfaceName != null) {
-                kernelNcm = CrvUsbKernelProbe.waitForKernelNcm(
-                    expectedKernelNcm,
-                    KERNEL_NCM_BRINGUP_WAIT_MILLIS,
-                )?.also { network ->
-                    reportKernelNcmReady(network)
-                }
-            }
-        }
-        val ncmBridge = if (mode == CrvConnectionMode.WIRED && kernelNcm == null) {
-            val expected = expectedKernelNcm
-                ?: throw IphoneUsbException.DeviceUnavailable("Kernel NCM identity is unavailable")
-            val conflict = CrvUsbKernelProbe.findConfigurationConflict(expected)
-            if (conflict != null) {
-                report("USB KERNEL/DEVICE CONFIGURATION CONFLICT: $conflict")
-                throw IphoneUsbException.Protocol(
-                    "Kernel USB configuration does not match active iPhone CarPlay configuration",
-                )
-            }
-            val fallbackReason = checkNotNull(kernelBringUp).fallbackReason.diagnostic
-            report(
-                "Honda kernel CDC-NCM fallback reason=$fallbackReason " +
-                    "kernelDriverDetachAllowed=false",
-            )
-            openNcmFallback(device, "kernel-bring-up-failed reason=$fallbackReason").also {
-                resources.ncm = it
-            }
-        } else {
-            null
-        }
+        val expectedKernelNcm = initialNcm.expected
+        var kernelNcm = initialNcm.kernel
+        val ncmBridge = initialNcm.userspace
         if (mode == CrvConnectionMode.WIRED) {
             lifecycle.ncmReady()
             protocolTrace.signal(CrvProtocolLayer.NCM, "ready")
         }
 
-        val host = Iap2UsbMuxHost.open(
-            pipe = usbSession,
-            onDiagnostic = { report(it) },
-        )
-        resources.mux = host
-        report("USBMUX ready")
-        lifecycle.usbMuxReady()
-        protocolTrace.signal(CrvProtocolLayer.USBMUX, "ready")
-
-        val carKitClient = LockdownCarKitClient(host)
-        var pairRecord = lockdownState.load()
-        val carkit = if (pairRecord != null) {
-            report("Using saved iPhone pairing")
-            try {
-                carKitClient.open(pairRecord, LABEL)
-            } catch (error: Throwable) {
-                if (!CrvPairingFailurePolicy.isPairRejection(error)) throw error
-                report("Saved iPhone pairing rejected; pairing again")
-                lockdownState.clear()
-                pairRecord = pairNew(host)
-                carKitClient.open(pairRecord, LABEL)
-            }
-        } else {
-            pairRecord = pairNew(host)
-            carKitClient.open(pairRecord, LABEL)
-        }
-        preflightLockdownTls(checkNotNull(pairRecord))
-        report("iPhone Lockdown ready")
-        lifecycle.lockdownReady()
-        protocolTrace.signal(CrvProtocolLayer.LOCKDOWN, "ready")
-        val session = Iap2Session.open(
-            underlying = carkit,
-            traceContext = "crv-wired",
-            onTrace = { line -> if (line.contains("FAIL") || line.contains("READY")) report(line) },
-        )
-        resources.csm = session
-        report("iAP2 carkit channel ready")
-        lifecycle.iap2Ready()
-        protocolTrace.signal(CrvProtocolLayer.USBMUX, "iap2-ready")
+        val session = openCarKitSession(usbSession)
 
         if (mode == CrvConnectionMode.WIFI_HANDOFF) {
             val mfi = loadMfi()
@@ -560,6 +478,7 @@ class CrvWiredCarPlayController(
             endpoint = endpoint,
             availableCurrentMilliAmps = AVAILABLE_CURRENT_MA,
             timeoutMillis = Iap2WiredControlClient.NO_TIMEOUT_MILLIS,
+            isCarPlaySessionActive = { lifecycle.snapshot().sessionActive },
             onProgress = { message ->
                 if (message == "iap2 authentication accepted" && !lifecycle.isStopping()) {
                     lifecycle.authenticated()
@@ -571,6 +490,100 @@ class CrvWiredCarPlayController(
             report("iAP2 wired control ended terminal=${result.terminal} stage=${result.stage} " +
                 "carPlayStartSessions=${result.carPlayStartSessionsSent}")
         }
+    }
+
+    private data class WiredNcmPaths(
+        val expected: CrvUsbKernelProbe.ExpectedUsbNcm?,
+        val kernel: CrvUsbKernelProbe.KernelNcmNetwork?,
+        val userspace: NcmUsbBridge?,
+    )
+
+    private fun openInitialWiredNcm(device: UsbDevice): WiredNcmPaths {
+        report("Opening CDC-NCM data path")
+        val expected = inspectExpectedKernelNcm(device).also {
+            report("Kernel NCM identity " + CrvUsbKernelProbe.describeExpected(it))
+        }
+        var kernel = CrvUsbKernelProbe.waitForKernelNcm(expected, KERNEL_NCM_WAIT_MILLIS)?.also {
+            reportKernelNcmReady(it)
+        }
+        var bringUp: CrvUsbKernelProbe.KernelBringUpResult? = null
+        if (kernel == null) {
+            bringUp = CrvUsbKernelProbe.tryBringUpKernelNcm(expected)
+            report(
+                "Honda kernel CDC-NCM bring-up interface=${bringUp.interfaceName ?: "none"} " +
+                    "attempted=${bringUp.attempted} result=${bringUp.resultCode ?: -1}" +
+                    (bringUp.error?.let { " detail=$it" } ?: ""),
+            )
+            if (bringUp.interfaceName != null) {
+                kernel = CrvUsbKernelProbe.waitForKernelNcm(
+                    expected,
+                    KERNEL_NCM_BRINGUP_WAIT_MILLIS,
+                )?.also { reportKernelNcmReady(it) }
+            }
+        }
+        val userspace = if (kernel == null) {
+            val conflict = CrvUsbKernelProbe.findConfigurationConflict(expected)
+            if (conflict != null) {
+                report("USB KERNEL/DEVICE CONFIGURATION CONFLICT: $conflict")
+                throw IphoneUsbException.Protocol(
+                    "Kernel USB configuration does not match active iPhone CarPlay configuration",
+                )
+            }
+            val fallbackReason = checkNotNull(bringUp).fallbackReason.diagnostic
+            report(
+                "Honda kernel CDC-NCM fallback reason=$fallbackReason " +
+                    "kernelDriverDetachAllowed=false",
+            )
+            openNcmFallback(device, "kernel-bring-up-failed reason=$fallbackReason").also {
+                resources.ncm = it
+            }
+        } else {
+            null
+        }
+        return WiredNcmPaths(expected, kernel, userspace)
+    }
+
+    private fun openCarKitSession(usbSession: Iap2UsbSession): Iap2Session {
+        val host = Iap2UsbMuxHost.open(
+            pipe = usbSession,
+            onDiagnostic = { report(it) },
+        )
+        resources.mux = host
+        report("USBMUX ready")
+        lifecycle.usbMuxReady()
+        protocolTrace.signal(CrvProtocolLayer.USBMUX, "ready")
+
+        val carKitClient = LockdownCarKitClient(host)
+        var pairRecord = lockdownState.load()
+        val carkit = if (pairRecord != null) {
+            report("Using saved iPhone pairing")
+            try {
+                carKitClient.open(pairRecord, LABEL)
+            } catch (error: Throwable) {
+                if (!CrvPairingFailurePolicy.isPairRejection(error)) throw error
+                report("Saved iPhone pairing rejected; pairing again")
+                lockdownState.clear()
+                pairRecord = pairNew(host)
+                carKitClient.open(pairRecord, LABEL)
+            }
+        } else {
+            pairRecord = pairNew(host)
+            carKitClient.open(pairRecord, LABEL)
+        }
+        preflightLockdownTls(checkNotNull(pairRecord))
+        report("iPhone Lockdown ready")
+        lifecycle.lockdownReady()
+        protocolTrace.signal(CrvProtocolLayer.LOCKDOWN, "ready")
+        val session = Iap2Session.open(
+            underlying = carkit,
+            traceContext = "crv-wired",
+            onTrace = { line -> if (line.contains("FAIL") || line.contains("READY")) report(line) },
+        )
+        resources.csm = session
+        report("iAP2 carkit channel ready")
+        lifecycle.iap2Ready()
+        protocolTrace.signal(CrvProtocolLayer.USBMUX, "iap2-ready")
+        return session
     }
 
     private fun runWirelessHandoff(session: Iap2Session, mfi: MfiAuthenticator) {

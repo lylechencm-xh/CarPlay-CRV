@@ -11,7 +11,7 @@
 - 包名：`com.shihab.diplay`
 - 主要功能模块：USB、USBMUX、Lockdown、iAP2/MFi、CDC-NCM、AirPlay、音视频与触控
 
-> **开发测试中：** 历史实车测试在 USB/NCM/USBMUX/Lockdown 阶段取得进展；MFi 认证及完整 CarPlay 音视频、触控链路尚未通过实车验证。无线 CarPlay 默认未启用。
+> **开发测试中：** 2026-10-09 的 2021 款 CR-V 实车测试已连接有线 CarPlay，并显示导航画面。音频、麦克风、触控和长时间稳定性仍需分别验证。无线 CarPlay 默认未启用。
 
 **构建与下载**
 
@@ -40,7 +40,7 @@ CarPlay adaptation project for the **2021 Honda CR-V**, based on [DiPlay](https:
 - Package: `com.shihab.diplay`
 - Main components: USB, USBMUX, Lockdown, iAP2/MFi, CDC-NCM, AirPlay, video, audio, and touch input
 
-> **Experimental:** Previous vehicle tests made progress through USB/NCM/USBMUX/Lockdown. MFi authentication and the full CarPlay video/audio/touch flow are **not yet verified** on the vehicle. Wireless CarPlay is not enabled by default.
+> **Experimental:** A 2021 CR-V vehicle test on 2026-10-09 connected wired CarPlay and displayed navigation. Audio, microphone, touch, and long-term stability still need separate verification. Wireless CarPlay is not enabled by default.
 
 **Build & Download**
 

@@ -2,18 +2,27 @@
 
 This branch targets the 2021 Honda CR-V head unit running Android 4.2.2 / API17.
 
-## Release under test
+## Current source build under test
 
-- Version: `0.2.27`
-- Version code: `46`
+- Version: `0.2.28`
+- Version code: `47`
 - Package: `com.shihab.diplay`
-- Git tag: `v0.2.27-crv-api17`
+- Commit: use the APK artifact built from the commit being tested
 - Primary mode: wired USB CarPlay
 
-Download the APK from the matching GitHub Release or GitHub Actions artifact. APK files are not
+The earlier `v0.2.27-crv-api17` release does not contain the current NCM changes.
+
+Build the APK locally or download an artifact from a successful GitHub Actions run for the current commit. APK files are not
 stored in the source repository. Prefer the fixed-signed artifact when it is available; a
 debug-signed artifact is suitable for compile/install diagnostics but may not satisfy the Honda
 native installer.
+
+## Vehicle observation (2026-10-09)
+
+The local `0.2.28` standalone build connected wired CarPlay on the target CR-V and displayed
+navigation. The exported log for that session was empty, so this observation is based on the
+vehicle screen rather than a protocol trace. Audio, microphone, touch and long-term stability
+remain to be tested separately.
 
 ## Installation
 
@@ -21,7 +30,7 @@ Update the existing package instead of uninstalling it so saved Lockdown pairing
 MFi provisioning survive:
 
 ```sh
-adb install -r CarPlay-CRV-2021-v0.2.27-api17.apk
+adb install -r mobile-debug.apk
 ```
 
 Confirm that the selected artifact reports package `com.shihab.diplay` and `minSdk=17` before using

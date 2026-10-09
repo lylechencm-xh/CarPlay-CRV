@@ -27,6 +27,7 @@ class Iap2WiredControlClient(
         timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
         locationProvider: Iap2LocationProvider? = null,
         vehicleStatusProvider: VehicleStatusProvider? = null,
+        isCarPlaySessionActive: () -> Boolean = { true },
         onIncoming: (Iap2Frame) -> Unit = {},
         onProgress: (String) -> Unit = {},
     ): Iap2WiredControlResult {
@@ -37,7 +38,7 @@ class Iap2WiredControlClient(
             "timeoutMillis must be in 1..$MAX_TIMEOUT_MILLIS or NO_TIMEOUT_MILLIS"
         }
 
-        val deadlineNanos = Iap2ControlDeadline(timeoutMillis)
+        val deadlineNanos = Iap2ControlDeadline(timeoutMillis, isSessionActive = isCarPlaySessionActive)
         val identified = identification.withVehicleStatusFrom(vehicleStatusProvider)
         if (identified.vehicleStatusEnabled != identification.vehicleStatusEnabled) {
             onProgress("iap2 no battery reading: not declaring an electric vehicle")
@@ -49,6 +50,7 @@ class Iap2WiredControlClient(
         stage = Iap2WiredControlStage.AUTHENTICATED
         onProgress("iap2 authentication accepted")
         deadlineNanos.authenticated()
+        onProgress("iap2 awaiting CarPlay availability timeoutMs=${Iap2ControlDeadline.HANDSHAKE_MILLIS}")
 
         send(powerSourceUpdate(availableCurrentMilliAmps), deadlineNanos)
         for (subscription in subscriptions()) send(subscription, deadlineNanos)
@@ -98,6 +100,8 @@ class Iap2WiredControlClient(
                         send(carPlayStartSession(endpoint), deadlineNanos)
                         stage = Iap2WiredControlStage.CARPLAY_START_SENT
                         carPlayStartSessions++
+                        deadlineNanos.carPlayStartSent()
+                        onProgress("iap2 awaiting AirPlay session timeoutMs=${Iap2ControlDeadline.HANDSHAKE_MILLIS}")
                         onProgress("iap2 tx=0x4301 carplay-start-session")
                     }
 
