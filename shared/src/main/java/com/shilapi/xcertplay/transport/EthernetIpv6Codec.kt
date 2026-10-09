@@ -44,32 +44,62 @@ object EthernetIpv6Codec {
         )
     }
 
-    fun build(sourceMac: ByteArray, destinationMac: ByteArray, ipv6: ByteArray): ByteArray {
+    fun build(sourceMac: ByteArray, destinationMac: ByteArray, ipv6: ByteArray): ByteArray =
+        build(sourceMac, destinationMac, ipv6, 0, ipv6.size)
+
+    /** Builds an Ethernet frame directly from an IPv6 slice without first copying the TUN packet. */
+    fun build(
+        sourceMac: ByteArray,
+        destinationMac: ByteArray,
+        ipv6: ByteArray,
+        offset: Int,
+        length: Int,
+    ): ByteArray {
         require(sourceMac.size == MAC_BYTES) { "sourceMac must be $MAC_BYTES bytes" }
         require(destinationMac.size == MAC_BYTES) { "destinationMac must be $MAC_BYTES bytes" }
-        require(ipv6.isNotEmpty()) { "ipv6 payload must not be empty" }
+        require(offset >= 0 && length > 0 && offset + length <= ipv6.size) {
+            "ipv6 payload slice is invalid"
+        }
 
-        val frame = ByteArray(HEADER_BYTES + ipv6.size)
+        val frame = ByteArray(HEADER_BYTES + length)
         destinationMac.copyInto(frame, 0)
         sourceMac.copyInto(frame, 6)
         putU16(frame, 12, ETHERTYPE_IPV6)
-        ipv6.copyInto(frame, HEADER_BYTES)
+        ipv6.copyInto(frame, HEADER_BYTES, offset, offset + length)
         return frame
     }
 
     /** Maps an IPv6 multicast destination to its Ethernet 33:33:xx:xx:xx:xx address. */
-    fun multicastDestinationMac(ipv6: ByteArray): ByteArray? {
-        if (ipv6.size < IPV6_HEADER_BYTES || (ipv6[0].toInt() ushr 4 and 0x0f) != 6) return null
-        if ((ipv6[IPV6_DESTINATION_OFFSET].toInt() and 0xff) != 0xff) return null
+    fun multicastDestinationMac(ipv6: ByteArray): ByteArray? =
+        multicastDestinationMac(ipv6, 0, ipv6.size)
+
+    fun multicastDestinationMac(ipv6: ByteArray, offset: Int, length: Int): ByteArray? {
+        if (
+            offset < 0 ||
+            length < IPV6_HEADER_BYTES ||
+            offset + length > ipv6.size ||
+            (ipv6[offset].toInt() ushr 4 and 0x0f) != 6
+        ) return null
+        val destination = offset + IPV6_DESTINATION_OFFSET
+        if ((ipv6[destination].toInt() and 0xff) != 0xff) return null
         return byteArrayOf(
             0x33,
             0x33,
-            ipv6[IPV6_DESTINATION_OFFSET + 12],
-            ipv6[IPV6_DESTINATION_OFFSET + 13],
-            ipv6[IPV6_DESTINATION_OFFSET + 14],
-            ipv6[IPV6_DESTINATION_OFFSET + 15],
+            ipv6[destination + 12],
+            ipv6[destination + 13],
+            ipv6[destination + 14],
+            ipv6[destination + 15],
         )
     }
+
+    /** True when the current TUN packet is an ICMPv6 Neighbor Advertisement. */
+    fun isNeighborAdvertisement(ipv6: ByteArray, offset: Int = 0, length: Int = ipv6.size - offset): Boolean =
+        offset >= 0 &&
+            length >= ICMPV6_NA_MIN_BYTES &&
+            offset + length <= ipv6.size &&
+            (ipv6[offset].toInt() ushr 4 and 0x0f) == 6 &&
+            (ipv6[offset + IPV6_NEXT_HEADER_OFFSET].toInt() and 0xff) == ICMPV6_NEXT_HEADER &&
+            (ipv6[offset + IPV6_HEADER_BYTES].toInt() and 0xff) == ICMPV6_NEIGHBOR_ADVERTISEMENT
 
     /**
      * A TUN interface has no layer-2 address, so Android emits Neighbor Advertisements without a
