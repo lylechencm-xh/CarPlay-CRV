@@ -102,16 +102,67 @@ object MicrophonePacketizer {
     }
 
     /** Captured Android PCM is little-endian; CarPlay's wired microphone payload is big-endian. */
-    fun toWirePcm(pcmLittleEndian: ByteArray): ByteArray {
-        val output = pcmLittleEndian.copyOf()
+    fun toWirePcm(pcmLittleEndian: ByteArray): ByteArray =
+        pcmLittleEndian.copyOf().also(::toWirePcmInPlace)
+
+    fun toWirePcmInPlace(pcm: ByteArray) {
         var index = 0
-        while (index + 1 < output.size) {
-            val first = output[index]
-            output[index] = output[index + 1]
-            output[index + 1] = first
+        while (index + 1 < pcm.size) {
+            val first = pcm[index]
+            pcm[index] = pcm[index + 1]
+            pcm[index + 1] = first
             index += 2
         }
-        return output
+    }
+
+    /**
+     * Reusable one-thread packet sealer for microphone RTP.
+     *
+     * CR-V owns one instance per microphone stream, avoiding header/nonce/AAD/cipher allocations
+     * for every 20 ms capture frame. Only the final UDP packet array is allocated.
+     */
+    class ReusableSealer(
+        key: ByteArray,
+        private val payloadType: Int,
+    ) {
+        private val sealer = AirPlayChaChaSealer(key)
+        private val header = ByteArray(RTP_HEADER_LEN)
+        private val nonce = ByteArray(12)
+        private val aad = ByteArray(RTP_HEADER_LEN - 4)
+        private val empty = ByteArray(0)
+
+        fun seal(
+            counters: MicrophoneCounters,
+            body: ByteArray,
+            samples: Int,
+        ): ByteArray {
+            header[0] = 0x80.toByte()
+            header[1] = (payloadType and 0x7f).toByte()
+            putU16Be(header, 2, counters.sequence)
+            putU32Be(header, 4, counters.timestamp)
+            header.copyInto(aad, 0, 4, RTP_HEADER_LEN)
+            AirPlayCrypto.nonce64(counters.nonce, nonce)
+
+            val packet = ByteArray(RTP_HEADER_LEN + body.size + TAG_LEN + NONCE_LEN)
+            header.copyInto(packet, 0)
+            val sealedBytes = sealer.sealInto(
+                nonce = nonce,
+                aad = aad,
+                first = body,
+                second = empty,
+                target = packet,
+                targetOffset = RTP_HEADER_LEN,
+            )
+            check(sealedBytes == body.size + TAG_LEN) {
+                "unexpected microphone sealed length"
+            }
+            putU64Le(packet, RTP_HEADER_LEN + sealedBytes, counters.nonce)
+
+            counters.sequence = (counters.sequence + 1) and 0xffff
+            counters.timestamp += samples
+            counters.nonce++
+            return packet
+        }
     }
 
     private fun putU16Be(target: ByteArray, offset: Int, value: Int) {
