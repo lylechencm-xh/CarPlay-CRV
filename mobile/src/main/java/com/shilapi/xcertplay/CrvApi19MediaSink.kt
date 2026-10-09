@@ -244,12 +244,12 @@ class CrvApi19MediaSink(
                 data.size <= VIDEO_QUEUE_MAX_BYTES &&
                 pendingBytes + data.size <= VIDEO_QUEUE_MAX_BYTES
             ) {
-                val frame = Job.Frame(data.copyOf())
+                val frame = Job.Frame(data)
                 if (queue.offerLast(frame)) return
                 recoverQueue(frame, "video queue frame limit")
                 return
             }
-            val frame = if (data.size <= VIDEO_QUEUE_MAX_BYTES) Job.Frame(data.copyOf()) else null
+            val frame = if (data.size <= VIDEO_QUEUE_MAX_BYTES) Job.Frame(data) else null
             recoverQueue(frame, "video queue byte limit")
         }
 
@@ -475,9 +475,10 @@ class CrvApi19MediaSink(
 
         fun submit(rtp: ByteArray, sample: Int) {
             if (!running.get()) return
-            if (!queue.offerLast(Packet(rtp.copyOf(), sample))) {
+            val packet = Packet(rtp, sample)
+            if (!queue.offerLast(packet)) {
                 queue.pollFirst()
-                queue.offerLast(Packet(rtp.copyOf(), sample))
+                queue.offerLast(packet)
             }
         }
 
@@ -530,30 +531,61 @@ class CrvApi19MediaSink(
                 return
             }
 
-            val bufferBytes = maxOf(
-                minimum * 2,
-                format.sampleRate * format.channels * 2 / 5,
-            )
-            @Suppress("DEPRECATION")
-            val audio = AudioTrack(
-                AudioManager.STREAM_MUSIC,
-                format.sampleRate,
-                channelMask,
-                encoding,
-                bufferBytes,
-                AudioTrack.MODE_STREAM,
-            )
-            if (audio.state != AudioTrack.STATE_INITIALIZED) {
-                audio.release()
+            val frameBytes = format.channels.coerceAtLeast(1) * 2
+            val bytesPerSecond = format.sampleRate * frameBytes
+            val isMedia = format.audioType == "media"
+            val primeMillis = if (isMedia) MEDIA_AUDIO_PRIME_MILLIS else LOW_LATENCY_AUDIO_PRIME_MILLIS
+            val preferredBufferBytes = if (isMedia) {
+                maxOf(
+                    minimum * 4,
+                    MIN_AUDIO_TRACK_BUFFER_BYTES,
+                    bytesPerSecond * (MEDIA_AUDIO_PRIME_MILLIS + MEDIA_AUDIO_HEADROOM_MILLIS) / 1000,
+                )
+            } else {
+                maxOf(minimum * 4, MIN_AUDIO_TRACK_BUFFER_BYTES)
+            }
+            val fallbackBufferBytes = maxOf(minimum * 4, MIN_AUDIO_TRACK_BUFFER_BYTES)
+
+            fun buildTrack(bufferBytes: Int): AudioTrack? {
+                val candidate = runCatching {
+                    @Suppress("DEPRECATION")
+                    AudioTrack(
+                        AudioManager.STREAM_MUSIC,
+                        format.sampleRate,
+                        channelMask,
+                        encoding,
+                        bufferBytes,
+                        AudioTrack.MODE_STREAM,
+                    )
+                }.getOrNull() ?: return null
+                if (candidate.state == AudioTrack.STATE_INITIALIZED) return candidate
+                candidate.release()
+                return null
+            }
+
+            var selectedBufferBytes = preferredBufferBytes
+            var audio = buildTrack(preferredBufferBytes)
+            if (audio == null && preferredBufferBytes != fallbackBufferBytes) {
+                report(
+                    "AudioTrack media buffer rejected bytes=$preferredBufferBytes; " +
+                        "retrying bytes=$fallbackBufferBytes",
+                )
+                selectedBufferBytes = fallbackBufferBytes
+                audio = buildTrack(fallbackBufferBytes)
+            }
+            if (audio == null) {
                 report("AudioTrack failed to initialize")
                 return
             }
             track = audio
-            primeTargetBytes = minOf(
-                bufferBytes / 2,
-                format.sampleRate * format.channels * 2 * AUDIO_PRIME_MILLIS / 1000,
-            ).coerceAtLeast(format.channels * 2)
-            report("Audio API17 ready: ${format.codec} ${format.sampleRate}Hz")
+            val plannedPrimeBytes = bytesPerSecond * primeMillis / 1000
+            val safePrimeLimit = (selectedBufferBytes * 3 / 4).coerceAtLeast(frameBytes)
+            primeTargetBytes = minOf(plannedPrimeBytes, safePrimeLimit).coerceAtLeast(frameBytes)
+            report(
+                "Audio API17 ready: ${format.codec} ${format.sampleRate}Hz " +
+                    "audioType=${format.audioType} bufferBytes=$selectedBufferBytes " +
+                    "primeMs=$primeMillis primeBytes=$primeTargetBytes",
+            )
         }
 
         private fun configureDecoder() {
@@ -768,7 +800,10 @@ class CrvApi19MediaSink(
         const val VIDEO_QUEUE_CAPACITY = 8
         const val VIDEO_QUEUE_MAX_BYTES = 8 * 1024 * 1024
         const val AUDIO_QUEUE_CAPACITY = 96
-        const val AUDIO_PRIME_MILLIS = 30
+        const val LOW_LATENCY_AUDIO_PRIME_MILLIS = 30
+        const val MEDIA_AUDIO_PRIME_MILLIS = 300
+        const val MEDIA_AUDIO_HEADROOM_MILLIS = 200
+        const val MIN_AUDIO_TRACK_BUFFER_BYTES = 16 * 1024
         const val MAX_VIDEO_INPUT = 8 * 1024 * 1024
         const val VIDEO_INPUT_TIMEOUT_US = 2_000L
         const val AUDIO_INPUT_TIMEOUT_US = 10_000L
