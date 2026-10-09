@@ -67,6 +67,7 @@ class NcmUsbBridge internal constructor(
     private var queuedBytes = 0
     private val wireDecoder = Ntb16WireDecoder()
     private val readBuffer = ByteArray(READ_CHUNK_BYTES)
+    private val writeBuffer = ByteArray(NcmLegacyUsbBulk.MAX_TRANSACTION_BYTES)
     private val statusRunning = AtomicBoolean(statusEndpoint != null)
     private val statusThread = statusEndpoint?.let { endpoint ->
         Thread({ drainStatus(endpoint) }, "ncm-status-in").apply {
@@ -83,19 +84,12 @@ class NcmUsbBridge internal constructor(
             checkOpenLocked()
             this.sequence.also { this.sequence = (this.sequence + 1) and 0xffff }
         }
-        val block = Ntb16Codec.build(frame, sequence)
-        // Android API17's four-argument bulkTransfer caps one transaction at 16 KiB.
-        // Keep each intermediate transfer packet-aligned and use the API12 overload.
-        var sent = 0
-        while (sent < block.size) {
-            val chunkSize = NcmLegacyUsbBulk.chunkSize(block.size - sent)
-            val chunk = if (sent == 0 && chunkSize == block.size) {
-                block
-            } else {
-                block.copyOfRange(sent, sent + chunkSize)
-            }
+
+        val encodedLength = Ntb16Codec.encodedLength(frame.size)
+        if (encodedLength <= writeBuffer.size) {
+            val transferLength = Ntb16Codec.buildInto(frame, sequence, writeBuffer)
             val transferred = try {
-                connection.bulkTransfer(outEndpoint, chunk, chunk.size, timeoutMillis)
+                connection.bulkTransfer(outEndpoint, writeBuffer, transferLength, timeoutMillis)
             } catch (error: RuntimeException) {
                 throw failSession("NCM write failed", error)
             }
@@ -104,24 +98,58 @@ class NcmUsbBridge internal constructor(
                 if (presenceGuard.disconnectedAfterFailures(consecutiveWriteFailures)) {
                     throw failSession("iPhone USB detached during NCM write")
                 }
-                // Before StartCarPlaySession the iPhone can NAK bulk OUT indefinitely.
-                // Retry only if no part of this NTB has already reached the device.
-                if (sent != 0) {
-                    throw failSession("Partial NCM NTB write interrupted after " + sent + " bytes")
-                }
                 if (!loggedWriteTimeout) {
                     loggedWriteTimeout = true
                     Log.i(IphoneCarPlayConfiguration.TAG, "ncm bulk-out not ready; retaining bridge for retry")
                 }
                 return@synchronized NcmWriteResult.NOT_READY
             }
-            if (transferred != chunkSize) {
+            if (transferred != transferLength) {
                 throw failSession(
-                    "Partial NCM NTB write: " + transferred + " of " + chunkSize + " bytes",
+                    "Partial NCM NTB write: " + transferred + " of " + transferLength + " bytes",
                 )
             }
-            sent += transferred
+        } else {
+            val block = Ntb16Codec.build(frame, sequence)
+            // Android API17's four-argument bulkTransfer caps one transaction at 16 KiB.
+            // Keep each intermediate transfer packet-aligned and use the API12 overload.
+            var sent = 0
+            while (sent < block.size) {
+                val chunkSize = NcmLegacyUsbBulk.chunkSize(block.size - sent)
+                val chunk = if (sent == 0 && chunkSize == block.size) {
+                    block
+                } else {
+                    block.copyOfRange(sent, sent + chunkSize)
+                }
+                val transferred = try {
+                    connection.bulkTransfer(outEndpoint, chunk, chunk.size, timeoutMillis)
+                } catch (error: RuntimeException) {
+                    throw failSession("NCM write failed", error)
+                }
+                if (transferred <= 0) {
+                    consecutiveWriteFailures++
+                    if (presenceGuard.disconnectedAfterFailures(consecutiveWriteFailures)) {
+                        throw failSession("iPhone USB detached during NCM write")
+                    }
+                    // Retry only if no part of this NTB has already reached the device.
+                    if (sent != 0) {
+                        throw failSession("Partial NCM NTB write interrupted after " + sent + " bytes")
+                    }
+                    if (!loggedWriteTimeout) {
+                        loggedWriteTimeout = true
+                        Log.i(IphoneCarPlayConfiguration.TAG, "ncm bulk-out not ready; retaining bridge for retry")
+                    }
+                    return@synchronized NcmWriteResult.NOT_READY
+                }
+                if (transferred != chunkSize) {
+                    throw failSession(
+                        "Partial NCM NTB write: " + transferred + " of " + chunkSize + " bytes",
+                    )
+                }
+                sent += transferred
+            }
         }
+
         consecutiveWriteFailures = 0
         presenceGuard.reset()
         if (loggedWriteTimeout) {
