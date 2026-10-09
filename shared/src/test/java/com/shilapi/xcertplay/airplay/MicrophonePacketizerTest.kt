@@ -51,6 +51,43 @@ class MicrophonePacketizerTest {
     }
 
     @Test
+    fun inPlacePcmConversionMatchesCopyingConverter() {
+        val source = byteArrayOf(0x34, 0x12, 0x78, 0x56)
+        val expected = MicrophonePacketizer.toWirePcm(source)
+        val actual = source.copyOf()
+
+        MicrophonePacketizer.toWirePcmInPlace(actual)
+
+        assertArrayEquals(expected, actual)
+    }
+
+    @Test
+    fun reusableSealerMatchesLegacyPacketBytesAndCounters() {
+        val key = ByteArray(32) { (it + 1).toByte() }
+        val body = byteArrayOf(0x12, 0x34, 0x56, 0x78)
+        val legacyCounters = MicrophoneCounters(sequence = 7, timestamp = 1234, nonce = 9L)
+        val reusableCounters = MicrophoneCounters(sequence = 7, timestamp = 1234, nonce = 9L)
+
+        val expected = MicrophonePacketizer.sealPacket(
+            key = key,
+            payloadType = 100,
+            counters = legacyCounters,
+            body = body,
+            samples = 480,
+        )
+        val actual = MicrophonePacketizer.ReusableSealer(key, 100).seal(
+            counters = reusableCounters,
+            body = body,
+            samples = 480,
+        )
+
+        assertArrayEquals(expected, actual)
+        assertEquals(legacyCounters.sequence, reusableCounters.sequence)
+        assertEquals(legacyCounters.timestamp, reusableCounters.timestamp)
+        assertEquals(legacyCounters.nonce, reusableCounters.nonce)
+    }
+
+    @Test
     fun opusTimestampsCountInTheClockTheIphoneChose() {
         // Siri asks for Opus 24 kHz (0x20000000) and calls for Opus 48 kHz (0x40000000); DiPlay still
         // captures 20 ms at 48 kHz, but each packet moves the RTP clock by 20 ms of the chosen rate.
