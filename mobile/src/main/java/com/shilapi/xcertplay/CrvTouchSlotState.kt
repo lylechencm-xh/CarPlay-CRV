@@ -49,6 +49,10 @@ internal class CrvTouchSlotState {
         return slot
     }
 
+    fun cancelAll() {
+        for (slot in 0 until SLOT_COUNT) downs[slot] = false
+    }
+
     /** Call only after the up-state for [pointerId] has been transmitted. */
     fun release(pointerId: Int) {
         val slot = slotOf(pointerId)
