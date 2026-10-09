@@ -246,8 +246,6 @@ internal class AirPlayChaChaSealer(key: ByteArray) {
         require(firstOffset >= 0 && firstLength >= 0 && firstOffset + firstLength <= first.size)
         require(secondOffset >= 0 && secondLength >= 0 && secondOffset + secondLength <= second.size)
         require(targetOffset >= 0 && targetOffset <= target.size)
-        cipher.init(false, AEADParameters(keyParameter, MAC_BITS, nonce, aad))
-        cipher.reset()
         cipher.init(true, AEADParameters(keyParameter, MAC_BITS, nonce, aad))
         val required = cipher.getOutputSize(firstLength + secondLength)
         require(target.size - targetOffset >= required) { "target is too small for sealed output" }
