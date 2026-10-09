@@ -283,8 +283,10 @@ class CrvWiredCarPlayController(
                 reportKernelNcmReady(network)
             }
         }
+        var kernelBringUp: CrvUsbKernelProbe.KernelBringUpResult? = null
         if (mode == CrvConnectionMode.WIRED && kernelNcm == null && expectedKernelNcm != null) {
             val bringUp = CrvUsbKernelProbe.tryBringUpKernelNcm(expectedKernelNcm)
+            kernelBringUp = bringUp
             report(
                 "Honda kernel CDC-NCM bring-up interface=${bringUp.interfaceName ?: "none"} " +
                     "attempted=${bringUp.attempted} result=${bringUp.resultCode ?: -1}" +
@@ -309,14 +311,26 @@ class CrvWiredCarPlayController(
                     "Kernel USB configuration does not match active iPhone CarPlay configuration",
                 )
             }
-            // A bound cdc_ncm driver is not enough on this Honda build: Android leaves the
-            // corresponding netdev down with no link-local address. That is a kernel-backend
-            // readiness issue, not a failure of the CarPlay NCM function itself. Continue with
-            // the userspace bridge, which owns the USB interfaces directly.
-            report("Honda kernel CDC-NCM not network-ready; userspace NCM fallback active")
-            openNcm(device).also {
-                resources.ncm = it
-                report("CDC-NCM ready backend=userspace experimental")
+            val fallbackReason = if (kernelBringUp?.interfaceName != null) {
+                "kernel-driver-bound-netdev-not-ready"
+            } else {
+                "matching-kernel-driver-not-found"
+            }
+            report(
+                "Honda kernel CDC-NCM fallback reason=$fallbackReason " +
+                    "kernelDriverDetachAllowed=false",
+            )
+            try {
+                openNcm(device, forceClaim = false).also {
+                    resources.ncm = it
+                    report("CDC-NCM ready backend=userspace experimental safeClaim=true")
+                }
+            } catch (error: IphoneUsbException.InterfaceBusy) {
+                report(
+                    "Honda CDC-NCM fallback blocked classification=usb-interface-resource-conflict " +
+                        "kernelDriverDetachAllowed=false detail=${error.message}",
+                )
+                throw error
             }
         } else {
             null
@@ -777,7 +791,7 @@ class CrvWiredCarPlayController(
         return bus to dev
     }
 
-    private fun openNcm(device: UsbDevice): NcmUsbBridge {
+    private fun openNcm(device: UsbDevice, forceClaim: Boolean = true): NcmUsbBridge {
         report(
             "USB layout " +
                 (0 until device.interfaceCount).joinToString(" ") { index ->
@@ -826,7 +840,7 @@ class CrvWiredCarPlayController(
                 "in=0x${function.bulkIn.address.toString(16)} " +
                 "out=0x${function.bulkOut.address.toString(16)}",
         )
-        return NcmUsbBridge.open(connection, function)
+        return NcmUsbBridge.open(connection, function, forceClaim)
     }
 
     private fun loadMfi(): MfiAuthenticator {

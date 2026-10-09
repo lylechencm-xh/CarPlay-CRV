@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.network
 
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
@@ -18,6 +19,7 @@ import java.net.ServerSocket
 import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -64,6 +66,30 @@ class CarPlayVpnScopeTest {
         withService { service ->
             assertEquals(CarPlayVpnService.AttachResult.Failed("consent revoked"), attachWired(service))
             assertEquals(listOf("allow:${service.packageName}", "establish"), VpnScopeBoundary.calls)
+            assertReleased(service)
+        }
+    }
+
+    @Test fun systemVpnBindingUsesPlatformBinderAndInternalBindingUsesLocalBinder() {
+        withService { service ->
+            val systemBinder = service.onBind(Intent(VpnService.SERVICE_INTERFACE))
+            val localBinder = service.onBind(Intent())
+
+            assertNotNull(systemBinder)
+            assertFalse(systemBinder is CarPlayVpnService.LocalBinder)
+            assertTrue(localBinder is CarPlayVpnService.LocalBinder)
+            assertNull(service.onBind(Intent("unexpected.action")))
+        }
+    }
+
+    @Test fun systemRevocationReleasesActiveTransportResources() {
+        withService { service ->
+            assertEquals(CarPlayVpnService.AttachResult.Started, attachWireless(service))
+            val server = ReflectionHelpers.getField<ServerSocket>(service, "serverSocket")
+
+            service.onRevoke()
+
+            assertTrue(server.isClosed)
             assertReleased(service)
         }
     }

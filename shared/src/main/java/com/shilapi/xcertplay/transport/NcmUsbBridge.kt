@@ -250,7 +250,11 @@ class NcmUsbBridge internal constructor(
         private const val NANOS_PER_MILLISECOND = 1_000_000L
 
         /** Claims and activates the NCM control/data interfaces; owns the connection on success. */
-        fun open(connection: UsbDeviceConnection, function: NcmFunctionDiscovery.NcmFunction): NcmUsbBridge {
+        fun open(
+            connection: UsbDeviceConnection,
+            function: NcmFunctionDiscovery.NcmFunction,
+            forceClaim: Boolean = true,
+        ): NcmUsbBridge {
             val claimed = ArrayList<UsbInterface>(2)
             try {
                 val descriptorHostMac = readNcmHostMac(connection, function)
@@ -262,29 +266,33 @@ class NcmUsbBridge internal constructor(
                 // same interface id, so it must be claimed once and switched with setInterface.
                 val sameInterface = function.control.id == function.data.id
                 val first = if (sameInterface) function.data else function.control
-                val firstClaimed = connection.claimInterface(first, true)
+                val firstClaimed = connection.claimInterface(first, forceClaim)
                 Log.i(
                     IphoneCarPlayConfiguration.TAG,
                     "claim iface=${first.id} class=${first.interfaceClass}" +
-                        " subclass=${first.interfaceSubclass} proto=${first.interfaceProtocol} ok=$firstClaimed",
+                        " subclass=${first.interfaceSubclass} proto=${first.interfaceProtocol}" +
+                        " force=$forceClaim ok=$firstClaimed",
                 )
                 if (!firstClaimed) {
-                    throw IphoneUsbException.DeviceUnavailable(
-                        "Android could not claim the NCM interface ${first.id}",
+                    throw IphoneUsbException.InterfaceBusy(
+                        "Android could not claim NCM interface ${first.id}; " +
+                            "kernelDriverDetachAllowed=$forceClaim",
                     )
                 }
                 claimed.add(first)
                 if (!sameInterface) {
-                    val dataClaimed = connection.claimInterface(function.data, true)
+                    val dataClaimed = connection.claimInterface(function.data, forceClaim)
                     Log.i(
                         IphoneCarPlayConfiguration.TAG,
                         "claim iface=${function.data.id}" +
-                            " class=${function.data.interfaceClass} ok=$dataClaimed",
+                            " class=${function.data.interfaceClass}" +
+                            " force=$forceClaim ok=$dataClaimed",
                     )
                     if (!dataClaimed) {
-                        throw IphoneUsbException.DeviceUnavailable(
+                        throw IphoneUsbException.InterfaceBusy(
                             "Android could not claim NCM data interface ${function.data.id} " +
-                                "in USB configuration ${function.configurationValue ?: -1}",
+                                "in USB configuration ${function.configurationValue ?: -1}; " +
+                                "kernelDriverDetachAllowed=$forceClaim",
                         )
                     }
                     claimed.add(function.data)

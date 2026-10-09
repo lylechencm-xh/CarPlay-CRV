@@ -68,7 +68,16 @@ class CarPlayVpnService : VpnService() {
     private var tun: ParcelFileDescriptor? = null
     private var attachGeneration = 0
 
-    override fun onBind(intent: Intent?): IBinder = binder
+    override fun onBind(intent: Intent?): IBinder? = when (intent?.action) {
+        SERVICE_INTERFACE -> super.onBind(intent)
+        null -> binder
+        else -> null
+    }
+
+    override fun onRevoke() {
+        detach()
+        super.onRevoke()
+    }
 
     @Synchronized
     fun attach(
