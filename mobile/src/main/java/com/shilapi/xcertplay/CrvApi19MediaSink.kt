@@ -776,16 +776,25 @@ class CrvApi19MediaSink(
                         index == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> Unit
                         index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> Unit
                         index >= 0 -> {
-                            if (outputInfo.size > 0) {
-                                @Suppress("DEPRECATION")
-                                val output = codec.outputBuffers[index]
-                                if (pcmScratch.size < outputInfo.size) pcmScratch = ByteArray(outputInfo.size)
-                                output.position(outputInfo.offset)
-                                output.limit(outputInfo.offset + outputInfo.size)
-                                output.get(pcmScratch, 0, outputInfo.size)
-                                writePcm(pcmScratch, outputInfo.size)
+                            var copiedBytes = 0
+                            try {
+                                if (outputInfo.size > 0) {
+                                    @Suppress("DEPRECATION")
+                                    val output = codec.outputBuffers[index]
+                                    if (pcmScratch.size < outputInfo.size) {
+                                        pcmScratch = ByteArray(outputInfo.size)
+                                    }
+                                    output.position(outputInfo.offset)
+                                    output.limit(outputInfo.offset + outputInfo.size)
+                                    output.get(pcmScratch, 0, outputInfo.size)
+                                    copiedBytes = outputInfo.size
+                                }
+                            } finally {
+                                // AudioTrack.write() may block on this old audio HAL. Release the
+                                // codec output slot first so decoder output cannot backpressure input.
+                                codec.releaseOutputBuffer(index, false)
                             }
-                            codec.releaseOutputBuffer(index, false)
+                            if (copiedBytes > 0) writePcm(pcmScratch, copiedBytes)
                         }
                         else -> return
                     }
