@@ -326,12 +326,13 @@ class CrvApi19MediaSink(
             val annexB = MediaCodecSupport.toAnnexB(packet)
             if (annexB.isEmpty()) return
 
-            val randomAccess = MediaCodecSupport.isRandomAccess(annexB, lastCodec)
-            if (waitingForKeyFrame && !randomAccess) {
-                requestKeyFrameIfDue()
-                return
+            if (waitingForKeyFrame) {
+                if (!MediaCodecSupport.isRandomAccess(annexB, lastCodec)) {
+                    requestKeyFrameIfDue()
+                    return
+                }
+                waitingForKeyFrame = false
             }
-            if (randomAccess) waitingForKeyFrame = false
 
             try {
                 val index = codec.dequeueInputBuffer(VIDEO_INPUT_TIMEOUT_US)
@@ -751,7 +752,7 @@ class CrvApi19MediaSink(
         const val AUDIO_QUEUE_CAPACITY = 96
         const val AUDIO_PRIME_MILLIS = 30
         const val MAX_VIDEO_INPUT = 8 * 1024 * 1024
-        const val VIDEO_INPUT_TIMEOUT_US = 10_000L
+        const val VIDEO_INPUT_TIMEOUT_US = 2_000L
         const val AUDIO_INPUT_TIMEOUT_US = 10_000L
         const val AAC_LC_OBJECT_TYPE = 2
         const val KEYFRAME_INTERVAL_NS = 1_000_000_000L
