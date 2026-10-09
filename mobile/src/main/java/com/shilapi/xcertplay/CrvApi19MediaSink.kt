@@ -18,7 +18,7 @@ import com.shilapi.xcertplay.media.MediaCodecSupport
 import java.io.Closeable
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -217,7 +217,7 @@ class CrvApi19MediaSink(
             data class Recover(val reason: String) : Job()
         }
 
-        private val queue = LinkedBlockingQueue<Job>(VIDEO_QUEUE_CAPACITY)
+        private val queue = LinkedBlockingDeque<Job>(VIDEO_QUEUE_CAPACITY)
         private val running = AtomicBoolean(true)
         private val thread = Thread(::run, "crv-api19-video").apply {
             isDaemon = true
@@ -225,6 +225,7 @@ class CrvApi19MediaSink(
         }
 
         private var decoder: MediaCodec? = null
+        private val outputInfo = MediaCodec.BufferInfo()
         private var lastCodec = VideoCodec.H264
         private var lastConfig: ByteArray? = null
         private var waitingForKeyFrame = true
@@ -236,11 +237,13 @@ class CrvApi19MediaSink(
         }
 
         fun submit(data: ByteArray) {
-            if (queue.offer(Job.Frame(data.copyOf()))) return
+            if (queue.offerLast(Job.Frame(data.copyOf()))) return
+            val pendingConfig = queue.asSequence()
+                .filterIsInstance<Job.Config>()
+                .lastOrNull()
             queue.clear()
-            waitingForKeyFrame = true
-            queue.offer(Job.Recover("video queue overflow"))
-            requestKeyFrameIfDue()
+            pendingConfig?.let { queue.offerLast(it) }
+            queue.offerLast(Job.Recover("video queue overflow"))
         }
 
         override fun close() {
@@ -260,7 +263,7 @@ class CrvApi19MediaSink(
                 // Best-effort: OEM firmware can reject priority changes; decoding must continue.
                 runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY) }
                 while (running.get()) {
-                    when (val job = queue.poll(20, TimeUnit.MILLISECONDS)) {
+                    when (val job = queue.pollFirst(20, TimeUnit.MILLISECONDS)) {
                         is Job.Config -> configureNow(job.codec, job.data)
                         is Job.Frame -> feed(job.data)
                         is Job.Recover -> recover(job.reason, preferFlush = true)
@@ -332,7 +335,13 @@ class CrvApi19MediaSink(
 
             try {
                 val index = codec.dequeueInputBuffer(VIDEO_INPUT_TIMEOUT_US)
-                if (index < 0) return
+                if (index < 0) {
+                    if (!queue.offerFirst(Job.Frame(packet))) {
+                        queue.clear()
+                        queue.offerFirst(Job.Recover("video decoder input backpressure"))
+                    }
+                    return
+                }
                 @Suppress("DEPRECATION")
                 val input = codec.inputBuffers[index]
                 input.clear()
@@ -356,10 +365,9 @@ class CrvApi19MediaSink(
 
         private fun drain() {
             val codec = decoder ?: return
-            val info = MediaCodec.BufferInfo()
             try {
                 while (running.get()) {
-                    val index = codec.dequeueOutputBuffer(info, 0L)
+                    val index = codec.dequeueOutputBuffer(outputInfo, 0L)
                     when {
                         index == MediaCodec.INFO_TRY_AGAIN_LATER -> return
                         index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> Unit
@@ -424,7 +432,7 @@ class CrvApi19MediaSink(
     ) : Closeable {
         private data class Packet(val rtp: ByteArray, val sample: Int)
 
-        private val queue = LinkedBlockingQueue<Packet>(AUDIO_QUEUE_CAPACITY)
+        private val queue = LinkedBlockingDeque<Packet>(AUDIO_QUEUE_CAPACITY)
         private val running = AtomicBoolean(true)
         private val thread = Thread(::run, "crv-api19-audio").apply {
             isDaemon = true
@@ -432,6 +440,7 @@ class CrvApi19MediaSink(
 
         private var started = false
         private var decoder: MediaCodec? = null
+        private val outputInfo = MediaCodec.BufferInfo()
         private var softwareOpus: CrvSoftwareOpusDecoder? = null
         private var rejectedOpusPackets = 0
         private var track: AudioTrack? = null
@@ -447,9 +456,9 @@ class CrvApi19MediaSink(
 
         fun submit(rtp: ByteArray, sample: Int) {
             if (!running.get()) return
-            if (!queue.offer(Packet(rtp.copyOf(), sample))) {
-                queue.poll()
-                queue.offer(Packet(rtp.copyOf(), sample))
+            if (!queue.offerLast(Packet(rtp.copyOf(), sample))) {
+                queue.pollFirst()
+                queue.offerLast(Packet(rtp.copyOf(), sample))
             }
         }
 
@@ -473,7 +482,7 @@ class CrvApi19MediaSink(
                 // Prime MODE_STREAM before play(); starting an empty track produces an
                 // immediate underrun on this older audio stack.
                 while (running.get()) {
-                    queue.poll(20, TimeUnit.MILLISECONDS)?.let(::handle)
+                    queue.pollFirst(20, TimeUnit.MILLISECONDS)?.let(::handle)
                     drainDecoder()
                 }
             } catch (_: InterruptedException) {
@@ -657,21 +666,20 @@ class CrvApi19MediaSink(
 
         private fun drainDecoder() {
             val codec = decoder ?: return
-            val info = MediaCodec.BufferInfo()
             try {
                 while (running.get()) {
-                    val index = codec.dequeueOutputBuffer(info, 0L)
+                    val index = codec.dequeueOutputBuffer(outputInfo, 0L)
                     when {
                         index == MediaCodec.INFO_TRY_AGAIN_LATER -> return
                         index == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> Unit
                         index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> Unit
                         index >= 0 -> {
-                            if (info.size > 0) {
+                            if (outputInfo.size > 0) {
                                 @Suppress("DEPRECATION")
                                 val output = codec.outputBuffers[index]
-                                val pcm = ByteArray(info.size)
-                                output.position(info.offset)
-                                output.limit(info.offset + info.size)
+                                val pcm = ByteArray(outputInfo.size)
+                                output.position(outputInfo.offset)
+                                output.limit(outputInfo.offset + outputInfo.size)
                                 output.get(pcm)
                                 writePcm(pcm)
                             }
