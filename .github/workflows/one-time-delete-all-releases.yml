@@ -1,0 +1,34 @@
+name: One-time release cleanup
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/one-time-delete-all-releases.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  delete-releases:
+    if: contains(toJSON(github.event.head_commit.added), '.github/workflows/one-time-delete-all-releases.yml')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Delete all releases while preserving Git tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GH_REPO" = "lylechencm-xh/CarPlay-CRV"
+          mapfile -t ids < <(gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[].id')
+          echo "Releases found: ${#ids[@]}"
+          for id in "${ids[@]}"; do
+            gh api -X DELETE "repos/$GH_REPO/releases/$id"
+            echo "Deleted Release ID: $id"
+          done
+          remaining=$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[].id' | wc -l)
+          echo "Remaining releases: $remaining"
+          test "$remaining" -eq 0
