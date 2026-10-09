@@ -131,11 +131,29 @@ object MicrophonePacketizer {
         private val aad = ByteArray(RTP_HEADER_LEN - 4)
         private val empty = ByteArray(0)
 
+        fun packetBytes(bodyBytes: Int): Int {
+            require(bodyBytes >= 0)
+            return RTP_HEADER_LEN + bodyBytes + TAG_LEN + NONCE_LEN
+        }
+
         fun seal(
             counters: MicrophoneCounters,
             body: ByteArray,
             samples: Int,
-        ): ByteArray {
+        ): ByteArray =
+            ByteArray(packetBytes(body.size)).also { packet ->
+                sealInto(counters, body, samples, packet)
+            }
+
+        fun sealInto(
+            counters: MicrophoneCounters,
+            body: ByteArray,
+            samples: Int,
+            packet: ByteArray,
+        ): Int {
+            val required = packetBytes(body.size)
+            require(packet.size >= required) { "microphone packet target is too small" }
+
             header[0] = 0x80.toByte()
             header[1] = (payloadType and 0x7f).toByte()
             putU16Be(header, 2, counters.sequence)
@@ -143,7 +161,6 @@ object MicrophonePacketizer {
             header.copyInto(aad, 0, 4, RTP_HEADER_LEN)
             AirPlayCrypto.nonce64(counters.nonce, nonce)
 
-            val packet = ByteArray(RTP_HEADER_LEN + body.size + TAG_LEN + NONCE_LEN)
             header.copyInto(packet, 0)
             val sealedBytes = sealer.sealInto(
                 nonce = nonce,
@@ -161,7 +178,7 @@ object MicrophonePacketizer {
             counters.sequence = (counters.sequence + 1) and 0xffff
             counters.timestamp += samples
             counters.nonce++
-            return packet
+            return required
         }
     }
 
