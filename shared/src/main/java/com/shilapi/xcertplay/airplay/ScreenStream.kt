@@ -80,14 +80,18 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         try {
             val input = sock.getInputStream()
             val header = ByteArray(HEADER_LEN)
+            var bodyBuffer = ByteArray(INITIAL_BODY_BUFFER_BYTES)
             while (!closed.get()) {
                 stats.reading()
                 if (!readFully(input, header)) break
                 val bodySize = readU32Le(header, 0)
-                if (bodySize > MAX_BODY) break
-                val body = readFully(input, bodySize) ?: break
+                if (bodySize < 0 || bodySize > MAX_BODY) break
+                if (bodySize > bodyBuffer.size) {
+                    bodyBuffer = ByteArray(growBodyBuffer(bodySize))
+                }
+                if (!readFully(input, bodyBuffer, bodySize)) break
                 stats.received(HEADER_LEN + bodySize)
-                onMessage(header, body)
+                onMessage(header, bodyBuffer, bodySize)
                 stats.processed()
             }
         } catch (error: Exception) {
@@ -100,27 +104,34 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         }
     }
 
-    private fun onMessage(header: ByteArray, body: ByteArray) {
+    private fun onMessage(header: ByteArray, body: ByteArray, bodySize: Int) {
         when (header[OPCODE_OFFSET].toInt() and 0xff) {
             OP_VIDEO_FRAME -> {
-                val payload = if (body.size >= ScreenCodec.TAG_SIZE) {
-                    ScreenCodec.decryptFrame(key, frameCounter.get(), header, body)
-                        .also { frameCounter.incrementAndGet() }
+                val payload = if (bodySize >= ScreenCodec.TAG_SIZE) {
+                    AirPlayCrypto.chachaOpen(
+                        key = key,
+                        nonce = AirPlayCrypto.nonce64(frameCounter.get()),
+                        source = body,
+                        offset = 0,
+                        length = bodySize,
+                        aad = header,
+                    ).also { frameCounter.incrementAndGet() }
                 } else {
-                    body
+                    body.copyOf(bodySize)
                 }
                 if (firstFrameLogged.compareAndSet(false, true)) {
                     Log.i(
                         TAG,
-                        "video first decrypted frame sealed=${body.size} plain=${payload.size} " +
-                        "head=${payload.hexPrefix(16)}",
+                        "video first decrypted frame sealed=$bodySize plain=${payload.size} " +
+                            "head=${payload.hexPrefix(16)}",
                     )
                 }
                 listener.onFrame(ScreenCodec.lengthPrefixedToAnnexB(payload))
             }
             OP_VIDEO_CONFIG -> {
-                val (codec, codecData) = ScreenCodec.detectConfig(body)
-                Log.i(TAG, "video codec config codec=$codec body=${body.size} data=${codecData.size}")
+                val configBody = body.copyOf(bodySize)
+                val (codec, codecData) = ScreenCodec.detectConfig(configBody)
+                Log.i(TAG, "video codec config codec=$codec body=$bodySize data=${codecData.size}")
                 listener.onCodec(codec)
                 listener.onConfig(codecData)
             }
@@ -135,15 +146,27 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         try { value?.close() } catch (_: Exception) { }
     }
 
-    private fun readFully(input: InputStream, output: ByteArray): Boolean {
+    private fun readFully(input: InputStream, output: ByteArray): Boolean =
+        readFully(input, output, output.size)
+
+    private fun readFully(input: InputStream, output: ByteArray, length: Int): Boolean {
+        if (length < 0 || length > output.size) return false
         var offset = 0
-        while (offset < output.size) {
-            val read = input.read(output, offset, output.size - offset)
+        while (offset < length) {
+            val read = input.read(output, offset, length - offset)
             if (read < 0) return false
             if (read == 0) continue
             offset += read
         }
         return true
+    }
+
+    private fun growBodyBuffer(required: Int): Int {
+        var size = INITIAL_BODY_BUFFER_BYTES
+        while (size < required && size < MAX_BODY) {
+            size = minOf(MAX_BODY, size * 2)
+        }
+        return maxOf(required, size)
     }
 
     private fun readFully(input: InputStream, length: Int): ByteArray? {
@@ -164,6 +187,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         const val OPCODE_OFFSET = 4
         const val OP_VIDEO_FRAME = 0
         const val OP_VIDEO_CONFIG = 1
+        const val INITIAL_BODY_BUFFER_BYTES = 256 * 1024
         const val MAX_BODY = 8 * 1024 * 1024
         const val VIDEO_RECEIVE_BUFFER_BYTES = 512 * 1024
     }
