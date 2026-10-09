@@ -218,16 +218,44 @@ internal class AirPlayChaChaSealer(key: ByteArray) {
         second: ByteArray,
         target: ByteArray,
         targetOffset: Int,
+    ): Int = sealInto(
+        nonce = nonce,
+        aad = aad,
+        first = first,
+        firstOffset = 0,
+        firstLength = first.size,
+        second = second,
+        secondOffset = 0,
+        secondLength = second.size,
+        target = target,
+        targetOffset = targetOffset,
+    )
+
+    fun sealInto(
+        nonce: ByteArray,
+        aad: ByteArray,
+        first: ByteArray,
+        firstOffset: Int,
+        firstLength: Int,
+        second: ByteArray,
+        secondOffset: Int,
+        secondLength: Int,
+        target: ByteArray,
+        targetOffset: Int,
     ): Int {
+        require(firstOffset >= 0 && firstLength >= 0 && firstOffset + firstLength <= first.size)
+        require(secondOffset >= 0 && secondLength >= 0 && secondOffset + secondLength <= second.size)
         require(targetOffset >= 0 && targetOffset <= target.size)
+        cipher.init(false, AEADParameters(keyParameter, MAC_BITS, nonce, aad))
+        cipher.reset()
         cipher.init(true, AEADParameters(keyParameter, MAC_BITS, nonce, aad))
-        val required = cipher.getOutputSize(first.size + second.size)
+        val required = cipher.getOutputSize(firstLength + secondLength)
         require(target.size - targetOffset >= required) { "target is too small for sealed output" }
-        var written = cipher.processBytes(first, 0, first.size, target, targetOffset)
+        var written = cipher.processBytes(first, firstOffset, firstLength, target, targetOffset)
         written += cipher.processBytes(
             second,
-            0,
-            second.size,
+            secondOffset,
+            secondLength,
             target,
             targetOffset + written,
         )
