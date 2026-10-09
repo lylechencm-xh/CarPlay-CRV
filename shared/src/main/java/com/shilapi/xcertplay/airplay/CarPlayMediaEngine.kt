@@ -117,6 +117,7 @@ class CarPlayMediaEngine(
             }
         }
         val port = screen.listen(
+            session.auxiliaryBindAddress,
             object : ScreenStream.Listener by currentScreenListener(
                 type, sink, isCurrent = { streams[streamKey] === screen },
             ) {
@@ -175,6 +176,7 @@ class CarPlayMediaEngine(
         if (capture != null) audioCaptures[streamKey] = capture
         val audio = AudioStream(key, type, session::logDebug)
         val (dataPort, controlPort) = audio.listen(
+            session.auxiliaryBindAddress,
             object : AudioStream.Listener {
                 override fun onStarted(firstSample: Int) {
                     meta.firstSample = firstSample

@@ -9,6 +9,7 @@ import java.io.Closeable
 import java.math.BigInteger
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -103,6 +104,8 @@ class AirPlaySession(
     val host: String = socket.inetAddress?.hostAddress ?: ""
     val localAddress: InetAddress? = socket.localAddress
     private val peerAddress: InetAddress? = socket.inetAddress
+    internal val auxiliaryBindAddress: InetAddress =
+        airPlayAuxiliaryBindAddress(localAddress, peerAddress)
     internal val remoteAddress: InetAddress?
         get() = (socket.remoteSocketAddress as? InetSocketAddress)?.address
     val controllerId: String? get() = pairVerify.verifiedControllerId
@@ -807,7 +810,7 @@ class AirPlaySession(
     }
 
     private fun openTiming(peerPort: Int): Int {
-        val port = ntp.listen()
+        val port = ntp.listen(auxiliaryBindAddress)
         if (peerPort > 0) peerAddress?.let { ntp.start(it, peerPort) }
         return port
     }
@@ -815,7 +818,7 @@ class AirPlaySession(
     private fun openKeepAlive(): Int {
         val socket = DatagramSocket(null)
         socket.reuseAddress = true
-        socket.bind(InetSocketAddress(InetAddress.getByName("::"), 0))
+        socket.bind(InetSocketAddress(auxiliaryBindAddress, 0))
         keepAliveSocket = socket
         keepAliveThread = Thread({ runKeepAlive(socket) }, "airplay-keepalive").apply {
             isDaemon = true
@@ -836,7 +839,7 @@ class AirPlaySession(
     }
 
     private fun openEvent(): Int {
-        val server = ServerSocket(0, 50, InetAddress.getByName("::"))
+        val server = ServerSocket(0, 50, auxiliaryBindAddress)
         eventServer = server
         spawnEvent("airplay-event-accept") { acceptEvent(server) }
         return server.localPort
@@ -993,6 +996,14 @@ class AirPlaySession(
     }
 }
 
+internal fun airPlayAuxiliaryBindAddress(
+    localAddress: InetAddress?,
+    peerAddress: InetAddress?,
+): InetAddress = localAddress ?: if (peerAddress is Inet4Address) {
+    InetAddress.getByName("0.0.0.0")
+} else {
+    InetAddress.getByName("::")
+}
 /** The features SETUP enables; video in car only when configured and the iPhone [proposed] it. */
 internal fun setupEnabledFeatures(config: AirPlayConfig, proposed: List<*>?): List<String> {
     val features = mutableListOf<String>()

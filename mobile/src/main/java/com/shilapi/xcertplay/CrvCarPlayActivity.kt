@@ -65,6 +65,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private val statusLines = ArrayDeque<String>()
     private var statusSequence = 0
     private var lastStatusMessage: String? = null
+    private var displayedConnectionStage = CrvConnectionStage.IDLE
 
     private val io: ExecutorService = Executors.newSingleThreadExecutor()
     private val diagnosticIo: ExecutorService = Executors.newSingleThreadExecutor()
@@ -614,8 +615,14 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             return
         }
         if (destroyed) return
+        if (isCrvUiDiagnostic(message)) {
+            diagnostics.log(displayedConnectionStage, message)
+            return
+        }
         maybeCaptureRuntimeSnapshot(message)
         val stage = stageFor(message)
+        val displayStage = monotonicConnectionStage(displayedConnectionStage, stage)
+        displayedConnectionStage = displayStage
         val normalized = message.lowercase(java.util.Locale.US)
         if (
             "transport pre-auth verified" in normalized &&
@@ -631,7 +638,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             connectionStatus(message)
             reconnectAttempts = 0
             reconnectGeneration++
-            renderHome(CrvConnectionStage.CARPLAY_ACTIVE, message)
+            displayedConnectionStage = CrvConnectionStage.CARPLAY_ACTIVE
+            renderHome(displayedConnectionStage, message)
             mainHandler.postDelayed(
                 {
                     if (!destroyed && controller != null) showVideo()
@@ -647,7 +655,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             diagnostics.log(stage, message)
             if (shouldReturnHome(message)) showHome()
             connectionStatus(message)
-            renderHome(stage, message)
+            renderHome(displayStage, message)
         }
     }
 
@@ -730,6 +738,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     private fun beginConnectionStatus(message: String) {
+        displayedConnectionStage = CrvConnectionStage.IDLE
         showHome()
         connectionStatus(message)
     }
@@ -743,13 +752,15 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         diagnostics.log(CrvConnectionStage.ERROR, message)
         showHome()
         appendStatusLine("ERROR: $message")
-        renderHome(CrvConnectionStage.ERROR, message)
+        displayedConnectionStage = CrvConnectionStage.ERROR
+        renderHome(displayedConnectionStage, message)
     }
 
     private fun hideConnectionStatus() {
         showHome()
         appendStatusLine("Waiting for iPhone USB")
-        renderHome(CrvConnectionStage.IDLE, "Waiting for iPhone USB")
+        displayedConnectionStage = CrvConnectionStage.IDLE
+        renderHome(displayedConnectionStage, "Waiting for iPhone USB")
     }
 
     private fun appendStatusLine(message: String) {
@@ -778,8 +789,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     private fun isConnectionError(message: String): Boolean {
-        val value = message.lowercase(java.util.Locale.US)
-        return ERROR_STATUS_WORDS.any(value::contains)
+        return isCrvConnectionError(message)
     }
 
     private fun reconnectDelayMillis(attempt: Int): Long {
@@ -979,7 +989,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         pendingDevice = null
         showHome()
         appendStatusLine("Disconnected")
-        renderHome(CrvConnectionStage.IDLE, "Disconnected")
+        displayedConnectionStage = CrvConnectionStage.IDLE
+        renderHome(displayedConnectionStage, "Disconnected")
     }
 
     private fun cardBackground(fill: Int, stroke: Int): GradientDrawable =
@@ -1088,21 +1099,6 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         private const val USB_REENUMERATION_POLL_MILLIS = 500L
         private val RECONNECT_DELAYS_MILLIS = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L)
         private const val MAX_AUTOMATIC_RECONNECTS = 4
-        private val ERROR_STATUS_WORDS = listOf(
-            "failed",
-            "failure",
-            "error",
-            "denied",
-            "timed out",
-            "timeout",
-            "stopped",
-            "disconnected",
-            "missing",
-            "rejected",
-            "unavailable",
-            "could not",
-        )
-
         private val HOME_BACKGROUND_COLOR = 0xFF0B1016.toInt()
         private val HOME_BODY_COLOR = 0xFFB9C4D0.toInt()
         private val HOME_MUTED_COLOR = 0xFF8A97A6.toInt()
