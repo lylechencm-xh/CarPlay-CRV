@@ -973,6 +973,7 @@ class CrvWiredCarPlayController(
         ),
         rightHandDrive = false,
         hevc = false,
+        mediaBufferMillis = CRV_MEDIA_BUFFER_MILLIS,
         microphone = true,
         opus = false,
         manufacturer = "Honda",
@@ -1046,6 +1047,7 @@ class CrvWiredCarPlayController(
         private const val SOURCE_VERSION = "950.7.1"
         private const val LINK_LOCAL = "fe80::2"
         private const val WIFI_JOIN_TIMEOUT_MILLIS = 45_000L
+        private const val CRV_MEDIA_BUFFER_MILLIS = 300
         private const val AVAILABLE_CURRENT_MA = 1500
         private const val PAIR_TIMEOUT_MILLIS = 5 * 60_000L
         private const val VPN_CONNECT_TIMEOUT_MILLIS = 5_000L
