@@ -25,4 +25,22 @@ class AirPlayHidTest {
 
         assertArrayEquals(legacy, direct)
     }
+
+
+    @Test
+    fun primitiveSingleTouchMatchesOneContactReport() {
+        val width = 1280
+        val height = 720
+        val x = 0.42
+        val y = 0.63
+        val expected = AirPlayHid.touchReport(
+            listOf(AirPlayContact(0, x, y, true)),
+            width,
+            height,
+        )
+
+        val actual = AirPlayHid.touchReport(x, y, true, width, height)
+
+        assertArrayEquals(expected, actual)
+    }
 }
