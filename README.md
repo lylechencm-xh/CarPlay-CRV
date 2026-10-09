@@ -11,7 +11,11 @@
 - 包名：`com.shihab.diplay`
 - 主要功能模块：USB、USBMUX、Lockdown、iAP2/MFi、CDC-NCM、AirPlay、音视频与触控
 
-> **开发测试中：** 2026-10-09 的 2021 款 CR-V 实车测试已连接有线 CarPlay，并显示导航画面。音频、麦克风、触控和长时间稳定性仍需分别验证。无线 CarPlay 默认未启用。
+> **车机实测正常：** 2026-10-09 在 2021 款 CR-V 上，有线 CarPlay 正常连接，导航画面在车机上正常显示。音频、麦克风、触控和长时间稳定性仍需分别验证。无线 CarPlay 默认未启用。
+
+![2021 款 CR-V 车机有线 CarPlay 导航实测画面](asset/crv-2021-wired-carplay-test-2026-10-09.png)
+
+*2026-10-09 车机实测：有线 CarPlay 导航显示正常。*
 
 **构建与下载**
 
@@ -40,7 +44,11 @@ CarPlay adaptation project for the **2021 Honda CR-V**, based on [DiPlay](https:
 - Package: `com.shihab.diplay`
 - Main components: USB, USBMUX, Lockdown, iAP2/MFi, CDC-NCM, AirPlay, video, audio, and touch input
 
-> **Experimental:** A 2021 CR-V vehicle test on 2026-10-09 connected wired CarPlay and displayed navigation. Audio, microphone, touch, and long-term stability still need separate verification. Wireless CarPlay is not enabled by default.
+> **Vehicle test passed:** On 2026-10-09, wired CarPlay connected normally on a 2021 CR-V and displayed navigation on the head unit. Audio, microphone, touch input, and long-term stability still need separate verification. Wireless CarPlay is not enabled by default.
+
+![Wired CarPlay navigation displayed on a 2021 CR-V head unit](asset/crv-2021-wired-carplay-test-2026-10-09.png)
+
+*2026-10-09 vehicle test: wired CarPlay navigation display working normally.*
 
 **Build & Download**
 
