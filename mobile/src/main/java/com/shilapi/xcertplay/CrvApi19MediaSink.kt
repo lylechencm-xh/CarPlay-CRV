@@ -474,6 +474,7 @@ class CrvApi19MediaSink(
         private val outputInfo = MediaCodec.BufferInfo()
         private var softwareOpus: CrvSoftwareOpusDecoder? = null
         private var rejectedOpusPackets = 0
+        private var inputBackpressureDrops = 0
         private var pcmScratch = ByteArray(0)
         private var track: AudioTrack? = null
         private var playbackStarted = false
@@ -720,7 +721,10 @@ class CrvApi19MediaSink(
                     attempt++
                 }
                 if (index < 0) {
-                    report("Audio decoder input backpressure; packet dropped after retries")
+                    inputBackpressureDrops++
+                    if (inputBackpressureDrops == 1 || inputBackpressureDrops % 100 == 0) {
+                        report("Audio decoder input backpressure drops=$inputBackpressureDrops")
+                    }
                     return
                 }
                 @Suppress("DEPRECATION")
