@@ -47,6 +47,43 @@ class CrvVideoBacklogRecoveryTest {
         assertFalse(recovery.observe(1_000 * MS, 1_001 * MS, 3, 1_002 * MS))
     }
 
+    @Test
+    fun obsoleteRecoveryFrameNeedsBothHardAgeAndNewerQueuedVideo() {
+        val now = 2_000_000_000L
+        assertTrue(
+            CrvVideoRecoveryFrameAge.isObsolete(
+                nowNs = now,
+                receivedNs = 500_000_000L,
+                pendingFrames = 3,
+                newestPendingReceivedNs = 600_000_000L,
+            ),
+        )
+        assertFalse(
+            CrvVideoRecoveryFrameAge.isObsolete(
+                nowNs = now,
+                receivedNs = 500_000_001L,
+                pendingFrames = 3,
+                newestPendingReceivedNs = 600_000_001L,
+            ),
+        )
+        assertFalse(
+            CrvVideoRecoveryFrameAge.isObsolete(
+                nowNs = now,
+                receivedNs = 0L,
+                pendingFrames = 0,
+                newestPendingReceivedNs = null,
+            ),
+        )
+        assertFalse(
+            CrvVideoRecoveryFrameAge.isObsolete(
+                nowNs = now,
+                receivedNs = 0L,
+                pendingFrames = 3,
+                newestPendingReceivedNs = 99_999_999L,
+            ),
+        )
+    }
+
     private companion object {
         const val MS = 1_000_000L
     }
