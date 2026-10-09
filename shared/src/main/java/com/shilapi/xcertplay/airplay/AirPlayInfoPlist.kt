@@ -114,7 +114,7 @@ object AirPlayInfoPlist {
         return listOf(
             base(100), base(100, "default"), base(100, "media"), base(100, "telephony"),
             base(100, "speechRecognition"), base(100, "alert"), base(101), base(101, "default"),
-            base(102, "default"),
+            base(102, "default"), base(102, "media"),
         )
     }
 
