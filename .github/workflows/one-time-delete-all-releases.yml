@@ -11,7 +11,6 @@ permissions:
 
 jobs:
   delete-releases:
-    if: contains(toJSON(github.event.head_commit.added), '.github/workflows/one-time-delete-all-releases.yml')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
