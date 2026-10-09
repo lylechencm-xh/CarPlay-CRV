@@ -25,4 +25,25 @@ class AirPlayCryptoSliceTest {
 
         assertArrayEquals(plain, opened)
     }
+
+
+    @Test
+    fun reusableOpenerResetsForEachNonce() {
+        val key = ByteArray(32) { (it + 7).toByte() }
+        val aad = byteArrayOf(8, 7, 6, 5)
+        val opener = AirPlayChaChaOpener(key)
+        val nonceBuffer = ByteArray(12)
+
+        for (counter in 1L..3L) {
+            val nonce = AirPlayCrypto.nonce64(counter)
+            val plain = "frame-$counter".toByteArray(Charsets.UTF_8)
+            val sealed = AirPlayCrypto.chachaSeal(key, nonce, plain, aad)
+            val opened = opener.open(
+                nonce = AirPlayCrypto.nonce64(counter, nonceBuffer),
+                source = sealed,
+                aad = aad,
+            )
+            assertArrayEquals(plain, opened)
+        }
+    }
 }
