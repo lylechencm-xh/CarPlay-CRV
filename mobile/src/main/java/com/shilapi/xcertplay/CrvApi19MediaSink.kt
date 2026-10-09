@@ -584,7 +584,9 @@ class CrvApi19MediaSink(
                 // immediate underrun on this older audio stack.
                 while (running.get()) {
                     if (queue.poll(20L, packetHolder)) {
-                        packetHolder.rtp?.let { handle(it, packetHolder.sample) }
+                        val rtp = packetHolder.rtp
+                        if (rtp != null) handle(rtp, packetHolder.sample)
+                        packetHolder.rtp = null
                     }
                     drainDecoder()
                     maintainPlaybackBuffer()
