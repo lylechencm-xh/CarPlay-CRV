@@ -21,9 +21,13 @@ internal class CrvRuntimeSnapshotProbe(context: Context) {
         out += "Snapshot begin reason=" + safe(reason) + " uptimeMs=" + SystemClock.elapsedRealtime()
         collectUsb(out)
         collectNetwork(out)
-        collectProc(out)
-        collectSysfs(out)
-        collectProcesses(out)
+        // Full kernel/process enumeration is expensive on the CR-V head unit. Keep normal
+        // connection transitions lightweight; collect bounded detail only for a failure.
+        if (reason == "carplay-failure" || reason == "mfi-failure") {
+            collectProc(out)
+            collectSysfs(out)
+            collectProcesses(out)
+        }
         out += "Snapshot end reason=" + safe(reason)
         return out
     }
@@ -147,18 +151,18 @@ internal class CrvRuntimeSnapshotProbe(context: Context) {
         val SYS_NET_FILES = listOf("operstate", "carrier", "mtu", "type", "flags", "ifindex")
         val PROC_FILES = listOf(
             "/proc/cmdline" to 8,
-            "/proc/modules" to 256,
+            "/proc/modules" to 32,
             "/proc/filesystems" to 128,
-            "/proc/interrupts" to 256,
+            "/proc/interrupts" to 32,
             "/proc/net/dev" to 128,
             "/proc/net/route" to 128,
             "/proc/net/ipv6_route" to 128,
             "/proc/net/if_inet6" to 128,
             "/proc/net/arp" to 128,
-            "/proc/net/tcp" to 128,
-            "/proc/net/tcp6" to 128,
-            "/proc/net/udp" to 128,
-            "/proc/net/udp6" to 128,
+            "/proc/net/tcp" to 32,
+            "/proc/net/tcp6" to 32,
+            "/proc/net/udp" to 32,
+            "/proc/net/udp6" to 32,
         )
         val SYSFS_DIRS = listOf(
             "/sys/class/android_usb",
@@ -173,6 +177,6 @@ internal class CrvRuntimeSnapshotProbe(context: Context) {
             "carplay", "iap", "apple", "mfi", "usb", "media", "mitsubishi", "honda", "ada",
         )
         const val MAX_VALUE = 1024
-        const val MAX_SYSFS_ENTRIES = 256
+        const val MAX_SYSFS_ENTRIES = 32
     }
 }

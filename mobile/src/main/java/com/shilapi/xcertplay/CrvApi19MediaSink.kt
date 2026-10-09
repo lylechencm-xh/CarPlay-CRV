@@ -435,6 +435,9 @@ class CrvApi19MediaSink(
         private var softwareOpus: CrvSoftwareOpusDecoder? = null
         private var rejectedOpusPackets = 0
         private var track: AudioTrack? = null
+        private var playbackStarted = false
+        private var primedBytes = 0
+        private var primeTargetBytes = 0
 
         fun start() {
             if (started) return
@@ -464,9 +467,11 @@ class CrvApi19MediaSink(
 
         private fun run() {
             try {
+                runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) }
                 createTrack()
                 configureDecoder()
-                track?.play()
+                // Prime MODE_STREAM before play(); starting an empty track produces an
+                // immediate underrun on this older audio stack.
                 while (running.get()) {
                     queue.poll(20, TimeUnit.MILLISECONDS)?.let(::handle)
                     drainDecoder()
@@ -516,6 +521,10 @@ class CrvApi19MediaSink(
                 return
             }
             track = audio
+            primeTargetBytes = minOf(
+                bufferBytes / 2,
+                format.sampleRate * format.channels * 2 * AUDIO_PRIME_MILLIS / 1000,
+            ).coerceAtLeast(format.channels * 2)
             report("Audio API17 ready: ${format.codec} ${format.sampleRate}Hz")
         }
 
@@ -686,6 +695,13 @@ class CrvApi19MediaSink(
                 val written = audio.write(bytes, offset, byteCount - offset)
                 if (written <= 0) return
                 offset += written
+                if (!playbackStarted) {
+                    primedBytes += written
+                    if (primedBytes >= primeTargetBytes) {
+                        audio.play()
+                        playbackStarted = true
+                    }
+                }
             }
         }
 
@@ -724,6 +740,7 @@ class CrvApi19MediaSink(
     private companion object {
         const val VIDEO_QUEUE_CAPACITY = 8
         const val AUDIO_QUEUE_CAPACITY = 96
+        const val AUDIO_PRIME_MILLIS = 30
         const val MAX_VIDEO_INPUT = 8 * 1024 * 1024
         const val VIDEO_INPUT_TIMEOUT_US = 10_000L
         const val AUDIO_INPUT_TIMEOUT_US = 10_000L

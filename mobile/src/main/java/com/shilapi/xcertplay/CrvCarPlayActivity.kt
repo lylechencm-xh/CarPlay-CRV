@@ -30,7 +30,6 @@ import com.shilapi.xcertplay.transport.IphoneCarPlayConfiguration
 import com.shilapi.xcertplay.transport.IphoneUsbHost
 import com.shilapi.xcertplay.transport.IphoneUsbMatcher
 import java.io.Closeable
-import java.util.ArrayDeque
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -47,8 +46,6 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private lateinit var usbHost: IphoneUsbHost
     private lateinit var video: TextureView
     private lateinit var home: FrameLayout
-    private lateinit var status: TextView
-    private lateinit var logScroll: ScrollView
     private lateinit var heroTitle: TextView
     private lateinit var heroBody: TextView
     private lateinit var stageLabel: TextView
@@ -62,10 +59,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private var connectionMode = CrvConnectionMode.WIRED
     @Volatile private var homeVisible = true
     @Volatile private var manualDisconnect = false
-    private val statusLines = ArrayDeque<String>()
-    private var statusSequence = 0
-    private var lastStatusMessage: String? = null
     private var displayedConnectionStage = CrvConnectionStage.IDLE
+    private var lastProgressStep = 0
 
     private val io: ExecutorService = Executors.newSingleThreadExecutor()
     private val diagnosticIo: ExecutorService = Executors.newSingleThreadExecutor()
@@ -122,10 +117,13 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         }
 
         modeButton = TextView(this).apply {
-            text = "Mode: USB"
+            text = "USB connection"
             setTextColor(Color.WHITE)
-            setBackgroundColor(0x33000000)
-            setPadding(dp(14), dp(8), dp(14), dp(8))
+            textSize = 14f
+            gravity = Gravity.CENTER
+            background = cardBackground(CARD_COLOR, CARD_STROKE_COLOR)
+            setPadding(dp(18), dp(12), dp(18), dp(12))
+            isFocusable = true
             setOnClickListener {
                 connectionMode = if (connectionMode == CrvConnectionMode.WIRED) {
                     CrvConnectionMode.WIFI_HANDOFF
@@ -133,9 +131,9 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                     CrvConnectionMode.WIRED
                 }
                 text = if (connectionMode == CrvConnectionMode.WIFI_HANDOFF) {
-                    "Mode: Wi-Fi handoff"
+                    "Wi-Fi test mode"
                 } else {
-                    "Mode: USB"
+                    "USB connection"
                 }
                 controller?.close()
                 controller = null
@@ -145,6 +143,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 reconnectAttempts = 0
                 reconnectBlockedForMfi = false
                 reconnectGeneration++
+                manualDisconnect = false
                 val selected = usbHost.discover().firstOrNull()
                 if (selected != null) {
                     beginConnectionStatus(
@@ -178,25 +177,32 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         stageLabel = TextView(this).apply {
             setTextColor(HOME_MUTED_COLOR)
             textSize = 14f
-            text = "Stage: idle"
+            text = "Step 1 of 4 · Connect phone"
         }
 
         progressBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
         }
-        PROGRESS_STEPS.forEach { _ ->
-            val dot = TextView(this).apply {
-                text = "○"
-                setTextColor(DOT_OFF_COLOR)
-                textSize = 15f
-                setPadding(0, 0, dp(9), 0)
+        PROGRESS_STEPS.forEachIndexed { index, label ->
+            val step = TextView(this).apply {
+                text = "${index + 1}  $label"
+                setTextColor(HOME_MUTED_COLOR)
+                textSize = 14f
+                gravity = Gravity.CENTER
+                setPadding(dp(8), dp(12), dp(8), dp(12))
+                background = cardBackground(HOME_BACKGROUND_COLOR, CARD_STROKE_COLOR)
             }
-            progressDots.add(dot)
-            progressBar.addView(dot)
+            progressDots.add(step)
+            progressBar.addView(
+                step,
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    if (index > 0) leftMargin = dp(8)
+                },
+            )
         }
 
         connectButton = TextView(this).apply {
-            text = "Connect phone"
+            text = "Connect iPhone"
             setTextColor(Color.WHITE)
             textSize = 17f
             gravity = Gravity.CENTER
@@ -217,23 +223,6 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             isClickable = true
             isFocusable = true
             setOnClickListener { beginManualDisconnect() }
-        }
-
-        status = TextView(this).apply {
-            text = ""
-            visibility = View.VISIBLE
-            setTextColor(HOME_BODY_COLOR)
-            setBackgroundColor(0x22000000)
-            gravity = Gravity.LEFT or Gravity.TOP
-            typeface = Typeface.MONOSPACE
-            textSize = 12f
-            setSingleLine(false)
-            maxLines = STATUS_MAX_LINES
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-        }
-
-        logScroll = ScrollView(this).apply {
-            addView(status, ViewGroup.LayoutParams(-1, -2))
         }
 
         val headerRow = LinearLayout(this).apply {
@@ -279,18 +268,6 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 disconnectButton,
                 LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) },
             )
-            addView(
-                TextView(this@CrvCarPlayActivity).apply {
-                    text = "Activity log"
-                    setTextColor(HOME_MUTED_COLOR)
-                    textSize = 13f
-                },
-                LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(20) },
-            )
-            addView(
-                logScroll,
-                LinearLayout.LayoutParams(-1, dp(140)).apply { topMargin = dp(6) },
-            )
         }
 
         home = FrameLayout(this).apply {
@@ -317,11 +294,11 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         diagnostics.log("app started api=" + android.os.Build.VERSION.SDK_INT)
         val probeContext = applicationContext
         diagnosticIo.execute {
+            runCatching { diagnostics.pruneOldLogs() }
             CrvSystemInfoProbe(probeContext).collect().forEach(diagnostics::log)
             CrvHondaPlatformProbe(probeContext).collect().forEach(diagnostics::log)
             runtimeSnapshotProbe.collect("app-start").forEach(diagnostics::log)
         }
-        appendStatusLine("App started (Android API " + android.os.Build.VERSION.SDK_INT + ")")
         usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
         usbHost = IphoneUsbHost(this, usbManager, IphoneUsbMatcher.appleVendor())
 
@@ -345,6 +322,10 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         }
 
         attachReceiver = usbHost.registerAttachReceiver { device ->
+            if (controller?.shouldKeepWirelessOnUsbDetach() == true) {
+                reportStatus("USB attached; continuing Wi-Fi CarPlay")
+                return@registerAttachReceiver
+            }
             manualDisconnect = false
             reconnectAttempts = 0
             reconnectBlockedForMfi = false
@@ -362,6 +343,10 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             if (!awaitingCarPlayReattach) {
                 runOnUiThread {
                     usbTransitionGeneration.incrementAndGet()
+                    if (controller?.shouldKeepWirelessOnUsbDetach() == true) {
+                        reportStatus("USB removed; keeping Wi-Fi handoff")
+                        return@runOnUiThread
+                    }
                     controller?.close(CrvRecoveryTrigger.USB_DETACHED)
                     controller = null
                     pendingUsbSession?.close()
@@ -739,53 +724,33 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     private fun beginConnectionStatus(message: String) {
         displayedConnectionStage = CrvConnectionStage.IDLE
+        lastProgressStep = 0
         showHome()
-        connectionStatus(message)
+        renderHome(CrvConnectionStage.IDLE, message)
     }
 
     private fun connectionStatus(message: String) {
         if (!homeVisible) return
-        appendStatusLine(message)
+        val candidate = stageFor(message)
+        if (candidate != CrvConnectionStage.IDLE) {
+            displayedConnectionStage =
+                monotonicConnectionStage(displayedConnectionStage, candidate)
+        }
+        renderHome(displayedConnectionStage, message)
     }
 
     private fun connectionError(message: String) {
         diagnostics.log(CrvConnectionStage.ERROR, message)
         showHome()
-        appendStatusLine("ERROR: $message")
         displayedConnectionStage = CrvConnectionStage.ERROR
         renderHome(displayedConnectionStage, message)
     }
 
     private fun hideConnectionStatus() {
         showHome()
-        appendStatusLine("Waiting for iPhone USB")
         displayedConnectionStage = CrvConnectionStage.IDLE
+        lastProgressStep = 0
         renderHome(displayedConnectionStage, "Waiting for iPhone USB")
-    }
-
-    private fun appendStatusLine(message: String) {
-        runOnUiThread {
-            if (destroyed) return@runOnUiThread
-            if (message == lastStatusMessage) return@runOnUiThread
-            lastStatusMessage = message
-            statusSequence += 1
-            val line = String.format(java.util.Locale.US, "%02d  %s", statusSequence, message)
-            statusLines.addLast(line)
-            while (statusLines.size > STATUS_MAX_LINES) {
-                statusLines.removeFirst()
-            }
-            val builder = StringBuilder()
-            val iterator = statusLines.iterator()
-            while (iterator.hasNext()) {
-                if (builder.isNotEmpty()) builder.append('\n')
-                builder.append(iterator.next())
-            }
-            status.text = builder.toString()
-            status.visibility = View.VISIBLE
-            if (::logScroll.isInitialized) {
-                logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
-            }
-        }
     }
 
     private fun isConnectionError(message: String): Boolean {
@@ -845,35 +810,79 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private fun renderHome(stage: CrvConnectionStage, message: String) {
         if (destroyed || !::heroTitle.isInitialized || !::stageCard.isInitialized) return
         val copy = homeCopyFor(stage, message)
-        val active = stageIndex(stage)
         val isError = stage == CrvConnectionStage.ERROR
+
         runOnUiThread {
             if (destroyed) return@runOnUiThread
+            val progressStep = progressStepFor(stage)
+            if (!isError && stage != CrvConnectionStage.RETRYING) {
+                lastProgressStep = progressStep
+            }
+            val activeStep = if (isError || stage == CrvConnectionStage.RETRYING) {
+                lastProgressStep
+            } else {
+                progressStep
+            }.coerceIn(0, PROGRESS_STEPS.lastIndex)
+
             heroTitle.text = copy.first
             heroTitle.setTextColor(if (isError) ERROR_TITLE_COLOR else Color.WHITE)
             heroBody.text = copy.second
             heroBody.setTextColor(if (isError) ERROR_BODY_COLOR else HOME_BODY_COLOR)
-            stageLabel.text = "Stage: " + stageName(stage)
+            stageLabel.text = when (stage) {
+                CrvConnectionStage.ERROR -> "Stopped at ${PROGRESS_STEPS[activeStep]}"
+                CrvConnectionStage.RETRYING -> "Trying again"
+                CrvConnectionStage.CARPLAY_ACTIVE -> "Connected"
+                else -> "Step ${activeStep + 1} of ${PROGRESS_STEPS.size} · ${PROGRESS_STEPS[activeStep]}"
+            }
             stageLabel.setTextColor(if (isError) ERROR_TITLE_COLOR else HOME_MUTED_COLOR)
             stageCard.background = cardBackground(
                 if (isError) ERROR_CARD_COLOR else CARD_COLOR,
                 if (isError) ERROR_BORDER_COLOR else CARD_STROKE_COLOR,
             )
-            val connected = stage == CrvConnectionStage.CARPLAY_ACTIVE
-            connectButton.text = if (isError) "Retry connection" else "Connect phone"
-            connectButton.isEnabled = !connected
-            val hasSession =
-                controller != null || pendingUsbSession != null || pendingDevice != null
-            disconnectButton.isEnabled = hasSession
-            disconnectButton.alpha = if (hasSession) 1f else 0.4f
-            progressDots.forEachIndexed { index, dot ->
-                val on = if (isError) true else active >= 0 && index <= active
-                dot.text = if (on) "●" else "○"
-                dot.setTextColor(
+
+            val hasSession = controller != null || pendingUsbSession != null ||
+                pendingDevice != null || awaitingCarPlayReattach || openCarPlayAfterPermission
+            val connecting = stage != CrvConnectionStage.IDLE &&
+                stage != CrvConnectionStage.ERROR &&
+                stage != CrvConnectionStage.CARPLAY_ACTIVE
+            connectButton.text = when (stage) {
+                CrvConnectionStage.ERROR -> "Try again"
+                CrvConnectionStage.CARPLAY_ACTIVE -> "Connected"
+                CrvConnectionStage.IDLE -> "Connect iPhone"
+                else -> "Connecting…"
+            }
+            connectButton.isEnabled =
+                (stage == CrvConnectionStage.IDLE || isError) && !hasSession
+            connectButton.alpha = if (connectButton.isEnabled) 1f else 0.55f
+            disconnectButton.text = if (stage == CrvConnectionStage.CARPLAY_ACTIVE) {
+                "Disconnect"
+            } else {
+                "Cancel"
+            }
+            disconnectButton.isEnabled = hasSession || connecting
+            disconnectButton.alpha = if (disconnectButton.isEnabled) 1f else 0.4f
+
+            progressDots.forEachIndexed { index, step ->
+                val done = index < activeStep || stage == CrvConnectionStage.CARPLAY_ACTIVE
+                val current = index == activeStep && !done
+                step.background = cardBackground(
                     when {
-                        isError -> ERROR_DOT_COLOR
-                        on -> DOT_ON_COLOR
-                        else -> DOT_OFF_COLOR
+                        isError && current -> ERROR_CARD_COLOR
+                        done -> PROGRESS_DONE_COLOR
+                        current -> PROGRESS_CURRENT_COLOR
+                        else -> HOME_BACKGROUND_COLOR
+                    },
+                    when {
+                        isError && current -> ERROR_BORDER_COLOR
+                        done || current -> DOT_ON_COLOR
+                        else -> CARD_STROKE_COLOR
+                    },
+                )
+                step.setTextColor(
+                    when {
+                        isError && current -> ERROR_DOT_COLOR
+                        done || current -> Color.WHITE
+                        else -> HOME_MUTED_COLOR
                     },
                 )
             }
@@ -882,74 +891,86 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     private fun homeCopyFor(stage: CrvConnectionStage, message: String): Pair<String, String> =
         when (stage) {
-            CrvConnectionStage.IDLE,
-            CrvConnectionStage.USB_DETECTED,
-            CrvConnectionStage.USB_PERMISSION,
+            CrvConnectionStage.IDLE ->
+                HOME_READY_TITLE to if (connectionMode == CrvConnectionMode.WIFI_HANDOFF) {
+                    "Connect iPhone by USB. Wi-Fi takes over after CarPlay starts."
+                } else {
+                    HOME_READY_BODY
+                }
+            CrvConnectionStage.USB_DETECTED ->
+                "iPhone detected" to "Keep the cable connected while CarPlay starts."
+            CrvConnectionStage.USB_PERMISSION ->
+                "Allow USB access" to "Approve the permission request on the car screen."
             CrvConnectionStage.USB_REENUMERATION ->
-                HOME_READY_TITLE to HOME_READY_BODY
+                "Preparing iPhone" to "The USB connection may briefly reconnect. Keep the cable in place."
             CrvConnectionStage.USBMUX_READY ->
-                "iPhone detected" to "Opening the CarPlay data channel…"
+                "Opening phone connection" to "Preparing the CarPlay data channel…"
             CrvConnectionStage.LOCKDOWN ->
-                "Pairing with iPhone" to "Verifying the saved pairing…"
-            CrvConnectionStage.IAP2 ->
-                "CarPlay channel ready" to "Starting iAP2 identification…"
+                "Pairing with iPhone" to "Approve Trust or CarPlay on your iPhone if prompted."
+            CrvConnectionStage.IAP2,
             CrvConnectionStage.MFI ->
-                "Authenticating" to "Negotiating the MFi identity…"
+                "Preparing CarPlay" to "Checking the accessory connection…"
             CrvConnectionStage.NCM,
-            CrvConnectionStage.NETWORK_READY,
+            CrvConnectionStage.NETWORK_READY ->
+                "Starting connection" to "Preparing the CarPlay network…"
             CrvConnectionStage.WIFI_HOTSPOT,
             CrvConnectionStage.WIFI_HANDOFF ->
-                "Network ready" to "Bringing up the CarPlay network link…"
-            CrvConnectionStage.AIRPLAY_LISTENING ->
-                "Waiting for AirPlay" to "The iPhone is connecting to the display…"
+                "Starting Wi-Fi" to "Keep USB connected until CarPlay appears, then unplug."
+            CrvConnectionStage.AIRPLAY_LISTENING,
             CrvConnectionStage.AIRPLAY_CONNECTED ->
-                "Starting display" to "Negotiating the video stream…"
+                "Connecting display" to if (connectionMode == CrvConnectionMode.WIFI_HANDOFF) {
+                    "Your iPhone is joining Wi-Fi. Keep USB connected for now."
+                } else {
+                    "Your iPhone is starting the display."
+                }
             CrvConnectionStage.CARPLAY_ACTIVE ->
-                "CarPlay active" to "Your iPhone is on the display."
+                "CarPlay is ready" to if (connectionMode == CrvConnectionMode.WIFI_HANDOFF) {
+                    "You can unplug USB and continue over Wi-Fi."
+                } else {
+                    "Your iPhone is on the display."
+                }
             CrvConnectionStage.RETRYING ->
-                "Retrying" to "Reconnecting to your iPhone…"
+                "Reconnecting" to "Trying to restore the connection automatically…"
             CrvConnectionStage.ERROR ->
-                "Connection problem" to message
+                "Connection needs attention" to friendlyError(message)
         }
 
-    private fun stageIndex(stage: CrvConnectionStage): Int = when (stage) {
+    private fun friendlyError(message: String): String {
+        val value = message.lowercase(java.util.Locale.US)
+        return when {
+            "mfi" in value || "authentication" in value ->
+                "CarPlay authentication is unavailable. Check the test build and provisioned identity."
+            "hotspot" in value || "wi-fi" in value ->
+                "The Wi-Fi handoff did not start. Check the car's Wi-Fi settings, then try again."
+            "permission" in value || "denied" in value ->
+                "Allow the requested USB or network permission, then try again."
+            "not detected" in value || "disconnected" in value ->
+                "Check the USB data cable and reconnect your iPhone."
+            "timed out" in value || "timeout" in value ->
+                "The connection took too long. Reconnect your iPhone and try again."
+            else ->
+                "Reconnect your iPhone and try again. Details are saved in the diagnostic file."
+        }
+    }
+
+    private fun progressStepFor(stage: CrvConnectionStage): Int = when (stage) {
         CrvConnectionStage.IDLE,
         CrvConnectionStage.USB_DETECTED,
         CrvConnectionStage.USB_PERMISSION,
-        CrvConnectionStage.USB_REENUMERATION -> 0
-        CrvConnectionStage.USBMUX_READY -> 1
-        CrvConnectionStage.LOCKDOWN -> 2
-        CrvConnectionStage.IAP2 -> 3
-        CrvConnectionStage.MFI -> 4
+        CrvConnectionStage.USB_REENUMERATION,
+        CrvConnectionStage.USBMUX_READY -> 0
+        CrvConnectionStage.LOCKDOWN,
+        CrvConnectionStage.IAP2,
+        CrvConnectionStage.MFI -> 1
         CrvConnectionStage.NCM,
         CrvConnectionStage.NETWORK_READY,
         CrvConnectionStage.WIFI_HOTSPOT,
-        CrvConnectionStage.WIFI_HANDOFF -> 5
+        CrvConnectionStage.WIFI_HANDOFF -> 2
         CrvConnectionStage.AIRPLAY_LISTENING,
-        CrvConnectionStage.AIRPLAY_CONNECTED -> 6
-        CrvConnectionStage.CARPLAY_ACTIVE -> 7
+        CrvConnectionStage.AIRPLAY_CONNECTED,
+        CrvConnectionStage.CARPLAY_ACTIVE -> 3
         CrvConnectionStage.RETRYING,
-        CrvConnectionStage.ERROR -> -1
-    }
-
-    private fun stageName(stage: CrvConnectionStage): String = when (stage) {
-        CrvConnectionStage.IDLE -> "idle"
-        CrvConnectionStage.USB_DETECTED -> "iPhone detected"
-        CrvConnectionStage.USB_PERMISSION -> "USB permission"
-        CrvConnectionStage.USB_REENUMERATION -> "USB mode switch"
-        CrvConnectionStage.USBMUX_READY -> "USBMUX ready"
-        CrvConnectionStage.NETWORK_READY -> "network ready"
-        CrvConnectionStage.LOCKDOWN -> "lockdown"
-        CrvConnectionStage.IAP2 -> "iAP2"
-        CrvConnectionStage.MFI -> "MFi"
-        CrvConnectionStage.NCM -> "CDC-NCM"
-        CrvConnectionStage.AIRPLAY_LISTENING -> "AirPlay listening"
-        CrvConnectionStage.AIRPLAY_CONNECTED -> "AirPlay connected"
-        CrvConnectionStage.WIFI_HOTSPOT -> "Wi-Fi hotspot"
-        CrvConnectionStage.WIFI_HANDOFF -> "Wi-Fi handoff"
-        CrvConnectionStage.CARPLAY_ACTIVE -> "CarPlay active"
-        CrvConnectionStage.RETRYING -> "retrying"
-        CrvConnectionStage.ERROR -> "error"
+        CrvConnectionStage.ERROR -> lastProgressStep
     }
 
     private fun beginManualConnect() {
@@ -988,7 +1009,6 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         pendingUsbSession = null
         pendingDevice = null
         showHome()
-        appendStatusLine("Disconnected")
         displayedConnectionStage = CrvConnectionStage.IDLE
         renderHome(displayedConnectionStage, "Disconnected")
     }
@@ -1093,7 +1113,6 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     companion object {
         private const val REQUEST_VPN = 1001
-        private const val STATUS_MAX_LINES = 16
         private const val STATUS_HIDE_AFTER_ACTIVE_MILLIS = 2_000L
         private const val USB_REENUMERATION_TIMEOUT_MILLIS = 15_000L
         private const val USB_REENUMERATION_POLL_MILLIS = 500L
@@ -1106,7 +1125,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         private val CARD_STROKE_COLOR = 0xFF2A3A4A.toInt()
         private val PRIMARY_BUTTON_COLOR = 0xFF2F6FED.toInt()
         private val DOT_ON_COLOR = 0xFF4C9AFF.toInt()
-        private val DOT_OFF_COLOR = 0xFF3A4553.toInt()
+        private val PROGRESS_DONE_COLOR = 0xFF174E83.toInt()
+        private val PROGRESS_CURRENT_COLOR = 0xFF203B5D.toInt()
         private val SECONDARY_BUTTON_STROKE_COLOR = 0xFF3A4553.toInt()
         private val ERROR_TITLE_COLOR = 0xFFF09595.toInt()
         private val ERROR_BODY_COLOR = 0xFFE0B0B0.toInt()
@@ -1117,6 +1137,6 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         private const val HOME_READY_BODY =
             "Plug your iPhone into the USB data port. Allow CarPlay when your iPhone asks."
         private val PROGRESS_STEPS =
-            listOf("USB", "Mux", "Pair", "iAP2", "MFi", "Net", "AirPlay", "Active")
+            listOf("Phone", "Pair", "Network", "Display")
     }
 }

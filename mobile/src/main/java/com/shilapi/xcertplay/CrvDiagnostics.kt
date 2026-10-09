@@ -16,13 +16,15 @@ class CrvDiagnostics(context: Context) {
     private val lock = Any()
     private val directory = context.getExternalFilesDir(null) ?: context.filesDir
     private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
-    private val file = File(directory, uniqueSessionFileName(context))
+    private val storage = CrvLogStorage(directory, File(directory, uniqueSessionFileName(context)))
     private var lastLine: String? = null
     private var lastLineAtMillis: Long = 0L
     private val startedAtMillis = android.os.SystemClock.elapsedRealtime()
     private var sequence = 0L
 
-    fun path(): String = file.absolutePath
+    fun path(): String = storage.file.absolutePath
+
+    fun pruneOldLogs() = storage.pruneOldLogs()
 
     fun log(stage: CrvConnectionStage, message: String) {
         log("[${stage.name}] $message")
@@ -37,13 +39,12 @@ class CrvDiagnostics(context: Context) {
             lastLineAtMillis = now
             sequence += 1
             try {
-                file.parentFile?.mkdirs()
                 val elapsed = now - startedAtMillis
-                file.appendText(
+                storage.append(
                     formatter.format(Date()) +
                         "  #" + sequence +
                         " +" + elapsed + "ms  " +
-                        safe + "\n",
+                        safe,
                 )
             } catch (_: Exception) {
                 // Diagnostics must never stop CarPlay bring-up.

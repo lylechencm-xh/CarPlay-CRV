@@ -72,6 +72,7 @@ class CrvWiredCarPlayController(
         Executors.newSingleThreadExecutor { task -> Thread(task, "crv-carplay-wired").apply { isDaemon = true } }
     private val closeRequested = AtomicBoolean(false)
     private val stoppedNotified = AtomicBoolean(false)
+    @Volatile private var wifiCredentialsSent = false
     private val lifecycle = CrvCarPlayStateMachine { transition ->
         report(
             "Controller state ${transition.previous.phase} -> ${transition.current.phase} " +
@@ -251,6 +252,15 @@ class CrvWiredCarPlayController(
 
     fun updateSurface(surface: Surface?) {
         sink.updateSurface(surface)
+    }
+
+    /** Keep the AirPlay listener alive once the phone has received Wi-Fi credentials. */
+    fun shouldKeepWirelessOnUsbDetach(): Boolean {
+        val keepWireless =
+            mode == CrvConnectionMode.WIFI_HANDOFF &&
+                !lifecycle.isStopping() &&
+                (wifiCredentialsSent || resources.activeSession != null)
+        return keepWireless
     }
 
     fun sendTouch(x: Double, y: Double, down: Boolean): Boolean {
@@ -661,22 +671,55 @@ class CrvWiredCarPlayController(
         )
         lifecycle.networkReady()
         lifecycle.sessionControlStarted()
-        Iap2WirelessControlClient(
-            session = session,
-            mfi = Iap2MfiAuthenticationClient(mfi),
-        ).run(
-            identification = identification,
-            endpoint = endpoint,
-            timeoutMillis = Iap2WirelessControlClient.NO_TIMEOUT_MILLIS,
-            onReady = { report("Wi-Fi CarPlay credentials ready") },
-            onProgress = { message ->
-                if (message == "iap2 authentication accepted" && !lifecycle.isStopping()) {
-                    lifecycle.authenticated()
-                    protocolTrace.signal(CrvProtocolLayer.MFI, "accepted")
-                }
-                report(message)
-            },
-        )
+        val result = try {
+            Iap2WirelessControlClient(
+                session = session,
+                mfi = Iap2MfiAuthenticationClient(mfi),
+            ).run(
+                identification = identification,
+                endpoint = endpoint,
+                timeoutMillis = Iap2WirelessControlClient.NO_TIMEOUT_MILLIS,
+                onReady = { report("Wi-Fi CarPlay control ready") },
+                onProgress = { message ->
+                    if (message.startsWith("iap2 tx=0x5703")) {
+                        wifiCredentialsSent = true
+                        report("Wi-Fi credentials sent; waiting for CarPlay to become active")
+                    }
+                    if (message == "iap2 authentication accepted" && !lifecycle.isStopping()) {
+                        lifecycle.authenticated()
+                        protocolTrace.signal(CrvProtocolLayer.MFI, "accepted")
+                    }
+                    report(message)
+                },
+            )
+        } catch (error: Throwable) {
+            if (!wifiCredentialsSent || lifecycle.isStopping()) {
+                throw error
+            }
+            report("iAP2 control ended after Wi-Fi credentials; awaiting AirPlay")
+            null
+        }
+        if (result != null) {
+            report("iAP2 wireless control ended terminal=${result.terminal} " +
+                "wifiConfigs=${result.wifiConfigurationsSent} " +
+                "carPlayStartSessions=${result.carPlayStartSessionsSent}")
+        }
+        if (!wifiCredentialsSent || lifecycle.isStopping() || recovery.trigger != null) return
+
+        // Removing USB ends iAP2 control, but the established AirPlay session uses Wi-Fi.
+        val joinDeadline = android.os.SystemClock.elapsedRealtime() + WIFI_JOIN_TIMEOUT_MILLIS
+        while (!lifecycle.isStopping() && recovery.trigger == null) {
+            if (resources.activeSession != null) break
+            if (android.os.SystemClock.elapsedRealtime() >= joinDeadline) {
+                report("Wi-Fi CarPlay join timed out after USB handoff")
+                return
+            }
+            Thread.sleep(250L)
+        }
+        while (!lifecycle.isStopping() && recovery.trigger == null &&
+            resources.activeSession != null) {
+            Thread.sleep(250L)
+        }
     }
 
     private fun preflightLockdownTls(pairRecord: LockdownPairRecord) {
@@ -1002,6 +1045,7 @@ class CrvWiredCarPlayController(
         private const val LABEL = "CarPlay CR-V"
         private const val SOURCE_VERSION = "950.7.1"
         private const val LINK_LOCAL = "fe80::2"
+        private const val WIFI_JOIN_TIMEOUT_MILLIS = 45_000L
         private const val AVAILABLE_CURRENT_MA = 1500
         private const val PAIR_TIMEOUT_MILLIS = 5 * 60_000L
         private const val VPN_CONNECT_TIMEOUT_MILLIS = 5_000L

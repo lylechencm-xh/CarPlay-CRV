@@ -9,6 +9,8 @@ import java.io.Closeable
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.NetworkInterface
+import java.lang.reflect.Method
+import java.security.SecureRandom
 import java.util.Collections
 
 /**
@@ -31,16 +33,47 @@ internal class CrvApi19WirelessHotspot(
 
     private val wifi = context.applicationContext
         .getSystemService(Context.WIFI_SERVICE) as WifiManager
+    private val lock = Any()
+    @Volatile private var closed = false
     private var started = false
     private var restoreWifi = false
+    private var apRequested = false
+    private var originalConfiguration: WifiConfiguration? = null
+    private var restoreConfiguration: Method? = null
+    private val ssid = "CRV-CarPlay-" + randomHex(3)
+    private val passphrase = randomHex(16)
 
     fun start(timeoutMillis: Long = 15_000L): Info {
-        if (started) throw IllegalStateException("Wi-Fi hotspot already started")
+        if (closed || started || apRequested) {
+            throw IllegalStateException("Wi-Fi hotspot is closed or already started")
+        }
+
+        // Never replace an active vehicle hotspot or change its saved configuration without
+        // being able to restore it. These methods are vendor APIs on Android 4.2.2.
+        val apState = wifi.javaClass.methods.firstOrNull {
+            it.name == "getWifiApState" && it.parameterTypes.isEmpty()
+        }?.invoke(wifi) as? Int
+            ?: throw UnsupportedOperationException("Honda Wi-Fi hotspot state is unavailable")
+        if (apState != WIFI_AP_STATE_DISABLED) {
+            throw IllegalStateException("Turn off the existing vehicle hotspot before Wi-Fi handoff")
+        }
+        val original = wifi.javaClass.methods.firstOrNull {
+            it.name == "getWifiApConfiguration" && it.parameterTypes.isEmpty()
+        }?.invoke(wifi) as? WifiConfiguration
+            ?: throw UnsupportedOperationException("Honda hotspot configuration cannot be backed up")
+        val setter = wifi.javaClass.methods.firstOrNull {
+            it.name == "setWifiApConfiguration" && it.parameterTypes.size == 1
+        } ?: throw UnsupportedOperationException("Honda hotspot configuration cannot be restored")
+        val enable = wifi.javaClass.methods.firstOrNull {
+            it.name == "setWifiApEnabled" && it.parameterTypes.size == 2
+        } ?: throw UnsupportedOperationException("Honda Wi-Fi framework does not expose hotspot control")
+        originalConfiguration = original
+        restoreConfiguration = setter
 
         val interfacesBeforeStart = currentInterfaceNames()
         val config = WifiConfiguration().apply {
-            SSID = SSID
-            preSharedKey = PASSPHRASE
+            SSID = ssid
+            preSharedKey = passphrase
             hiddenSSID = false
             allowedAuthAlgorithms.clear()
             allowedGroupCiphers.clear()
@@ -54,48 +87,52 @@ internal class CrvApi19WirelessHotspot(
             allowedProtocols.set(WifiConfiguration.Protocol.RSN)
         }
 
-        restoreWifi = wifi.isWifiEnabled
-        if (restoreWifi) {
-            runCatching { wifi.isWifiEnabled = false }
-            Thread.sleep(500L)
-        }
-
-        val method = wifi.javaClass.methods.firstOrNull {
-            it.name == "setWifiApEnabled" && it.parameterTypes.size == 2
-        } ?: throw UnsupportedOperationException(
-            "Honda Wi-Fi framework does not expose setWifiApEnabled",
-        )
-
-        val enabled = try {
-            method.invoke(wifi, config, true) as? Boolean ?: true
-        } catch (error: Exception) {
-            throw IllegalStateException("Could not enable CR-V Wi-Fi hotspot", error)
-        }
-        if (!enabled) throw IllegalStateException("CR-V Wi-Fi hotspot request was rejected")
-        started = true
-        report("Wi-Fi hotspot requested")
-
-        val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMillis
-        while (android.os.SystemClock.elapsedRealtime() < deadline) {
-            findApEndpoint(interfacesBeforeStart)?.let { endpoint ->
-                val channel = currentApChannel(config)
-                report(
-                    "Wi-Fi hotspot ready interface=${endpoint.first} " +
-                        "address=${endpoint.second.hostAddress} channel=$channel",
-                )
-                return Info(
-                    ssid = SSID,
-                    passphrase = PASSPHRASE,
-                    channel = channel,
-                    hostAddress = endpoint.second,
-                    interfaceName = endpoint.first,
-                )
+        try {
+            synchronized(lock) {
+                if (closed) throw IllegalStateException("Wi-Fi hotspot was closed")
+                restoreWifi = wifi.isWifiEnabled
+                if (restoreWifi) {
+                    if (!wifi.setWifiEnabled(false)) {
+                        throw IllegalStateException("Could not disable Wi-Fi station for hotspot")
+                    }
+                    Thread.sleep(500L)
+                }
+                apRequested = true
+                val enabled = enable.invoke(wifi, config, true) as? Boolean ?: true
+                if (!enabled) throw IllegalStateException("CR-V Wi-Fi hotspot request was rejected")
+                started = true
             }
-            Thread.sleep(300L)
-        }
+            report("Wi-Fi hotspot requested")
 
-        close()
-        throw IllegalStateException("Wi-Fi hotspot started but no AP address appeared")
+            val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMillis
+            while (android.os.SystemClock.elapsedRealtime() < deadline) {
+                if (closed) throw IllegalStateException("Wi-Fi hotspot was closed")
+                val state = wifi.javaClass.methods.firstOrNull {
+                    it.name == "getWifiApState" && it.parameterTypes.isEmpty()
+                }?.invoke(wifi) as? Int
+                if (state == WIFI_AP_STATE_ENABLED) {
+                    findApEndpoint(interfacesBeforeStart)?.let { endpoint ->
+                        val channel = currentApChannel(config)
+                        report(
+                            "Wi-Fi hotspot ready interface=${endpoint.first} " +
+                                "address=${endpoint.second.hostAddress} channel=$channel",
+                        )
+                        return Info(
+                            ssid = ssid,
+                            passphrase = passphrase,
+                            channel = channel,
+                            hostAddress = endpoint.second,
+                            interfaceName = endpoint.first,
+                        )
+                    }
+                }
+                Thread.sleep(300L)
+            }
+            throw IllegalStateException("Wi-Fi hotspot started but no AP address appeared")
+        } catch (error: Throwable) {
+            close()
+            throw error
+        }
     }
 
     private fun currentInterfaceNames(): Set<String> = try {
@@ -162,24 +199,42 @@ internal class CrvApi19WirelessHotspot(
         return 0
     }
 
-    override fun close() {
-        if (!started) return
+    override fun close() = synchronized(lock) {
+        closed = true
+        val wasRequested = apRequested
+        apRequested = false
         started = false
-        runCatching {
-            val method = wifi.javaClass.methods.firstOrNull {
-                it.name == "setWifiApEnabled" && it.parameterTypes.size == 2
+        if (wasRequested) {
+            runCatching {
+                val method = wifi.javaClass.methods.firstOrNull {
+                    it.name == "setWifiApEnabled" && it.parameterTypes.size == 2
+                }
+                method?.invoke(wifi, null, false)
+            }.onFailure { report("Wi-Fi hotspot stop failed") }
+            val saved = originalConfiguration
+            val setter = restoreConfiguration
+            if (saved != null && setter != null) {
+                runCatching { setter.invoke(wifi, saved) }
+                    .onFailure { report("Original hotspot configuration restore failed") }
             }
-            method?.invoke(wifi, null, false)
         }
+        originalConfiguration = null
+        restoreConfiguration = null
         if (restoreWifi) {
             runCatching { wifi.isWifiEnabled = true }
+                .onFailure { report("Wi-Fi station restore failed") }
         }
-        report("Wi-Fi hotspot stopped")
+        restoreWifi = false
+        if (wasRequested) report("Wi-Fi hotspot stopped")
     }
 
+    private fun randomHex(bytes: Int): String =
+        ByteArray(bytes).also { SecureRandom().nextBytes(it) }
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+
     private companion object {
-        const val SSID = "CRV-CarPlay"
-        const val PASSPHRASE = "CarPlay2021"
+        const val WIFI_AP_STATE_DISABLED = 11
+        const val WIFI_AP_STATE_ENABLED = 13
     }
 }
 

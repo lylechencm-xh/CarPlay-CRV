@@ -12,7 +12,7 @@
 | 车机系统 | **Android 4.2.2 / API17**（不可提高最低版本） |
 | 应用包名 | `com.shihab.diplay` |
 | 源码版本字段 | `0.2.28`（另有后续诊断与兼容代码提交） |
-| 核心链路 | 有线 USB CarPlay，`WIRED_ONLY = true` |
+| 核心链路 | 有线 USB CarPlay；新增需先 USB 配对的 Wi-Fi 切换测试模式 |
 | GitHub Releases | **2026-10-09 已全部清空，当前无公开 Release APK** |
 | 当前 APK 获取途径 | GitHub Actions 成功运行的 Artifacts / 自行编译 |
 
@@ -53,7 +53,7 @@
 carplay-crv-v<版本>-<时间>-p<PID>-b<运行时间>.log
 ```
 
-优先保存在应用专用外部目录，典型位置为 `/sdcard/Android/data/com.shihab.diplay/files/`；实际以设备挂载情况为准，不保证直接保存至 U 盘。使用单 USB 端口时，可先连接 iPhone 进行测试，再换成存储设备导出，或在授权 ADB 环境下读取。
+优先保存在应用专用外部目录，典型位置为 `/sdcard/Android/data/com.shihab.diplay/files/`；实际以设备挂载情况为准，不保证直接保存至 U 盘。单段日志上限 512 KiB，当前运行最多保留两段；旧日志会自动清理，CR-V 日志总量控制在约 4 MiB、最多 8 个文件。使用单 USB 端口时，可先连接 iPhone 进行测试，再换成存储设备导出，或在授权 ADB 环境下读取。
 
 下一次实车测试请记录：车机固件、iPhone/iOS、APK 构建记录和签名、最终界面状态、故障时间、完整日志。分享前删除设备敏感信息、任何 MFi 凭据、Lockdown 数据与网络口令。
 

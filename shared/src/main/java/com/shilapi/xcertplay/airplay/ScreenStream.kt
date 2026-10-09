@@ -40,6 +40,10 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         this.listener = listener
         val bound = ServerSocket()
         bound.reuseAddress = true
+        // A receive window above 64 KiB must be requested before bind/accept.
+        // Setting only the accepted Socket can report a large buffer while the
+        // peer is still constrained by the smaller negotiated TCP window.
+        runCatching { bound.receiveBufferSize = VIDEO_RECEIVE_BUFFER_BYTES }
         bound.bind(InetSocketAddress(bindAddress, 0))
         server = bound
         thread = Thread({ accept(bound) }, "airplay-screen").apply { isDaemon = true; start() }

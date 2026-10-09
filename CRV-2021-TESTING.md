@@ -24,6 +24,26 @@ navigation. The exported log for that session was empty, so this observation is 
 vehicle screen rather than a protocol trace. Audio, microphone, touch and long-term stability
 remain to be tested separately.
 
+## Experimental Wi-Fi handoff
+
+The home screen now offers **Mode: USB / Mode: Wi-Fi handoff**. Wireless mode first
+uses the USB cable for Lockdown/iAP2 pairing and MFi authentication. The app starts
+a temporary WPA2 hotspot with a random per-attempt password, sends its details to
+the iPhone, and listens for AirPlay on the hotspot address. Leave USB connected
+until the screen says **CarPlay active**. Then disconnect USB and check that video,
+audio, touch, and reconnect remain usable over Wi-Fi. Use **Disconnect** to stop
+the test. The app attempts to restore the vehicle's prior Wi-Fi station and
+saved hotspot configuration. Check the car's Wi-Fi settings afterward.
+
+This mode needs the Honda Android 4.2.2 firmware to expose and permit its legacy
+hotspot state, configuration, and enable/disable APIs. It refuses to replace an
+already active vehicle hotspot and fails if the saved configuration cannot be read
+or restored. Firmware may still reject the hotspot request or omit Wi-Fi broadcast
+information needed for an iPhone to join automatically. No CR-V hardware acceptance
+has been recorded for wireless mode. If the phone does not join, keep the full
+diagnostic log, the last visible stage, and the actual iPhone Wi-Fi state; never
+include the hotspot password or MFi identity.
+
 ## Installation
 
 Update the existing package instead of uninstalling it so saved Lockdown pairings and app-private
@@ -82,11 +102,17 @@ CarPlay active
 The implementation first tries the matching Honda kernel CDC-NCM interface. If it is unavailable,
 it reports the reason and attempts the userspace NCM fallback.
 
+The connection screen shows four plain-language steps and a recovery hint. Detailed
+messages are written to the session log file rather than displayed live on the car screen.
+Each segment is limited to 512 KiB; the active session retains its latest two segments.
+On startup and rotation, old CR-V logs are pruned to at most eight files and about
+4 MiB total. Other files in the directory are left alone.
+
 ## What to capture
 
 - Exact APK filename and signing label (`fixed-signed` or `debug-signed`)
 - Last status shown on screen
-- Complete `carplay-crv-v*.log` file from the app external-files directory
+- Current `carplay-crv-v*.log` file and its `-previous.log` segment, if present, from the app external-files directory
 - Head-unit Android/build information and iPhone/iOS version
 - Whether Trust, CarPlay, USB and VPN prompts appeared
 - Whether failure affected connection, video, audio, microphone or touch

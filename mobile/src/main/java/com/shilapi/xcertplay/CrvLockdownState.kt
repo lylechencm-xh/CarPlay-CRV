@@ -33,7 +33,7 @@ class CrvLockdownState(context: Context) {
     }
 
     fun save(record: LockdownPairRecord) {
-        prefs.edit()
+        val saved = prefs.edit()
             .putString("hostId", record.hostId)
             .putString("systemBuid", record.systemBuid)
             .putString("wifiMac", record.wifiMacAddress)
@@ -44,6 +44,10 @@ class CrvLockdownState(context: Context) {
             .putString("rootPrivateKey", record.rootPrivateKeyPem.encode64())
             .putString("rootCertificate", record.rootCertificatePem.encode64())
             .commit()
+        check(saved) { "Could not save iPhone trust record to device storage" }
+        check(load()?.hostId == record.hostId) {
+            "Saved iPhone trust record could not be read back"
+        }
     }
 
     fun clear() {

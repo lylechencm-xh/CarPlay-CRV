@@ -1,5 +1,6 @@
 package com.shilapi.xcertplay.airplay
 
+import android.os.Process
 import java.io.Closeable
 import java.io.IOException
 import java.net.DatagramPacket
@@ -53,14 +54,10 @@ class AudioStream(
     private var started = false
 
     fun listen(bindAddress: InetAddress, listener: Listener): Pair<Int, Int> {
-        val data = bindAnyPort(bindAddress)
-        // Keep short Wi-Fi bursts in the kernel while decrypting or scheduling pauses
-        // the receive thread. The platform may cap this request; log the actual size.
-        val originalBufferBytes = runCatching { data.receiveBufferSize }.getOrDefault(0)
-        if (originalBufferBytes < AUDIO_RECEIVE_BUFFER_BYTES) {
-            runCatching { data.receiveBufferSize = AUDIO_RECEIVE_BUFFER_BYTES }
-        }
-        onDiagnostic("Audio UDP receive buffer type=$streamType original=$originalBufferBytes requested=$AUDIO_RECEIVE_BUFFER_BYTES actual=${runCatching { data.receiveBufferSize }.getOrDefault(0)}")
+        // Request room for RTP bursts before binding the receive socket. SO_RCVBUF
+        // is a platform hint, so report the value actually granted by this kernel.
+        val data = bindAnyPort(bindAddress, AUDIO_RECEIVE_BUFFER_BYTES)
+        onDiagnostic("Audio UDP receive buffer type=$streamType requested=$AUDIO_RECEIVE_BUFFER_BYTES actual=${runCatching { data.receiveBufferSize }.getOrDefault(0)}")
         val control = bindAnyPort(bindAddress)
         dataSocket = data
         controlSocket = control
@@ -84,6 +81,9 @@ class AudioStream(
     }
 
     private fun runData(socket: DatagramSocket, listener: Listener) {
+        // RTP arrives every few milliseconds. A delayed receiver loses packets before the
+        // renderer's queue can help, especially while video decoding or navigation is busy.
+        runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO) }
         val stats = StreamReceiveStats("audio type=$streamType", onDiagnostic)
         val buffer = ByteArray(DATAGRAM_BYTES)
         try {
@@ -182,9 +182,12 @@ class AudioStream(
         }
     }
 
-    private fun bindAnyPort(bindAddress: InetAddress): DatagramSocket {
+    private fun bindAnyPort(bindAddress: InetAddress, receiveBufferBytes: Int = 0): DatagramSocket {
         val socket = DatagramSocket(null)
         socket.reuseAddress = true
+        if (receiveBufferBytes > 0) {
+            runCatching { socket.receiveBufferSize = receiveBufferBytes }
+        }
         socket.bind(InetSocketAddress(bindAddress, 0))
         return socket
     }
