@@ -36,4 +36,14 @@ class AirPlayEventCommandHeaderTest {
             String(target, 0, length, Charsets.US_ASCII),
         )
     }
+
+    @Test
+    fun cseqWrapMatchesLegacyIntStringFormatting() {
+        val target = ByteArray(AirPlayEventCommandHeader.MAX_BYTES)
+        for (cseq in intArrayOf(Int.MAX_VALUE, Int.MIN_VALUE, -1, 0, 1)) {
+            val count = AirPlayEventCommandHeader.write(137, cseq, target)
+            val text = String(target, 0, count, Charsets.US_ASCII)
+            assertEquals(cseq.toString(), text.substringAfter("CSeq: ").trim())
+        }
+    }
 }
