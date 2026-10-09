@@ -83,10 +83,12 @@ class AudioStream(
     private fun runData(socket: DatagramSocket, listener: Listener) {
         // RTP arrives every few milliseconds. A delayed receiver loses packets before the
         // renderer's queue can help, especially while video decoding or navigation is busy.
-        runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO) }
+        runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) }
         val stats = StreamReceiveStats("audio type=$streamType", onDiagnostic)
         val buffer = ByteArray(DATAGRAM_BYTES)
         val packet = DatagramPacket(buffer, buffer.size)
+        val aad = ByteArray(RTP_HEADER_LEN - 4)
+        val nonce = ByteArray(12)
         try {
             while (!closed.get()) {
                 packet.setLength(buffer.size)
@@ -122,15 +124,20 @@ class AudioStream(
                     continue
                 }
 
-                val aad = wire.copyOfRange(4, RTP_HEADER_LEN)
+                wire.copyInto(aad, 0, 4, RTP_HEADER_LEN)
                 val sealedEnd = wire.size - NONCE_LEN
-                val sealed = wire.copyOfRange(RTP_HEADER_LEN, sealedEnd)
-                val shortNonce = wire.copyOfRange(sealedEnd, wire.size)
-                val nonce = ByteArray(12).also { shortNonce.copyInto(it, 4) }
+                wire.copyInto(nonce, 4, sealedEnd, wire.size)
                 val sample = readU32Be(wire, 4)
 
                 val payload = try {
-                    AirPlayCrypto.chachaOpen(key, nonce, sealed, aad)
+                    AirPlayCrypto.chachaOpen(
+                        key = key,
+                        nonce = nonce,
+                        source = wire,
+                        offset = RTP_HEADER_LEN,
+                        length = sealedEnd - RTP_HEADER_LEN,
+                        aad = aad,
+                    )
                 } catch (error: Exception) {
                     val failureNumber = authenticationFailures.incrementAndGet()
                     if (failureNumber == 1) {
@@ -176,9 +183,11 @@ class AudioStream(
 
     private fun runControl(socket: DatagramSocket) {
         val buffer = ByteArray(DATAGRAM_BYTES)
+        val packet = DatagramPacket(buffer, buffer.size)
         while (!closed.get()) {
             try {
-                socket.receive(DatagramPacket(buffer, buffer.size))
+                packet.setLength(buffer.size)
+                socket.receive(packet)
             } catch (_: Exception) {
                 if (closed.get()) return
             }
