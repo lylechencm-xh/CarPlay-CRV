@@ -27,6 +27,7 @@ object AirPlayHid {
 
     private const val TOUCH_CONTACTS = 2
     private const val BYTES_PER_FINGER = 6
+    const val TOUCH_REPORT_BYTES = BYTES_PER_FINGER * TOUCH_CONTACTS
 
     fun touchHidDevice(xMax: Int, yMax: Int, displayUuid: String): Map<String, Any?> =
         hidDeviceEntry(TOUCH_HID_UID, "xcertplay Touchscreen", multitouchDescriptor(xMax, yMax), displayUuid)
@@ -78,11 +79,35 @@ object AirPlayHid {
         down1: Boolean,
         xMax: Int,
         yMax: Int,
-    ): ByteArray {
-        val report = ByteArray(BYTES_PER_FINGER * TOUCH_CONTACTS)
-        writeTouchSlot(report, 0, x0, y0, down0, xMax, yMax)
-        writeTouchSlot(report, 1, x1, y1, down1, xMax, yMax)
-        return report
+    ): ByteArray =
+        ByteArray(TOUCH_REPORT_BYTES).also { report ->
+            writeTouchReport(
+                target = report,
+                x0 = x0,
+                y0 = y0,
+                down0 = down0,
+                x1 = x1,
+                y1 = y1,
+                down1 = down1,
+                xMax = xMax,
+                yMax = yMax,
+            )
+        }
+
+    fun writeTouchReport(
+        target: ByteArray,
+        x0: Double,
+        y0: Double,
+        down0: Boolean,
+        x1: Double,
+        y1: Double,
+        down1: Boolean,
+        xMax: Int,
+        yMax: Int,
+    ) {
+        require(target.size >= TOUCH_REPORT_BYTES)
+        writeTouchSlot(target, 0, x0, y0, down0, xMax, yMax)
+        writeTouchSlot(target, 1, x1, y1, down1, xMax, yMax)
     }
 
 
