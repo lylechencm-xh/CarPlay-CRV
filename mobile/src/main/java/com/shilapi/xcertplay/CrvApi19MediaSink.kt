@@ -237,13 +237,30 @@ class CrvApi19MediaSink(
         }
 
         fun submit(data: ByteArray) {
-            if (queue.offerLast(Job.Frame(data.copyOf()))) return
+            val pendingBytes = queue.asSequence()
+                .filterIsInstance<Job.Frame>()
+                .sumOf { it.data.size.toLong() }
+            if (
+                data.size <= VIDEO_QUEUE_MAX_BYTES &&
+                pendingBytes + data.size <= VIDEO_QUEUE_MAX_BYTES
+            ) {
+                val frame = Job.Frame(data.copyOf())
+                if (queue.offerLast(frame)) return
+                recoverQueue(frame, "video queue frame limit")
+                return
+            }
+            val frame = if (data.size <= VIDEO_QUEUE_MAX_BYTES) Job.Frame(data.copyOf()) else null
+            recoverQueue(frame, "video queue byte limit")
+        }
+
+        private fun recoverQueue(frame: Job.Frame?, reason: String) {
             val pendingConfig = queue.asSequence()
                 .filterIsInstance<Job.Config>()
                 .lastOrNull()
             queue.clear()
             pendingConfig?.let { queue.offerLast(it) }
-            queue.offerLast(Job.Recover("video queue overflow"))
+            queue.offerLast(Job.Recover(reason))
+            frame?.let { queue.offerLast(it) }
         }
 
         override fun close() {
@@ -749,6 +766,7 @@ class CrvApi19MediaSink(
 
     private companion object {
         const val VIDEO_QUEUE_CAPACITY = 8
+        const val VIDEO_QUEUE_MAX_BYTES = 8 * 1024 * 1024
         const val AUDIO_QUEUE_CAPACITY = 96
         const val AUDIO_PRIME_MILLIS = 30
         const val MAX_VIDEO_INPUT = 8 * 1024 * 1024
