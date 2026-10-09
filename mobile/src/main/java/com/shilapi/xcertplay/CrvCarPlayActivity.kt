@@ -1064,12 +1064,15 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private fun updateTouchMoves(event: MotionEvent, width: Double, height: Double) {
         for (index in 0 until event.pointerCount) {
             val pointerId = event.getPointerId(index)
-            if (touchSlots.slotOf(pointerId) < 0) continue
-            touchSlots.move(
-                pointerId,
-                event.getX(index).toDouble() / width,
-                event.getY(index).toDouble() / height,
-            )
+            val x = event.getX(index).toDouble() / width
+            val y = event.getY(index).toDouble() / height
+            if (touchSlots.slotOf(pointerId) < 0) {
+                // If a third finger was ignored while both HID slots were full, let it take a
+                // slot on the next MOVE after one of the tracked fingers has lifted.
+                touchSlots.press(pointerId, x, y)
+            } else {
+                touchSlots.move(pointerId, x, y)
+            }
         }
     }
 
