@@ -339,16 +339,26 @@ class AirPlaySession(
     internal fun setVideoPlaybackAllowed(allowed: Boolean): VideoPlaybackDelivery =
         videoPlaybackAvailability.setDesired(allowed)
 
-    private fun sendCommandLocked(command: Map<String, Any?>, extraHeaders: String = ""): Boolean {
+    private fun sendCommandLocked(command: Map<String, Any?>, extraHeaders: String = ""): Boolean =
+        sendEncodedCommandLocked(
+            body = BplistCodec.encode(command),
+            commandType = command["type"]?.toString(),
+            extraHeaders = extraHeaders,
+        )
+
+    private fun sendEncodedCommandLocked(
+        body: ByteArray,
+        commandType: String?,
+        extraHeaders: String = "",
+    ): Boolean {
         val socket = eventSocket ?: return false
         val cipher = eventCipher ?: return false
         eventCseq++
-        val body = BplistCodec.encode(command)
         val head = "POST /command RTSP/1.0\r\n" + extraHeaders +
             "Content-Type: $PLIST_CONTENT_TYPE\r\n" +
             "Content-Length: ${body.size}\r\n" +
             "CSeq: $eventCseq\r\n\r\n"
-        val hidReport = command["type"] == "hidSendReport"
+        val hidReport = commandType == "hidSendReport"
         if (hidReport) {
             eventHidReportsSent++
             if (eventHidReportsSent == 1 || eventHidReportsSent % HID_REPORT_LOG_INTERVAL == 0) {
@@ -366,7 +376,7 @@ class AirPlaySession(
             true
         } catch (error: Exception) {
             debugLog(
-                "airplay event command failed type=" + command["type"] +
+                "airplay event command failed type=" + (commandType ?: "unknown") +
                     " error=" + error.javaClass.simpleName,
             )
             close()
@@ -538,13 +548,12 @@ class AirPlaySession(
     }
 
     private fun sendHidReport(uid: Int, report: ByteArray): Boolean =
-        sendCommand(
-            linkedMapOf(
-                "type" to "hidSendReport",
-                "uuid" to uid.toString(16),
-                "hidReport" to report,
-            ),
-        )
+        synchronized(eventWriteLock) {
+            sendEncodedCommandLocked(
+                body = AirPlayHidCommandPlist.encode(uid, report),
+                commandType = "hidSendReport",
+            )
+        }
 
     private fun runControl() {
         com.shilapi.xcertplay.network.TcpLiveness.configure(socket) { debugLog(it) }
