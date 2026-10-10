@@ -11,8 +11,6 @@ import com.shilapi.xcertplay.airplay.MicrophonePacketizer
 import java.io.Closeable
 import java.net.DatagramPacket
 import java.net.DatagramSocket
-import java.net.Inet4Address
-import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -82,16 +80,11 @@ internal class CrvApi19MicrophoneUplink(
             return false
         }
 
-        val bindAddress = if (config.host is Inet4Address) "0.0.0.0" else "::"
         val nextSocket = try {
-            DatagramSocket(null).apply {
-                reuseAddress = true
-                bind(InetSocketAddress(bindAddress, 0))
-            }
+            openCrvMicrophoneSocket(config.localAddress, report)
         } catch (error: Exception) {
-            nextRecorder.release()
+            runCatching { nextRecorder.release() }
             running.set(false)
-            report("Microphone: UDP socket failed ${error.javaClass.simpleName}")
             return false
         }
 
@@ -115,7 +108,7 @@ internal class CrvApi19MicrophoneUplink(
             }
             true
         } catch (error: Exception) {
-            report("Microphone: start failed ${error.javaClass.simpleName}")
+            report("Microphone: start failed ${error.javaClass.simpleName} message=${error.message.orEmpty().take(200)}")
             releaseResources()
             false
         }
@@ -184,7 +177,7 @@ internal class CrvApi19MicrophoneUplink(
                 }
             }
         } catch (error: Exception) {
-            if (running.get()) report("Microphone: capture stopped ${error.javaClass.simpleName}")
+            if (running.get()) report("Microphone: capture stopped ${error.javaClass.simpleName} message=${error.message.orEmpty().take(200)}")
         } finally {
             running.set(false)
             releaseResources()

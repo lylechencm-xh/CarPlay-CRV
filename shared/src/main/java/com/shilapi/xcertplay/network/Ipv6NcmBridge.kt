@@ -43,6 +43,7 @@ class Ipv6NcmBridge(
     private val ncm: NcmUsbBridge,
     private val tun: ParcelFileDescriptor,
     private val hostMac: ByteArray,
+    private val onDiagnostic: (String) -> Unit = {},
     private val onError: (Throwable) -> Unit,
 ) : Closeable {
     init {
@@ -81,7 +82,10 @@ class Ipv6NcmBridge(
     }
 
     private fun runNcmToTun() {
+        runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY) }
         val output = FileOutputStream(tun.fileDescriptor)
+        val stats = NcmTransferStats("ncm-to-tun", onDiagnostic)
+        val writer = TunPendingPacketWriter(running::get, TunIoCompatibility::isWouldBlock)
         try {
             while (running.get()) {
                 val frame = ncm.recv(READ_TIMEOUT_MILLIS) ?: continue
@@ -99,16 +103,28 @@ class Ipv6NcmBridge(
                     inboundLogBudget--
                     Log.i(TAG, "ncm inbound ${frame.summary(ipv6.payloadOffset)}")
                 }
-                output.write(frame, ipv6.payloadOffset, ipv6.payloadLength)
+                val startNs = System.nanoTime()
+                try {
+                    val written = writer.write { output.write(frame, ipv6.payloadOffset, ipv6.payloadLength) }
+                    stats.transferred(ipv6.payloadLength, System.nanoTime() - startNs, success = written)
+                    if (!written) return
+                } catch (error: IOException) {
+                    stats.transferred(0, System.nanoTime() - startNs, success = false)
+                    throw error
+                }
             }
         } catch (error: IOException) {
             if (running.get()) onError(error)
         } catch (error: RuntimeException) {
             if (running.get()) onError(error)
+        } finally {
+            stats.flush(ended = true)
         }
     }
 
     private fun runTunToNcm() {
+        runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY) }
+        val stats = NcmTransferStats("tun-to-ncm", onDiagnostic)
         val input = FileInputStream(tun.fileDescriptor)
         val buffer = ByteArray(TUN_READ_BYTES)
         val pendingFrame = NcmPendingFrameSender(
@@ -167,12 +183,22 @@ class Ipv6NcmBridge(
                     )
                 }
                 val frame = EthernetIpv6Codec.build(hostMac, mac, ipv6, 0, ipv6Length)
-                if (!pendingFrame.send(frame)) return
+                val startNs = System.nanoTime()
+                try {
+                    val sent = pendingFrame.send(frame)
+                    stats.transferred(ipv6Length, System.nanoTime() - startNs, success = sent)
+                    if (!sent) return
+                } catch (error: IOException) {
+                    stats.transferred(0, System.nanoTime() - startNs, success = false)
+                    throw error
+                }
             }
         } catch (error: IOException) {
             if (running.get()) onError(error)
         } catch (error: RuntimeException) {
             if (running.get()) onError(error)
+        } finally {
+            stats.flush(ended = true)
         }
     }
 

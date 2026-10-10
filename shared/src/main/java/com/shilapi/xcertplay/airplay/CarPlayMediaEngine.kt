@@ -24,6 +24,7 @@ interface MediaSink {
     fun onAudioStarted(id: AudioStreamId, format: AudioFormat, firstSample: Int) {}
     fun onAudioRtp(id: AudioStreamId, format: AudioFormat, rtp: ByteArray, sample: Int) {}
     fun onAudioStopped(id: AudioStreamId) {}
+    fun onAudioDuckingChanged(duck: Boolean) {}
     fun onMicrophoneStarted(id: AudioStreamId, config: MicrophoneConfig) {}
     fun onMicrophoneStopped(id: AudioStreamId) {}
     fun onIapMessage(bytes: ByteArray) {}
@@ -362,6 +363,7 @@ class CarPlayMediaEngine(
     }
 
     override fun onSessionClosed(session: AirPlaySession) {
+        sink.onAudioDuckingChanged(false)
         clearPendingIapTunnel(session)
         videoSettingsChannels.remove(session)?.close()
         val sessionStreams = streams.keys.filter { it.session === session }
@@ -435,6 +437,7 @@ class CarPlayMediaEngine(
             codec = format.codec,
             bitrate = if (format.codec == AudioCodecKind.OPUS) opusBitrate else null,
             opusClockRate = MicrophoneConfig.opusClockRate(formatBits),
+            localAddress = session.localAddress,
         )
     }
 

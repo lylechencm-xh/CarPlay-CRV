@@ -9,10 +9,11 @@ internal class NcmPendingFrameSender(
     private val transmit: (ByteArray) -> NcmWriteResult,
     private val isRunning: () -> Boolean,
     private val clockNanos: () -> Long = System::nanoTime,
-    private val pause: () -> Unit = { LockSupport.parkNanos(RETRY_PAUSE_NANOS) },
+    private val pause: (Long) -> Unit = { LockSupport.parkNanos(it) },
 ) {
     fun send(frame: ByteArray): Boolean {
         val startedNanos = clockNanos()
+        var retryPauseNanos = INITIAL_RETRY_PAUSE_NANOS
         while (isRunning()) {
             when (transmit(frame)) {
                 NcmWriteResult.SENT -> return true
@@ -23,7 +24,8 @@ internal class NcmPendingFrameSender(
                     if (Thread.currentThread().isInterrupted) {
                         throw IOException("NCM outbound writer interrupted")
                     }
-                    pause()
+                    pause(retryPauseNanos)
+                    retryPauseNanos = minOf(retryPauseNanos * 2, MAX_RETRY_PAUSE_NANOS)
                 }
             }
         }
@@ -31,7 +33,8 @@ internal class NcmPendingFrameSender(
     }
 
     private companion object {
-        const val RETRY_PAUSE_NANOS = 100_000_000L
+        const val INITIAL_RETRY_PAUSE_NANOS = 1_000_000L
+        const val MAX_RETRY_PAUSE_NANOS = 20_000_000L
         const val MAX_PENDING_NANOS = 90_000_000_000L
     }
 }

@@ -106,6 +106,13 @@ class CrvWiredCarPlayController(
         sink = sink,
         microphoneEnabled = true,
     )
+    private val touchDispatcher = CrvTouchDispatcher<AirPlaySession>(
+        send = { frame ->
+            if (resources.activeSession !== frame.target || lifecycle.isStopping()) false
+            else frame.target.sendTouches(frame.x0, frame.y0, frame.down0, frame.x1, frame.y1, frame.down1)
+        },
+        report = report,
+    )
 
     @Volatile private var vpnBound = false
     private val vpnLatch = CountDownLatch(1)
@@ -198,6 +205,13 @@ class CrvWiredCarPlayController(
             recovery.breakBlockingControl(recoveryTriggerForTransport(message))
         }
 
+        override fun onCommand(session: AirPlaySession, type: String, params: Map<String, Any?>) {
+            when (type) {
+                "duckAudio" -> sink.onAudioDuckingChanged(true)
+                "unduckAudio" -> sink.onAudioDuckingChanged(false)
+            }
+        }
+
         override fun onDebugLog(message: String) {
             when {
                 message.startsWith("airplay rx SETUP", ignoreCase = true) ->
@@ -216,6 +230,10 @@ class CrvWiredCarPlayController(
                     )
             }
             if (
+                message.startsWith("Audio ") ||
+                message.startsWith("UDP6 receive ") ||
+                message.startsWith("Receive: audio ") ||
+                message.startsWith("airplay TEARDOWN types=") ||
                 message.contains("SETUP", ignoreCase = true) ||
                 message.contains("pair", ignoreCase = true) ||
                 message.contains("video", ignoreCase = true) ||
@@ -229,6 +247,7 @@ class CrvWiredCarPlayController(
     }
 
     fun start(device: UsbDevice, usbSession: Iap2UsbSession) {
+        wiredUsbIdentity = CrvUsbIdentity(device.deviceName, device.deviceId, device.vendorId, device.productId)
         protocolTrace.signal(CrvProtocolLayer.USB, "attached", detail = mode.name)
         lifecycle.start()
         executor.execute {
@@ -252,6 +271,7 @@ class CrvWiredCarPlayController(
                 }
             } finally {
                 lifecycle.requestStop("worker-finished")
+                touchDispatcher.close()
                 recovery.completeWorker(
                     closeUsbSession = { usbSession.close() },
                     finishLifecycle = {
@@ -263,6 +283,9 @@ class CrvWiredCarPlayController(
             }
         }
     }
+
+    internal var wiredUsbIdentity: CrvUsbIdentity? = null
+        private set
 
     fun updateSurface(surface: Surface?) {
         sink.updateSurface(surface)
@@ -297,12 +320,7 @@ class CrvWiredCarPlayController(
     }
 
     fun sendTouch(x: Double, y: Double, down: Boolean): Boolean {
-        val session = resources.activeSession ?: return false
-        return session.sendTouch(
-            x = x.coerceIn(0.0, 1.0),
-            y = y.coerceIn(0.0, 1.0),
-            down = down,
-        )
+        return sendTouches(x, y, down, 0.0, 0.0, false)
     }
 
     fun sendTouches(
@@ -312,16 +330,19 @@ class CrvWiredCarPlayController(
         x1: Double,
         y1: Double,
         down1: Boolean,
+        move: Boolean = false,
     ): Boolean {
         val session = resources.activeSession ?: return false
-        return session.sendTouches(
+        return touchDispatcher.offer(CrvTouchFrame(
+            target = session,
             x0 = x0.coerceIn(0.0, 1.0),
             y0 = y0.coerceIn(0.0, 1.0),
             down0 = down0,
             x1 = x1.coerceIn(0.0, 1.0),
             y1 = y1.coerceIn(0.0, 1.0),
             down1 = down1,
-        )
+            move = move,
+        ))
     }
 
     private fun runWired(device: UsbDevice, usbSession: Iap2UsbSession) {
@@ -369,7 +390,7 @@ class CrvWiredCarPlayController(
                     resources.wifiHotspot = it
                 }.start()
             }.onFailure {
-                report("Auto Wi-Fi unavailable; wired CarPlay continues: ${it.javaClass.simpleName}")
+                report("Auto Wi-Fi unavailable; wired CarPlay continues: ${it.javaClass.simpleName} message=${it.message.orEmpty().take(200)}")
                 runCatching { resources.wifiHotspot?.close() }
                 resources.wifiHotspot = null
             }.getOrNull()?.also { autoHotspotInfo = it }
@@ -1114,27 +1135,33 @@ class CrvWiredCarPlayController(
         }
     }
 
-    private fun airPlayConfig(id: String): AirPlayConfig = AirPlayConfig(
-        deviceName = "Honda CR-V",
-        deviceId = id,
-        btMac = id,
-        sourceVersion = SOURCE_VERSION,
-        main = AirPlayDisplayConfig(
-            widthPixels = displayWidth,
-            heightPixels = displayHeight,
-            fps = 30,
-        ),
-        rightHandDrive = false,
-        hevc = false,
-        mediaBufferMillis = CRV_MEDIA_BUFFER_MILLIS,
-        highFidelityMediaOutput = true,
-        microphone = true,
-        opus = false,
-        manufacturer = "Honda",
-        model = "CR-V 2021",
-        oemLabel = "Honda",
-        videoInCar = false,
-    )
+    private fun airPlayConfig(id: String): AirPlayConfig {
+        val bluetoothId = bluetoothTransportIdentifier()
+        report("CarPlay Bluetooth association source=${if (bluetoothId == deviceId) "derived-fallback" else "adapter"}; OEM HFP coordination requires vehicle validation")
+        return AirPlayConfig(
+            deviceName = "Honda CR-V",
+            deviceId = id,
+            // Associate CarPlay with the same head unit the phone paired over Bluetooth.
+            // The NCM/accessory device ID is independently generated and is not its BT address.
+            btMac = bluetoothId,
+            sourceVersion = SOURCE_VERSION,
+            main = AirPlayDisplayConfig(
+                widthPixels = displayWidth,
+                heightPixels = displayHeight,
+                fps = 30,
+            ),
+            rightHandDrive = false,
+            hevc = false,
+            mediaBufferMillis = CRV_MEDIA_BUFFER_MILLIS,
+            highFidelityMediaOutput = true,
+            microphone = true,
+            opus = false,
+            manufacturer = "Honda",
+            model = "CR-V 2021",
+            oemLabel = "Honda",
+            videoInCar = false,
+        )
+    }
 
     private fun controlBodyBytes(message: String): Int =
         Regex("""body=(\d+)""").find(message)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
@@ -1167,6 +1194,7 @@ class CrvWiredCarPlayController(
     internal fun close(reason: CrvRecoveryTrigger) {
         if (!closeRequested.compareAndSet(false, true)) return
         lifecycle.requestStop("close:${reason.name}")
+        touchDispatcher.close()
         recovery.breakBlockingControl(reason)
         resources.releaseTransport()
         unbindVpn()

@@ -1,6 +1,7 @@
 package com.shilapi.xcertplay.airplay
 
 import android.os.Process
+import com.shilapi.xcertplay.network.Udp6ReceiveDiagnostics
 import java.io.Closeable
 import java.io.IOException
 import java.net.DatagramPacket
@@ -53,16 +54,38 @@ class AudioStream(
     private var controlSocket: DatagramSocket? = null
     private var dataThread: Thread? = null
     private var controlThread: Thread? = null
+    private var diagnosticsThread: Thread? = null
     private var started = false
 
     fun listen(bindAddress: InetAddress, listener: Listener): Pair<Int, Int> {
         // Request room for RTP bursts before binding the receive socket. SO_RCVBUF
         // is a platform hint, so report the value actually granted by this kernel.
         val data = bindAnyPort(bindAddress, AUDIO_RECEIVE_BUFFER_BYTES)
-        onDiagnostic("Audio UDP receive buffer type=$streamType requested=$AUDIO_RECEIVE_BUFFER_BYTES actual=${runCatching { data.receiveBufferSize }.getOrDefault(0)}")
-        val control = bindAnyPort(bindAddress)
+        diagnostic("Audio UDP receive buffer type=$streamType requested=$AUDIO_RECEIVE_BUFFER_BYTES actual=${runCatching { data.receiveBufferSize }.getOrDefault(0)}")
+        val control = try {
+            bindAnyPort(bindAddress)
+        } catch (error: Exception) {
+            data.close()
+            throw error
+        }
         dataSocket = data
         controlSocket = control
+        val kernelStats = Udp6ReceiveDiagnostics(data.localPort, "audio type=$streamType", onDiagnostic)
+        diagnosticsThread = Thread({
+            // Proc reads stay off the urgent audio receiver thread.
+            runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND) }
+            try {
+                while (!closed.get()) {
+                    kernelStats.sample()
+                    Thread.sleep(5_000L)
+                }
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }, "airplay-udp6-stats").apply {
+            isDaemon = true
+            start()
+        }
         dataThread = Thread({ runData(data, listener) }, "airplay-audio-rx").apply {
             isDaemon = true
             start()
@@ -80,6 +103,7 @@ class AudioStream(
         controlSocket?.close()
         dataThread?.interrupt()
         controlThread?.interrupt()
+        diagnosticsThread?.interrupt()
     }
 
     private fun runData(socket: DatagramSocket, listener: Listener) {
@@ -147,11 +171,14 @@ class AudioStream(
                 } catch (error: Exception) {
                     val failureNumber = authenticationFailures.incrementAndGet()
                     if (failureNumber == 1) {
+                        diagnostic("Audio decrypt failed type=$streamType count=$failureNumber error=${error.javaClass.simpleName}")
                         android.util.Log.w(
                             TAG,
                             "audio stream type=$streamType first decrypt failure bytes=$packetLength",
                             error,
                         )
+                    } else if (failureNumber % 128 == 0) {
+                        diagnostic("Audio decrypt failed type=$streamType count=$failureNumber")
                     }
                     if (keepWire) {
                         listener.onPacket(buffer.copyOf(packetLength), null, sample, error)
@@ -190,6 +217,8 @@ class AudioStream(
             }
         } finally {
             stats.flush(ended = true)
+            diagnostic("Audio receive ended type=$streamType received=${receivedPackets.get()} " +
+                "decrypted=${decryptedPackets.get()} decryptFailures=${authenticationFailures.get()}")
         }
     }
 
@@ -208,12 +237,17 @@ class AudioStream(
 
     private fun bindAnyPort(bindAddress: InetAddress, receiveBufferBytes: Int = 0): DatagramSocket {
         val socket = DatagramSocket(null)
-        socket.reuseAddress = true
-        if (receiveBufferBytes > 0) {
-            runCatching { socket.receiveBufferSize = receiveBufferBytes }
+        try {
+            socket.reuseAddress = true
+            if (receiveBufferBytes > 0) {
+                runCatching { socket.receiveBufferSize = receiveBufferBytes }
+            }
+            socket.bind(InetSocketAddress(bindAddress, 0))
+            return socket
+        } catch (error: Exception) {
+            socket.close()
+            throw error
         }
-        socket.bind(InetSocketAddress(bindAddress, 0))
-        return socket
     }
 
     private fun readU32Be(source: ByteArray, offset: Int): Int =
@@ -221,6 +255,10 @@ class AudioStream(
             ((source[offset + 1].toInt() and 0xff) shl 16) or
             ((source[offset + 2].toInt() and 0xff) shl 8) or
             (source[offset + 3].toInt() and 0xff)
+
+    private fun diagnostic(message: String) {
+        runCatching { onDiagnostic(message) }
+    }
 
     private fun ByteArray.toHexString(): String =
         joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }

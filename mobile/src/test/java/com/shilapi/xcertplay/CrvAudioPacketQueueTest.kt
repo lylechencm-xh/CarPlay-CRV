@@ -37,9 +37,13 @@ class CrvAudioPacketQueueTest {
         queue.offer(byteArrayOf(3), 3)
 
         assertEquals(2, queue.size())
+        assertEquals(1L, queue.stats().dropped)
+        assertEquals(2, queue.stats().highWater)
         assertTrue(queue.poll(0, holder))
         assertEquals(2, holder.sample)
         assertTrue(queue.poll(0, holder))
         assertEquals(3, holder.sample)
+        assertEquals(0, queue.stats().depth)
+        assertEquals(1L, queue.stats().dropped)
     }
 }

@@ -357,24 +357,43 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 requestPermission(device)
             }
         }
-        detachReceiver = usbHost.registerDetachReceiver {
+        detachReceiver = usbHost.registerDetachReceiver { detached ->
             if (!awaitingCarPlayReattach) {
                 runOnUiThread {
-                    usbTransitionGeneration.incrementAndGet()
-                    if (controller?.shouldKeepWirelessOnUsbDetach() == true) {
-                        controller?.onUsbDetached()
-                        reportStatus("USB removed; keeping Wi-Fi handoff")
-                        return@runOnUiThread
-                    }
-                    controller?.close(CrvRecoveryTrigger.USB_DETACHED)
-                    controller = null
-                    pendingUsbSession?.close()
-                    pendingUsbSession = null
-                    pendingDevice = null
-                    openCarPlayAfterPermission = false
-                    reconnectAttempts = 0
-                    reconnectGeneration++
-                    connectionError("iPhone disconnected")
+                    val owner = controller
+                    val pending = pendingDevice
+                    val detachedIdentity = usbIdentity(detached)
+                    val activeIdentity = owner?.wiredUsbIdentity ?: pending?.let(::usbIdentity)
+                    diagnostics.log("USB detach broadcast device=${detached.deviceName} id=${detached.deviceId} " +
+                        "active=${activeIdentity?.name} stage=$displayedConnectionStage")
+                    // Allow the legacy UsbManager device list to settle. Never let a delayed
+                    // event close a replacement controller or an unrelated Apple device.
+                    mainHandler.postDelayed({
+                        if (destroyed || awaitingCarPlayReattach || controller !== owner || pendingDevice !== pending) {
+                            return@postDelayed
+                        }
+                        val present = runCatching { usbManager.deviceList.values.map(::usbIdentity) }.getOrNull()
+                        if (!shouldHandleCrvUsbDetach(detachedIdentity, activeIdentity, present)) {
+                            diagnostics.log("USB detach ignored: unrelated device or active enumeration still present")
+                            return@postDelayed
+                        }
+                        diagnostics.log("USB detach accepted inventory=${if (present == null) "unavailable" else "active device absent"}; closing active USB path")
+                        usbTransitionGeneration.incrementAndGet()
+                        if (controller?.shouldKeepWirelessOnUsbDetach() == true) {
+                            controller?.onUsbDetached()
+                            reportStatus("USB removed; keeping Wi-Fi handoff")
+                            return@postDelayed
+                        }
+                        controller?.close(CrvRecoveryTrigger.USB_DETACHED)
+                        controller = null
+                        pendingUsbSession?.close()
+                        pendingUsbSession = null
+                        pendingDevice = null
+                        openCarPlayAfterPermission = false
+                        reconnectAttempts = 0
+                        reconnectGeneration++
+                        connectionError("iPhone disconnected")
+                    }, 300L)
                 }
             } else {
                 reportStatus("iPhone switching USB mode")
@@ -391,6 +410,9 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             requestPermission(device)
         }
     }
+
+    private fun usbIdentity(device: UsbDevice) =
+        CrvUsbIdentity(device.deviceName, device.deviceId, device.vendorId, device.productId)
 
     private fun prepareVpn() {
         val consent = CarPlayVpnService.prepare(this)
@@ -1099,7 +1121,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             else -> return true
         }
 
-        sendTouchSlots()
+        sendTouchSlots(move = event.actionMasked == MotionEvent.ACTION_MOVE)
         return true
     }
 
@@ -1118,7 +1140,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         }
     }
 
-    private fun sendTouchSlots() {
+    private fun sendTouchSlots(move: Boolean = false) {
         controller?.sendTouches(
             x0 = touchSlots.x(0),
             y0 = touchSlots.y(0),
@@ -1126,6 +1148,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             x1 = touchSlots.x(1),
             y1 = touchSlots.y(1),
             down1 = touchSlots.isDown(1),
+            move = move,
         )
     }
 

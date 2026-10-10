@@ -17,6 +17,11 @@ internal class CrvAudioPacketQueue(private val capacity: Int) {
     private val samples = IntArray(capacity)
     private var head = 0
     private var size = 0
+    private var dropped = 0L
+    private var highWater = 0
+
+    data class Stats(val depth: Int, val highWater: Int, val dropped: Long)
+    fun stats(): Stats = synchronized(lock) { Stats(size, highWater, dropped) }
 
     init {
         require(capacity > 0)
@@ -25,6 +30,7 @@ internal class CrvAudioPacketQueue(private val capacity: Int) {
     fun offer(rtp: ByteArray, sample: Int) {
         synchronized(lock) {
             if (size == capacity) {
+                dropped++
                 packets[head] = null
                 head = (head + 1) % capacity
                 size--
@@ -33,6 +39,7 @@ internal class CrvAudioPacketQueue(private val capacity: Int) {
             packets[tail] = rtp
             samples[tail] = sample
             size++
+            highWater = maxOf(highWater, size)
             lock.notify()
         }
     }

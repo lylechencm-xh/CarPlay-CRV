@@ -8,16 +8,15 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Small API19-safe field log for in-car testing.
+ * API17-safe categorized field log with a shared event timeline.
  *
- * Only stage/status messages are recorded. MFi private keys, certificates, Lockdown keys and
- * raw protocol payloads are never written here.
+ * Sensitive diagnostics are redacted before any destination is written.
  */
 class CrvDiagnostics(context: Context) : Closeable {
     private val lock = Any()
     private val directory = context.getExternalFilesDir(null) ?: context.filesDir
     private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
-    private val storage = CrvLogStorage(directory, File(directory, uniqueSessionFileName(context)))
+    private val storage = CrvCategorizedLogStorage(directory, File(directory, uniqueSessionFileName(context)))
     private var lastLine: String? = null
     private var lastLineAtMillis: Long = 0L
     private val startedAtMillis = android.os.SystemClock.elapsedRealtime()
@@ -33,6 +32,8 @@ class CrvDiagnostics(context: Context) : Closeable {
 
     fun log(message: String) {
         val safe = sanitize(message)
+        val category = CrvLogCategory.classify(message)
+        val failure = CrvLogCategory.isFailure(message)
         synchronized(lock) {
             val now = android.os.SystemClock.elapsedRealtime()
             if (safe == lastLine && now - lastLineAtMillis < DEDUPE_WINDOW_MILLIS) return
@@ -46,6 +47,9 @@ class CrvDiagnostics(context: Context) : Closeable {
                         "  #" + sequence +
                         " +" + elapsed + "ms  " +
                         safe,
+                    category = category,
+                    failure = failure,
+                    overviewEvent = CrvLogCategory.includeInOverview(category, message, failure),
                 )
             } catch (_: Exception) {
                 // Diagnostics must never stop CarPlay bring-up.
@@ -86,6 +90,8 @@ class CrvDiagnostics(context: Context) : Closeable {
             "challenge=",
             "signature=",
             "password=",
+            "passphrase=",
+            "presharedkey=",
             "token=",
         )
         if (sensitiveWords.any { value.contains(it, ignoreCase = true) }) {

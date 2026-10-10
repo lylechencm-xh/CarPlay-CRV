@@ -2,6 +2,50 @@
 
 Add future CR-V changes after 0.2.27 here.
 
+- Clone hotspot backups through the API17 Parcelable surface instead of the API30 public
+  WifiConfiguration copy constructor; verify the copied settings before changing vehicle Wi-Fi.
+
+- Read AirPlay iAP/video-settings control streams one authenticated frame at a time and reuse
+  bounded package buffers, avoiding repeated TCP-tail/package concatenation. Reject invalid
+  lengths and truncated messages; enable TCP_NODELAY for settings replies.
+
+- Store CR-V detailed diagnostics under logs/connection, network, audio, video, touch, wireless,
+  system, protocol and errors with independent rotation. Keep the root log as an event overview;
+  duplicate failures into errors and preserve identical timestamps/sequence numbers across files.
+
+- Retry temporary NCM write unavailability with 1–20 ms adaptive backoff instead of a fixed
+  100 ms pause, retaining the same outbound frame and existing terminal failure bounds.
+- Retry explicitly transient TUN write congestion in order with a five-second bound; prioritize
+  userspace bridge workers without promoting them above urgent audio processing.
+- Display only the latest available decoded video output in a drain batch, releasing older
+  display buffers while preserving compressed reference-frame decoding.
+
+- Move CR-V touch event encryption/socket writes off the UI thread, coalesce consecutive pending
+  movement reports, preserve normal gesture edges, and bound stalled input history with a
+  release/resynchronize fallback. Report touch queue and send timing for hardware diagnosis.
+
+- Advertise the available head-unit Bluetooth adapter address in CarPlay's bluetoothIDs instead
+  of the generated accessory/NCM device ID, keeping the two identities distinct for phone-side
+  association. OEM HandsFreeLink call coordination still requires vehicle validation.
+
+- Lower music gain to 20% during decoded navigation/prompt speech (including legacy type-101
+  default streams), restore it after a short speech tail with a smooth gain transition, and
+  handle duckAudio/unduckAudio commands without multiplying the two attenuation reasons.
+
+- Check the active iPhone's USB enumeration identity and settled device inventory before acting
+  on detach broadcasts; prevent unrelated or stale Apple detach events closing CarPlay.
+
+- Bind the API17 microphone uplink to the AirPlay session's local address (preserving IPv6
+  scope), close failed socket allocations, and report the failing setup phase and cause.
+- Distinguish Honda hotspot states, confirm stop and restoration requests, and retain failed
+  restoration backups in process for retry before another hotspot attempt.
+- Verify restored hotspot settings by reading them back, wait for station state transitions,
+  and allow eight seconds for hotspot shutdown, covering the legacy tether shutdown timeout.
+- Sample UDP6 kernel errors and per-socket drops on a background thread; distinguish unavailable
+  counters and system-wide traffic from this audio socket's loss.
+- Export NCM/TUN transfer timing, audio playback queue drops and write timing, and audio
+  decryption failure totals to distinguish receive-path loss from playback starvation.
+
 - Classify Honda `link_iap_adapter` as an iAP session transport rather than an MFi
   certificate/signature service, report the factory MediaCore/Jungo route and `/dev/jdev`
   access, and avoid repeating the full Honda platform scan at every connection milestone.

@@ -9,6 +9,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NcmPendingFrameSenderTest {
+    @Test fun shortBackpressureUsesFastRetryAndResetsDelayForTheNextFrame() {
+        val pauses = mutableListOf<Long>()
+        var attempts = 0
+        val sender = NcmPendingFrameSender(
+            transmit = { if (++attempts % 8 == 0) NcmWriteResult.SENT else NcmWriteResult.NOT_READY },
+            isRunning = { true },
+            pause = { pauses += it },
+        )
+        assertTrue(sender.send(byteArrayOf(1)))
+        assertTrue(sender.send(byteArrayOf(2)))
+        val expected = listOf(1L, 2L, 4L, 8L, 16L, 20L, 20L).map { it * 1_000_000 }
+        assertEquals(expected + expected, pauses)
+    }
     @Test fun retriesTheSameFrameUntilUsbAcceptsIt() {
         val frame = byteArrayOf(1, 2, 3)
         val attempts = mutableListOf<ByteArray>()

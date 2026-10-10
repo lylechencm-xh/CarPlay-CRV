@@ -1,6 +1,7 @@
 package com.shilapi.xcertplay.airplay
 
 import java.io.Closeable
+import java.io.BufferedInputStream
 import java.io.OutputStream
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -24,7 +25,6 @@ class VideoSettingsChannel(
     private val closed = AtomicBoolean(false)
     private var server: ServerSocket? = null
     private var socket: Socket? = null
-    private var readCounter = 0L
     private var writeCounter = 0L
 
     fun listen(bindAddress: InetAddress): Int {
@@ -41,6 +41,11 @@ class VideoSettingsChannel(
         try {
             val accepted = bound.accept()
             socket = accepted
+            if (closed.get()) {
+                accepted.close()
+                return
+            }
+            runCatching { accepted.tcpNoDelay = true }
             log("video settings channel connected")
             run(accepted)
         } catch (error: Exception) {
@@ -51,41 +56,21 @@ class VideoSettingsChannel(
     }
 
     private fun run(sock: Socket) {
-        val input = sock.getInputStream()
+        val input = BufferedInputStream(sock.getInputStream(), 16 * 1024)
         val output = sock.getOutputStream()
-        val buffer = ByteArray(16 * 1024)
-        var ciphertext = ByteArray(0)
-        var plaintext = ByteArray(0)
+        val opener = AirPlayChaChaOpener(readKey)
+        val nonce = ByteArray(12)
+        val frames = AirPlayDataStreamReader { counter, aad, sealed, length ->
+            opener.open(AirPlayCrypto.nonce64(counter, nonce), sealed, length = length, aad = aad)
+        }
+        val packages = AirPlayPackageBuffer(MAX_PACKAGE)
         while (!closed.get()) {
-            val read = input.read(buffer)
-            if (read < 0) return
-            ciphertext += buffer.copyOf(read)
-            var offset = 0
-            while (ciphertext.size - offset >= 2) {
-                val length = (ciphertext[offset].toInt() and 0xff) or ((ciphertext[offset + 1].toInt() and 0xff) shl 8)
-                val frame = 2 + length + TAG
-                if (ciphertext.size - offset < frame) break
-                val aad = ciphertext.copyOfRange(offset, offset + 2)
-                plaintext += AirPlayCrypto.chachaOpen(
-                    readKey, AirPlayCrypto.nonce64(readCounter++), ciphertext.copyOfRange(offset + 2, offset + frame), aad,
-                )
-                offset += frame
+            val plaintext = frames.read(input) ?: break
+            packages.append(plaintext) { buffer, _ ->
+                if (ascii(buffer, 4, 12) == "sync") reply(output, buffer.copyOfRange(20, 28))
             }
-            ciphertext = ciphertext.copyOfRange(offset, ciphertext.size)
-            plaintext = handlePackages(plaintext, output)
         }
-    }
-
-    private fun handlePackages(buffer: ByteArray, output: OutputStream): ByteArray {
-        var offset = 0
-        while (buffer.size - offset >= HEADER) {
-            val size = u32(buffer, offset)
-            if (size < HEADER || size > MAX_PACKAGE) throw IllegalStateException("bad package size $size")
-            if (buffer.size - offset < size) break
-            if (ascii(buffer, offset + 4, 12) == "sync") reply(output, buffer.copyOfRange(offset + 20, offset + 28))
-            offset += size
-        }
-        return buffer.copyOfRange(offset, buffer.size)
+        if (!closed.get()) packages.finish()
     }
 
     private fun reply(output: OutputStream, seq: ByteArray) {
@@ -105,16 +90,11 @@ class VideoSettingsChannel(
         runCatching { server?.close() }
     }
 
-    private fun u32(b: ByteArray, o: Int) =
-        ((b[o].toInt() and 0xff) shl 24) or ((b[o + 1].toInt() and 0xff) shl 16) or
-            ((b[o + 2].toInt() and 0xff) shl 8) or (b[o + 3].toInt() and 0xff)
-
     private fun ascii(b: ByteArray, o: Int, n: Int) =
         String(b.copyOfRange(o, o + n), Charsets.US_ASCII).trimEnd('\u0000')
 
     private companion object {
         const val HEADER = 32
-        const val TAG = 16
         const val MAX_PACKAGE = 8 * 1024 * 1024
     }
 }

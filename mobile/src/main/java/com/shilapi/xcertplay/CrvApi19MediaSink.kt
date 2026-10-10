@@ -60,6 +60,7 @@ class CrvApi19MediaSink(
     private val recoveryHandlers = ConcurrentHashMap<Int, () -> Unit>()
     private val diagnosticHandlers = ConcurrentHashMap<Int, (String) -> Unit>()
     private val audioRenderers = ConcurrentHashMap<AudioStreamId, LegacyAudioRenderer>()
+    private val audioDucking = CrvAudioDucking()
     private val microphones = ConcurrentHashMap<AudioStreamId, CrvApi19MicrophoneUplink>()
 
     override fun setVideoRecoveryHandler(type: Int, handler: () -> Unit) {
@@ -118,7 +119,14 @@ class CrvApi19MediaSink(
         if (closed.get()) return
         ensureAudioFocus()
         audioRenderers.remove(id)?.close()
-        LegacyAudioRenderer(format, report).also {
+        val isMusic = CrvAudioDucking.isMusic(id.type, id.audioType)
+        val isPrompt = CrvAudioDucking.isPrompt(id.type, id.audioType)
+        LegacyAudioRenderer(format, report,
+            gain = { if (isMusic) audioDucking.mediaGain() else 1f },
+            voicePcm = { bytes, offset, count ->
+                if (isPrompt) audioDucking.voicePcm(bytes, offset, count)
+            },
+        ).also {
             audioRenderers[id] = it
             it.start()
         }
@@ -131,6 +139,12 @@ class CrvApi19MediaSink(
     override fun onAudioStopped(id: AudioStreamId) {
         audioRenderers.remove(id)?.close()
         if (audioRenderers.isEmpty()) abandonAudioFocus()
+    }
+
+    override fun onAudioDuckingChanged(duck: Boolean) {
+        if (closed.get()) return
+        audioDucking.command(duck)
+        report("Audio music duck command=$duck")
     }
 
     override fun onMicrophoneStarted(id: AudioStreamId, config: MicrophoneConfig) {
@@ -147,6 +161,7 @@ class CrvApi19MediaSink(
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        audioDucking.reset()
         val decoders = synchronized(videoLock) {
             outputSurface = null
             videoDecoders.values.toList().also { videoDecoders.clear() }
@@ -426,27 +441,38 @@ class CrvApi19MediaSink(
             }
         }
 
+        private val decodedVideoOutput = CrvDecodedVideoOutput { index, render ->
+            decoder?.releaseOutputBuffer(index, render)
+            if (render && !firstRendered) {
+                firstRendered = true
+                diagnostic("first frame rendered")
+            }
+        }
+        private var videoOutputStatsAtNs = System.nanoTime()
+
         private fun drain() {
             val codec = decoder ?: return
             try {
                 while (running.get()) {
                     val index = codec.dequeueOutputBuffer(outputInfo, 0L)
                     when {
-                        index == MediaCodec.INFO_TRY_AGAIN_LATER -> return
+                        index == MediaCodec.INFO_TRY_AGAIN_LATER -> break
                         index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> Unit
                         index == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> Unit
                         index >= 0 -> {
-                            val render = !waitingForKeyFrame
-                            codec.releaseOutputBuffer(index, render)
-                            if (render && !firstRendered) {
-                                firstRendered = true
-                                diagnostic("first frame rendered")
-                            }
+                            decodedVideoOutput.offer(index)
                         }
-                        else -> return
+                        else -> break
                     }
                 }
+                decodedVideoOutput.finish(render = !waitingForKeyFrame && running.get())
+                val now = System.nanoTime()
+                if (now - videoOutputStatsAtNs >= 5_000_000_000L) {
+                    diagnostic("decoded output staleSkippedTotal=${decodedVideoOutput.discardedTotal}")
+                    videoOutputStatsAtNs = now
+                }
             } catch (error: Exception) {
+                decodedVideoOutput.reset()
                 recover("video output failed: ${error.javaClass.simpleName}")
             }
         }
@@ -508,6 +534,8 @@ class CrvApi19MediaSink(
     private class LegacyAudioRenderer(
         private val format: AudioFormat,
         private val report: (String) -> Unit,
+        private val gain: () -> Float,
+        private val voicePcm: (ByteArray, Int, Int) -> Unit,
     ) : Closeable {
         private val queue = CrvAudioPacketQueue(AUDIO_QUEUE_CAPACITY)
         private val packetHolder = CrvAudioPacketQueue.MutablePacket()
@@ -535,6 +563,11 @@ class CrvApi19MediaSink(
         private var lastPcmWriteNs = 0L
         private var rebufferCount = 0
         private var rebuffering = false
+        private var statsAtNs = System.nanoTime()
+        private var maxWriteNs = 0L
+        private var appliedGain = 1f
+        private var gainAtNs = System.nanoTime()
+        private var reportedDuck = false
 
         fun start() {
             if (started) return
@@ -568,6 +601,7 @@ class CrvApi19MediaSink(
                 // Prime MODE_STREAM before play(); starting an empty track produces an
                 // immediate underrun on this older audio stack.
                 while (running.get()) {
+                    updateGain()
                     if (queue.poll(20L, packetHolder)) {
                         val rtp = packetHolder.rtp
                         if (rtp != null) handle(rtp, packetHolder.sample)
@@ -575,12 +609,14 @@ class CrvApi19MediaSink(
                     }
                     drainDecoder()
                     maintainPlaybackBuffer()
+                    reportAudioStats()
                 }
             } catch (_: InterruptedException) {
                 // Normal shutdown.
             } catch (error: Exception) {
                 report("Audio renderer failed: ${error.javaClass.simpleName}")
             } finally {
+                reportAudioStats(ended = true)
                 release()
             }
         }
@@ -648,6 +684,7 @@ class CrvApi19MediaSink(
                 return
             }
             track = audio
+            updateGain(immediate = true)
             val plannedPrimeBytes = bytesPerSecond * primeMillis / 1000
             val safePrimeLimit = (selectedBufferBytes * 3 / 4).coerceAtLeast(frameBytes)
             primeTargetBytes = minOf(plannedPrimeBytes, safePrimeLimit).coerceAtLeast(frameBytes)
@@ -887,11 +924,18 @@ class CrvApi19MediaSink(
         ) {
             val audio = track ?: return
             if (byteOffset < 0 || byteCount <= 0 || byteOffset + byteCount > bytes.size) return
+            voicePcm(bytes, byteOffset, byteCount)
+            updateGain()
             var offset = 0
             while (offset < byteCount && running.get()) {
+                val writeStartNs = System.nanoTime()
                 @Suppress("DEPRECATION")
                 val written = audio.write(bytes, byteOffset + offset, byteCount - offset)
-                if (written <= 0) return
+                maxWriteNs = maxOf(maxWriteNs, System.nanoTime() - writeStartNs)
+                if (written <= 0) {
+                    if (running.get()) report("Audio write failed type=${format.audioType} code=$written")
+                    return
+                }
                 offset += written
                 bufferProgress.written(written)
                 lastPcmWriteNs = System.nanoTime()
@@ -904,6 +948,39 @@ class CrvApi19MediaSink(
                     }
                 }
             }
+        }
+
+        @Suppress("DEPRECATION")
+        private fun updateGain(immediate: Boolean = false) {
+            val audio = track ?: return
+            val target = gain()
+            val now = System.nanoTime()
+            val step = ((now - gainAtNs).coerceAtLeast(0L) / 150_000_000.0).toFloat()
+            gainAtNs = now
+            val next = if (immediate) target else if (target < appliedGain) {
+                maxOf(target, appliedGain - step)
+            } else minOf(target, appliedGain + step)
+            if (immediate || next != appliedGain) {
+                val result = audio.setStereoVolume(next, next)
+                if (result == AudioTrack.SUCCESS) appliedGain = next
+                else if (immediate) report("Audio volume rejected type=${format.audioType} code=$result")
+            }
+            val duck = target < 1f
+            if (duck != reportedDuck) {
+                reportedDuck = duck
+                runCatching { report("Audio music duck=$duck target=$target type=${format.audioType}") }
+            }
+        }
+
+        private fun reportAudioStats(ended: Boolean = false) {
+            val now = System.nanoTime()
+            if (!ended && now - statsAtNs < 5_000_000_000L) return
+            val stats = queue.stats()
+            runCatching { report("Audio playback type=${format.audioType} queueDepth=${stats.depth} " +
+                "queueHighWater=${stats.highWater} droppedTotal=${stats.dropped} " +
+                "writeMaxUs=${maxWriteNs / 1000} rebufferTotal=$rebufferCount ended=$ended") }
+            maxWriteNs = 0L
+            statsAtNs = now
         }
 
         private fun maintainPlaybackBuffer() {
