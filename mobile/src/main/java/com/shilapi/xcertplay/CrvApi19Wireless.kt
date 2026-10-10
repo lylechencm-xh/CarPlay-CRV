@@ -309,6 +309,7 @@ internal class CrvApi19BonjourAdvertiser(
 }
 
 enum class CrvConnectionMode {
+    AUTO,
     WIRED,
     WIFI_HANDOFF,
 }

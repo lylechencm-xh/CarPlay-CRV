@@ -60,6 +60,19 @@ class Iap2WirelessLinkRoleTest {
         assertTrue(Iap2VehicleStatus.START_VEHICLE_STATUS_UPDATES in received)
     }
 
+    @Test
+    fun autoIdentificationKeepsUsbAndWirelessTransportDeclarations() {
+        val parameters = identificationParameters(
+            full.copy(wireless = wireless, wiredAndWireless = true),
+        )
+        val sent = u16Values(parameters.first(6)!!.payload)
+
+        assertTrue(parameters.first(16) != null) // USB host transport
+        assertTrue(parameters.first(17) != null) // Bluetooth pairing transport
+        assertTrue(parameters.first(24) != null) // Wi-Fi CarPlay component
+        assertTrue(0x5703 in sent) // Accessory Wi-Fi configuration
+    }
+
     private fun identificationParameters(config: Iap2IdentificationConfig) =
         Iap2ParameterList.parse(Iap2IdentificationClient.identificationInformation(config).payload)
 

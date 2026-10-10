@@ -56,7 +56,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private val progressDots = mutableListOf<TextView>()
     private lateinit var diagnostics: CrvDiagnostics
     private lateinit var modeButton: TextView
-    private var connectionMode = CrvConnectionMode.WIRED
+    private var connectionMode = CrvConnectionMode.AUTO
     @Volatile private var homeVisible = true
     @Volatile private var manualDisconnect = false
     private val touchSlots = CrvTouchSlotState()
@@ -89,6 +89,20 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private lateinit var runtimeSnapshotProbe: CrvRuntimeSnapshotProbe
     private val snapshotReasons = HashSet<String>()
 
+    override fun onResume() {
+        super.onResume()
+        if (::diagnostics.isInitialized) {
+            diagnostics.log("CarPlay activity resumed stage=$displayedConnectionStage")
+        }
+    }
+
+    override fun onPause() {
+        if (::diagnostics.isInitialized) {
+            diagnostics.log("CarPlay activity paused stage=$displayedConnectionStage")
+        }
+        super.onPause()
+    }
+
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
 
@@ -105,7 +119,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         }
 
         modeButton = TextView(this).apply {
-            text = "USB connection"
+            text = "Auto: USB first"
             setTextColor(Color.WHITE)
             textSize = 14f
             gravity = Gravity.CENTER
@@ -113,15 +127,15 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             setPadding(dp(18), dp(12), dp(18), dp(12))
             isFocusable = true
             setOnClickListener {
-                connectionMode = if (connectionMode == CrvConnectionMode.WIRED) {
-                    CrvConnectionMode.WIFI_HANDOFF
-                } else {
-                    CrvConnectionMode.WIRED
+                connectionMode = when (connectionMode) {
+                    CrvConnectionMode.AUTO -> CrvConnectionMode.WIFI_HANDOFF
+                    CrvConnectionMode.WIFI_HANDOFF -> CrvConnectionMode.WIRED
+                    CrvConnectionMode.WIRED -> CrvConnectionMode.AUTO
                 }
-                text = if (connectionMode == CrvConnectionMode.WIFI_HANDOFF) {
-                    "Wi-Fi test mode"
-                } else {
-                    "USB connection"
+                text = when (connectionMode) {
+                    CrvConnectionMode.AUTO -> "Auto: USB first"
+                    CrvConnectionMode.WIFI_HANDOFF -> "Wi-Fi test mode"
+                    CrvConnectionMode.WIRED -> "USB connection"
                 }
                 controller?.close()
                 controller = null
@@ -310,6 +324,22 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         }
 
         attachReceiver = usbHost.registerAttachReceiver { device ->
+            if (controller?.isAutoWirelessAfterUsbDetach() == true) {
+                runOnUiThread {
+                    val previous = controller
+                    controller = null
+                    previous?.close()
+                    pendingUsbSession?.close()
+                    pendingUsbSession = null
+                    pendingDevice = null
+                    manualDisconnect = false
+                    reconnectAttempts = 0
+                    reconnectGeneration++
+                    beginConnectionStatus("USB reattached; restoring wired CarPlay")
+                    requestPermission(device)
+                }
+                return@registerAttachReceiver
+            }
             if (controller?.shouldKeepWirelessOnUsbDetach() == true) {
                 reportStatus("USB attached; continuing Wi-Fi CarPlay")
                 return@registerAttachReceiver
@@ -332,6 +362,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 runOnUiThread {
                     usbTransitionGeneration.incrementAndGet()
                     if (controller?.shouldKeepWirelessOnUsbDetach() == true) {
+                        controller?.onUsbDetached()
                         reportStatus("USB removed; keeping Wi-Fi handoff")
                         return@runOnUiThread
                     }
@@ -889,6 +920,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             CrvConnectionStage.IDLE ->
                 HOME_READY_TITLE to if (connectionMode == CrvConnectionMode.WIFI_HANDOFF) {
                     "Connect iPhone by USB. Wi-Fi takes over after CarPlay starts."
+                } else if (connectionMode == CrvConnectionMode.AUTO) {
+                    "Connect iPhone by USB. Wi-Fi is prepared for cable removal when available."
                 } else {
                     HOME_READY_BODY
                 }
@@ -921,6 +954,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             CrvConnectionStage.CARPLAY_ACTIVE ->
                 "CarPlay is ready" to if (connectionMode == CrvConnectionMode.WIFI_HANDOFF) {
                     "You can unplug USB and continue over Wi-Fi."
+                } else if (connectionMode == CrvConnectionMode.AUTO) {
+                    "USB is active. If Wi-Fi is ready, unplugging switches to wireless."
                 } else {
                     "Your iPhone is on the display."
                 }

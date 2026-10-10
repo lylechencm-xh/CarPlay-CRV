@@ -27,4 +27,36 @@ class Iap2WiredControlClientTest {
         assertEquals(0, addresses.single().id)
         assertArrayEquals("fe80::2\u0000".encodeToByteArray(), addresses.single().payload)
     }
+
+    @Test
+    fun autoStartSessionAdvertisesBothWorkingEndpointsOnOnePort() {
+        val frame = Iap2WiredControlClient.carPlayStartSession(
+            Iap2WiredCarPlayEndpoint(
+                ipv6Addresses = listOf("fe80::2"),
+                airPlayPort = 7000,
+                publicKey = "abcd",
+                sourceVersion = "1.0",
+            ),
+            Iap2WirelessCarPlayEndpoint(
+                ssid = "CRV-CarPlay",
+                passphrase = "12345678",
+                channel = 6,
+                security = Iap2WirelessSecurity.WPA_WPA2,
+                ipAddresses = listOf("192.168.43.1"),
+                airPlayPort = 7000,
+                deviceIdentifier = "02:00:00:00:00:02",
+                publicKey = "abcd",
+                sourceVersion = "1.0",
+            ),
+        )
+
+        val parameters = Iap2BodyReader.of(frame).list()
+        assertEquals(1, parameters.count { it.id == 0 })
+        assertEquals(1, parameters.count { it.id == 1 })
+        assertArrayEquals("fe80::2\u0000".encodeToByteArray(),
+            Iap2ParameterList.parse(parameters.single { it.id == 0 }.payload).asList().single().payload)
+        val wireless = Iap2ParameterList.parse(parameters.single { it.id == 1 }.payload).asList()
+        assertArrayEquals("192.168.43.1\u0000".encodeToByteArray(),
+            wireless.single { it.id == 3 }.payload)
+    }
 }

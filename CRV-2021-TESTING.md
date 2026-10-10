@@ -8,7 +8,7 @@ This branch targets the 2021 Honda CR-V head unit running Android 4.2.2 / API17.
 - Version code: `47`
 - Package: `com.shihab.diplay`
 - Commit: use the APK artifact built from the commit being tested
-- Primary mode: wired USB CarPlay
+- Primary mode: Auto (USB first, Wi-Fi prepared when supported)
 
 The earlier `v0.2.27-crv-api17` release does not contain the current NCM changes.
 
@@ -24,9 +24,26 @@ navigation. The exported log for that session was empty, so this observation is 
 vehicle screen rather than a protocol trace. Audio, microphone, touch and long-term stability
 remain to be tested separately.
 
-## Experimental Wi-Fi handoff
+## Automatic USB / Wi-Fi switching (experimental)
 
-The home screen now offers **Mode: USB / Mode: Wi-Fi handoff**. Wireless mode first
+The default **Auto: USB first** mode starts wired CarPlay and, when the Honda
+firmware permits, prepares a temporary Wi-Fi hotspot and a second AirPlay listener.
+The iPhone must receive the Wi-Fi configuration before USB removal. Disconnecting
+USB then retires the wired NCM/VPN path while the Wi-Fi listener waits up to 45
+seconds for a wireless CarPlay session. Reconnecting USB closes that attempt and
+starts a new wired session. If hotspot setup or dual listener binding fails, Auto
+continues on USB only; use the session log to check which path was prepared.
+
+Test in this order: establish wired video/audio/touch, verify the log records
+`iap2 tx=0x5703`, unplug USB and verify wireless video/audio/touch, then reconnect
+USB and verify wired video/audio/touch. Repeat while a call is incoming and after
+sending a WeChat voice message. Capture the log and visible status if any step
+fails. This source build has not yet been accepted on the target car for automatic
+switching; the iPhone may require a fresh session during the transition.
+
+## Standalone experimental Wi-Fi handoff
+
+The home screen also offers **USB connection / Wi-Fi test mode**. Wireless mode first
 uses the USB cable for Lockdown/iAP2 pairing and MFi authentication. The app starts
 a temporary WPA2 hotspot with a random per-attempt password, sends its details to
 the iPhone, and listens for AirPlay on the hotspot address. Leave USB connected

@@ -50,7 +50,12 @@ object AirPlayInfoPlist {
         )
         if (!config.disableAudioOutput) {
             info["audioLatencies"] = audioLatencies(config.mediaBufferMillis)
-            info["audioFormats"] = audioFormats(config.entertainmentSampleRate, config.microphone, config.opus)
+            info["audioFormats"] = audioFormats(
+                config.entertainmentSampleRate,
+                config.microphone,
+                config.opus,
+                config.highFidelityMediaOutput,
+            )
         }
         info["extendedFeatures"] = listOf("vocoderInfo", "enhancedRequestCarUI")
         info["displays"] = displays
@@ -122,6 +127,7 @@ object AirPlayInfoPlist {
         entertainmentRate: Int,
         microphone: Boolean,
         opusEnabled: Boolean,
+        highFidelityMediaOutput: Boolean,
     ): List<Map<String, Any?>> {
         fun format(type: Int, audioType: String, outputFormats: Int, inputFormats: Int? = null): Map<String, Any?> {
             val entry = linkedMapOf<String, Any?>(
@@ -147,7 +153,9 @@ object AirPlayInfoPlist {
             format(101, "compatibility", pcm),
             format(100, "default", pcm or opus, wirelessInput),
             format(100, "alert", pcm or opus),
-            format(100, "media", pcm),
+            format(100, "media", if (highFidelityMediaOutput) {
+                if (is48) 0x8000 else 0x800
+            } else pcm),
             format(100, "telephony", pcmMono or opus, wirelessInput),
             format(100, "speechRecognition", pcmMono or opus, wirelessInput),
             format(101, "default", pcm or opus),

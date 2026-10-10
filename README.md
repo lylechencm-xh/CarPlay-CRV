@@ -11,7 +11,7 @@
 - 包名：`com.shihab.diplay`
 - 主要功能模块：USB、USBMUX、Lockdown、iAP2/MFi、CDC-NCM、AirPlay、音视频与触控
 
-> **车机实测正常：** 2026-10-09 在 2021 款 CR-V 上，有线 CarPlay 正常连接，导航画面在车机上正常显示。音频、麦克风、触控和长时间稳定性仍需分别验证。无线 CarPlay 默认未启用。
+> **车机实测正常：** 2026-10-09 在 2021 款 CR-V 上，有线 CarPlay 正常连接，导航画面在车机上正常显示。音频、麦克风、触控和长时间稳定性仍需分别验证。当前默认 Auto 模式会尝试为拔线后的无线切换做准备；自动切换尚未完成实车验收。
 
 ![2021 款 CR-V 车机有线 CarPlay 导航实测画面](asset/crv-2021-wired-carplay-test-2026-10-09.png)
 
@@ -29,7 +29,7 @@ APK 输出：`mobile/build/outputs/apk/debug/mobile-debug.apk`。也可从 [GitH
 
 发生故障时，请保留 `carplay-crv-*.log`、APK 版本、iPhone/iOS 版本和故障现象。日志通常位于 `/sdcard/Android/data/com.shihab.diplay/files/`；分享前请脱敏。
 
-详细说明：[构建指南](docs/BUILD.md) · [实车测试清单](CRV-2021-TESTING.md)
+详细说明：[代码导览](docs/CODEBASE-GUIDE.zh-CN.md) · [构建指南](docs/BUILD.md) · [实车测试清单](CRV-2021-TESTING.md)
 
 > **免责声明：本项目仅供测试、学习与交流使用，请勿用于商业用途。**
 
@@ -44,7 +44,7 @@ CarPlay adaptation project for the **2021 Honda CR-V**, based on [DiPlay](https:
 - Package: `com.shihab.diplay`
 - Main components: USB, USBMUX, Lockdown, iAP2/MFi, CDC-NCM, AirPlay, video, audio, and touch input
 
-> **Vehicle test passed:** On 2026-10-09, wired CarPlay connected normally on a 2021 CR-V and displayed navigation on the head unit. Audio, microphone, touch input, and long-term stability still need separate verification. Wireless CarPlay is not enabled by default.
+> **Vehicle test passed:** On 2026-10-09, wired CarPlay connected normally on a 2021 CR-V and displayed navigation on the head unit. Audio, microphone, touch input, and long-term stability still need separate verification. Auto mode now prepares Wi-Fi handoff when available; automatic switching still needs vehicle testing.
 
 ![Wired CarPlay navigation displayed on a 2021 CR-V head unit](asset/crv-2021-wired-carplay-test-2026-10-09.png)
 
@@ -62,7 +62,7 @@ APK output: `mobile/build/outputs/apk/debug/mobile-debug.apk`. Alternatively, do
 
 If a connection fails, keep the `carplay-crv-*.log` file and note the APK version, iPhone/iOS version, and symptoms. Logs are typically under `/sdcard/Android/data/com.shihab.diplay/files/`. Remove sensitive data before sharing.
 
-More details: [Build Guide](docs/BUILD.md) · [Vehicle Testing Checklist](CRV-2021-TESTING.md)
+More details: [Codebase Guide (Chinese)](docs/CODEBASE-GUIDE.zh-CN.md) · [Build Guide](docs/BUILD.md) · [Vehicle Testing Checklist](CRV-2021-TESTING.md)
 
 > **Disclaimer: For testing, learning, and educational exchange only. Not for commercial use.**
 

@@ -26,6 +26,13 @@ internal fun isCrvUiDiagnostic(message: String): Boolean =
 
 internal fun isCrvConnectionError(message: String): Boolean {
     val value = message.lowercase(java.util.Locale.US)
+    // These describe an in-progress handshake or an expected retry transition. The field logs
+    // include "timeoutMs" and "stopped" in them even when no failure has occurred yet.
+    if (value.startsWith("iap2 awaiting ")) return false
+    if (value.startsWith("controller state stopping -> stopped reason=stopped")) return false
+    if (value.startsWith("honda cdc-ncm fallback blocked ") ||
+        value.startsWith("honda cdc-ncm fallback escalating ")) return false
+    if (value.startsWith("iap2 wired control ended terminal=timed_out")) return true
     if ("mfi identity missing" in value) return true
     return CRV_CONNECTION_ERROR_MARKERS.any(value::contains)
 }
@@ -70,6 +77,7 @@ private val CRV_CONNECTION_ERROR_MARKERS = listOf(
     "timeout",
     "stopped",
     "disconnected",
+    "detached",
     "rejected",
     "could not",
 )

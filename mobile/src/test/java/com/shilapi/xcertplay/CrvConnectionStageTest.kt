@@ -32,6 +32,25 @@ class CrvConnectionStageTest {
     }
 
     @Test
+    fun handshakeProgressAndRecoveredNcmFallbackAreNotErrors() {
+        assertEquals(false, isCrvConnectionError("iap2 awaiting AirPlay session timeoutMs=60000"))
+        assertEquals(false, isCrvConnectionError("iap2 awaiting CarPlay availability timeoutMs=60000"))
+        assertEquals(false, isCrvConnectionError("Controller state STOPPING -> STOPPED reason=stopped"))
+        assertEquals(false, isCrvConnectionError("Honda CDC-NCM fallback blocked classification=usb-interface-resource-conflict"))
+        assertEquals(false, isCrvConnectionError("Honda CDC-NCM fallback escalating policy=PRESERVE_KERNEL_DRIVER -> DETACH_KERNEL_DRIVER"))
+    }
+
+    @Test
+    fun actualHandshakeTimeoutAndUsbDetachRemainErrors() {
+        assertEquals(
+            true,
+            isCrvConnectionError("iAP2 wired control ended terminal=TIMED_OUT stage=CARPLAY_START_SENT"),
+        )
+        assertEquals(true, isCrvConnectionError("CarPlay handshake timed out stage=CARPLAY_START_SENT"))
+        assertEquals(true, isCrvConnectionError("iPhone USB detached during NCM read"))
+    }
+
+    @Test
     fun lowLevelIap2MessagesDoNotRegressAirPlayProgress() {
         assertEquals(
             CrvConnectionStage.AIRPLAY_LISTENING,

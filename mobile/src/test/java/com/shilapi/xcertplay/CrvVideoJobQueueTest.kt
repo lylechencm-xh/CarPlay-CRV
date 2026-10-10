@@ -83,4 +83,41 @@ class CrvVideoJobQueueTest {
         assertEquals(2, backlog.pendingFrames)
         assertEquals(20L, backlog.newestPendingReceivedNs)
     }
+
+    @Test
+    fun backpressuredFrameReturnsBeforeNewerFramesAndKeepsByteCount() {
+        val queue = CrvVideoJobQueue(capacity = 3, maxFrameBytes = 6)
+        val holder = CrvVideoJobQueue.Holder()
+        queue.offerFrame(byteArrayOf(1, 2), 10L)
+        queue.offerFrame(byteArrayOf(3, 4), 20L)
+        assertTrue(queue.poll(0, holder))
+
+        assertTrue(queue.offerFrameFirst(holder.data!!, holder.receivedNs))
+        assertEquals(4L, queue.pendingFrameBytes())
+        assertTrue(queue.poll(0, holder))
+        assertEquals(10L, holder.receivedNs)
+        assertTrue(queue.poll(0, holder))
+        assertEquals(20L, holder.receivedNs)
+        assertEquals(0L, queue.pendingFrameBytes())
+    }
+
+    @Test
+    fun fullQueueRecoveryRetainsNewestFrameWithoutExceedingLimits() {
+        val queue = CrvVideoJobQueue(capacity = 3, maxFrameBytes = 6)
+        val holder = CrvVideoJobQueue.Holder()
+        queue.offerConfig(VideoCodec.H264, byteArrayOf(1))
+        queue.offerFrame(byteArrayOf(2, 3), 10L)
+        queue.offerFrame(byteArrayOf(4, 5), 20L)
+        assertEquals(CrvVideoJobQueue.FrameOffer.FRAME_LIMIT, queue.offerFrame(byteArrayOf(6), 30L))
+
+        queue.recover(byteArrayOf(6), 30L, "frame limit")
+        assertTrue(queue.poll(0, holder))
+        assertEquals(CrvVideoJobQueue.TYPE_CONFIG, holder.type)
+        assertTrue(queue.poll(0, holder))
+        assertEquals(CrvVideoJobQueue.TYPE_RECOVER, holder.type)
+        assertTrue(queue.poll(0, holder))
+        assertEquals(CrvVideoJobQueue.TYPE_FRAME, holder.type)
+        assertEquals(30L, holder.receivedNs)
+        assertFalse(queue.poll(0, holder))
+    }
 }

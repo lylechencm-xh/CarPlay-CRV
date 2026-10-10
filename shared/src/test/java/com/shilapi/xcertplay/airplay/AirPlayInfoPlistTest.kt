@@ -8,6 +8,25 @@ import org.junit.Test
 
 class AirPlayInfoPlistTest {
     @Test
+    fun crvMediaAdvertisesStereoEntertainmentRateWhileVoiceKeepsNarrowband() {
+        val info = AirPlayInfoPlist.build(
+            AirPlayConfig(
+                deviceName = "test",
+                deviceId = "02:00:00:00:00:02",
+                btMac = "02:00:00:00:00:02",
+                sourceVersion = "366.0",
+                main = AirPlayDisplayConfig(widthPixels = 1280, heightPixels = 720),
+                highFidelityMediaOutput = true,
+            ),
+        )
+        val formats = (info["audioFormats"] as List<*>).map { it as Map<*, *> }
+        assertEquals(0x8000, formats.single { it["type"] == 100 && it["audioType"] == "media" }["audioOutputFormats"])
+        assertTrue(
+            ((formats.single { it["type"] == 100 && it["audioType"] == "telephony" }["audioOutputFormats"] as Int) and 0x4) != 0,
+        )
+    }
+
+    @Test
     fun mediaBufferIsReportedOnlyForMediaLatency() {
         val info = AirPlayInfoPlist.build(
             AirPlayConfig(

@@ -69,6 +69,21 @@ internal class CrvVideoJobQueue(
         FrameOffer.ADDED
     }
 
+    /** Requeue a frame that could not enter the decoder yet, ahead of newer pictures. */
+    fun offerFrameFirst(frame: ByteArray, receivedNs: Long): Boolean = synchronized(lock) {
+        if (size == capacity || frameBytes + frame.size > maxFrameBytes) return@synchronized false
+        head = (head - 1 + capacity) % capacity
+        types[head] = TYPE_FRAME
+        codecs[head] = null
+        data[head] = frame
+        received[head] = receivedNs
+        reasons[head] = null
+        frameBytes += frame.size
+        size++
+        lock.notify()
+        true
+    }
+
     /**
      * Drops stale queued work but preserves the newest pending config, then queues recovery and the
      * newest frame when it fits. This matches the old recovery ordering without allocating jobs.

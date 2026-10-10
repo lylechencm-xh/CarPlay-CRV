@@ -2,6 +2,8 @@ package com.shilapi.xcertplay.transport
 
 import com.shilapi.xcertplay.iap2.message.Iap2CarPlayMessages
 import com.shilapi.xcertplay.iap2.message.Iap2ControlMessages
+import com.shilapi.xcertplay.iap2.message.Iap2WirelessMessages
+import com.shilapi.xcertplay.iap2.message.Iap2WirelessSessionParameters
 import com.shilapi.xcertplay.iap2.session.Iap2Session
 import com.shilapi.xcertplay.iap2.wire.Iap2Frame
 import com.shilapi.xcertplay.mfi.Iap2MfiAuthenticationClient
@@ -23,6 +25,7 @@ class Iap2WiredControlClient(
     fun run(
         identification: Iap2IdentificationConfig,
         endpoint: Iap2WiredCarPlayEndpoint,
+        wirelessEndpoint: Iap2WirelessCarPlayEndpoint? = null,
         availableCurrentMilliAmps: Int,
         timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
         locationProvider: Iap2LocationProvider? = null,
@@ -59,6 +62,7 @@ class Iap2WiredControlClient(
 
         var forwardedFrames = 0
         var carPlayStartSessions = 0
+        var wifiConfigurationsSent = 0
         val location = Iap2LocationReporter(locationProvider, onProgress)
         val vehicleStatus = Iap2VehicleStatusReporter(vehicleStatusProvider, onProgress)
         try {
@@ -97,12 +101,34 @@ class Iap2WiredControlClient(
                         onProgress(carPlayAvailabilitySummary(incoming.payload))
                         // LIVI sends its wired answer on every availability notification; do not gate it on
                         // the phone's advertised availability boolean.
-                        send(carPlayStartSession(endpoint), deadlineNanos)
+                        send(carPlayStartSession(endpoint, wirelessEndpoint), deadlineNanos)
                         stage = Iap2WiredControlStage.CARPLAY_START_SENT
                         carPlayStartSessions++
                         deadlineNanos.carPlayStartSent()
                         onProgress("iap2 awaiting AirPlay session timeoutMs=${Iap2ControlDeadline.HANDSHAKE_MILLIS}")
                         onProgress("iap2 tx=0x4301 carplay-start-session")
+                    }
+
+                    REQUEST_ACCESSORY_WIFI_CONFIGURATION -> {
+                        if (wirelessEndpoint != null && wifiConfigurationsSent < MAX_WIFI_CONFIG_SENDS) {
+                            send(Iap2WirelessControlClient.accessoryWiFiConfiguration(wirelessEndpoint), deadlineNanos)
+                            wifiConfigurationsSent++
+                            onProgress("iap2 tx=0x5703 accessory-wifi-configuration")
+                        }
+                    }
+
+                    DEVICE_TRANSPORT_IDENTIFIER_NOTIFICATION -> {
+                        if (wirelessEndpoint != null && wifiConfigurationsSent < MAX_WIFI_CONFIG_SENDS) {
+                            send(Iap2WirelessControlClient.accessoryWiFiConfiguration(wirelessEndpoint), deadlineNanos)
+                            wifiConfigurationsSent++
+                            onProgress("iap2 tx=0x5703 post-transport accessory-wifi-configuration")
+                        }
+                    }
+
+                    WIRELESS_CARPLAY_UPDATE -> {
+                        onProgress("iap2 wireless availability=" +
+                            runCatching { Iap2WirelessMessages.wirelessCarPlayAvailability(incoming) }
+                                .getOrNull())
                     }
 
                     Iap2LocationMessages.START_LOCATION_INFORMATION, Iap2LocationMessages.STOP_LOCATION_INFORMATION -> {
@@ -132,6 +158,10 @@ class Iap2WiredControlClient(
     companion object {
         const val NO_TIMEOUT_MILLIS = Long.MAX_VALUE
         private const val CARPLAY_AVAILABILITY = 0x4300
+        private const val REQUEST_ACCESSORY_WIFI_CONFIGURATION = 0x5702
+        private const val DEVICE_TRANSPORT_IDENTIFIER_NOTIFICATION = 0x4e0e
+        private const val WIRELESS_CARPLAY_UPDATE = 0x4e0d
+        private const val MAX_WIFI_CONFIG_SENDS = 7
         private const val CARPLAY_START_SESSION = 0x4301
         private const val DEFAULT_TIMEOUT_MILLIS = 60_000L
         private const val MAX_TIMEOUT_MILLIS = 24 * 60 * 60 * 1_000L
@@ -146,9 +176,21 @@ class Iap2WiredControlClient(
         fun subscriptions(): List<Iap2Frame> = Iap2ControlMessages.subscriptions()
 
         /** Builds the wired-only CarPlayStartSession message; no NCM or AirPlay socket is opened. */
-        fun carPlayStartSession(endpoint: Iap2WiredCarPlayEndpoint): Iap2Frame =
+        fun carPlayStartSession(
+            endpoint: Iap2WiredCarPlayEndpoint,
+            wirelessEndpoint: Iap2WirelessCarPlayEndpoint? = null,
+        ): Iap2Frame =
             Iap2CarPlayMessages.startSession(
                 wiredIpv6Addresses = endpoint.ipv6Addresses,
+                wireless = wirelessEndpoint?.let {
+                    Iap2WirelessSessionParameters(
+                        ssid = it.ssid,
+                        passphrase = it.passphrase,
+                        channel = it.channel,
+                        ipAddresses = it.ipAddresses,
+                        securityType = it.security.wireValue,
+                    )
+                },
                 airPlayPort = endpoint.airPlayPort,
                 deviceIdentifier = endpoint.deviceIdentifier,
                 publicKey = endpoint.publicKey,

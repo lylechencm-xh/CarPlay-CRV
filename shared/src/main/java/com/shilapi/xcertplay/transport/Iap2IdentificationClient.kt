@@ -49,6 +49,8 @@ data class Iap2IdentificationConfig(
     val externalAccessoryProtocol: String = "com.shilapi.xcertplay",
     /** Non-null selects the wireless Bluetooth and WirelessCarPlay transport components. */
     val wireless: Iap2WirelessIdentification? = null,
+    /** Advertise the USB transport alongside wireless for a wired-first handoff. */
+    val wiredAndWireless: Boolean = false,
     /** Advertises and enables iAP2 LocationInformation from the accessory to the phone. */
     val locationInformationEnabled: Boolean = false,
     /** Declares an electric vehicle and answers the phone's vehicle-status subscription. */
@@ -101,6 +103,9 @@ data class Iap2IdentificationConfig(
         }
         require(carPlayUsbInterfaceNumber in 0..0xff) {
             "carPlayUsbInterfaceNumber must be in 0..255"
+        }
+        require(!wiredAndWireless || wireless != null) {
+            "Dual transport identification requires wireless details"
         }
     }
 }
@@ -220,8 +225,9 @@ class Iap2IdentificationClient(private val session: Iap2Session) {
                 string(5, config.hardwareVersion)
                 u16List(
                     6,
-                    if (wireless == null) {
+                    if (wireless == null || config.wiredAndWireless) {
                         sentMessages.asIterable()
+                            .let { base -> if (wireless == null) base else base + ACCESSORY_WIFI_CONFIGURATION_INFORMATION }
                     } else {
                         sentMessages.filterNot { it == POWER_SOURCE_UPDATE }.toIntArray().asIterable() +
                             ACCESSORY_WIFI_CONFIGURATION_INFORMATION
@@ -235,7 +241,7 @@ class Iap2IdentificationClient(private val session: Iap2Session) {
                         receivedMessages.asIterable() + WIRELESS_PHONE_MESSAGES.asIterable()
                     },
                 )
-                u8(8, if (wireless == null) 2 else 0)
+                u8(8, if (wireless == null || config.wiredAndWireless) 2 else 0)
                 u16(9, 20)
                 group(10) {
                     u8(0, 1)
@@ -244,7 +250,7 @@ class Iap2IdentificationClient(private val session: Iap2Session) {
                 }
                 string(12, config.language)
                 strings(13, listOf(config.language))
-                if (wireless == null) {
+                if (wireless == null || config.wiredAndWireless) {
                     group(16) {
                         u16(0, 0)
                         string(1, "USBHostTransport")
@@ -252,7 +258,8 @@ class Iap2IdentificationClient(private val session: Iap2Session) {
                         u8(3, config.carPlayUsbInterfaceNumber)
                         void(4)
                     }
-                } else {
+                }
+                if (wireless != null) {
                     group(17) {
                         u16(0, 0)
                         string(1, "blue")

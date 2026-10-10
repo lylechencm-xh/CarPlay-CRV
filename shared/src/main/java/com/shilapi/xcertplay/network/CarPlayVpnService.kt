@@ -67,6 +67,7 @@ class CarPlayVpnService : VpnService() {
     private var bridge: Ipv6NcmBridge? = null
     private var tun: ParcelFileDescriptor? = null
     private var attachGeneration = 0
+    @Volatile private var wiredBridgeRetired = false
 
     override fun onBind(intent: Intent?): IBinder? = when (intent?.action) {
         SERVICE_INTERFACE -> super.onBind(intent)
@@ -95,12 +96,14 @@ class CarPlayVpnService : VpnService() {
         mfi: MfiAuthenticator?,
         listener: AirPlaySessionListener,
         media: AirPlayMediaHandler,
+        additionalBindAddresses: List<InetAddress> = emptyList(),
     ): AttachResult {
         if (active.get()) {
             Log.i(TAG, "replacing stale NCM/VPN attachment")
             releaseLocked()
         }
         active.set(true)
+        wiredBridgeRetired = false
         val generation = ++attachGeneration
         return try {
             val address = InetAddress.getByName(linkLocal)
@@ -120,14 +123,15 @@ class CarPlayVpnService : VpnService() {
             tun = tunFd
 
             val ipv6Bridge = Ipv6NcmBridge(ncm, tunFd, hostMac) { error ->
-                onTransportError(generation, listener, error)
+                onTransportError(generation, listener, error, fromWiredBridge = true)
             }
             ipv6Bridge.start()
             bridge = ipv6Bridge
 
             startAirPlayServer(
                 generation,
-                AirPlayAttachment(address, config, identity, pairings, mfi, listener, media),
+                AirPlayAttachment(address, config, identity, pairings, mfi, listener, media,
+                    additionalBindAddresses),
             )
             AttachResult.Started
         } catch (error: Exception) {
@@ -152,17 +156,20 @@ class CarPlayVpnService : VpnService() {
         mfi: MfiAuthenticator?,
         listener: AirPlaySessionListener,
         media: AirPlayMediaHandler,
+        additionalBindAddresses: List<InetAddress> = emptyList(),
     ): AttachResult {
         if (active.get()) {
             Log.i(TAG, "replacing stale kernel-NCM attachment")
             releaseLocked()
         }
         active.set(true)
+        wiredBridgeRetired = false
         val generation = ++attachGeneration
         return try {
             startAirPlayServer(
                 generation,
-                AirPlayAttachment(bindAddress, config, identity, pairings, mfi, listener, media),
+                AirPlayAttachment(bindAddress, config, identity, pairings, mfi, listener, media,
+                    additionalBindAddresses),
             )
             AttachResult.Started
         } catch (error: Exception) {
@@ -192,6 +199,7 @@ class CarPlayVpnService : VpnService() {
             releaseLocked()
         }
         active.set(true)
+        wiredBridgeRetired = false
         val generation = ++attachGeneration
         return try {
             startAirPlayServer(
@@ -236,6 +244,24 @@ class CarPlayVpnService : VpnService() {
     @Synchronized
     fun detach() {
         releaseLocked()
+    }
+
+    /** Retain the Wi-Fi listener and active AirPlay session after the USB NCM path disappears. */
+    fun detachWiredTransportPreservingWireless(): Boolean {
+        val retired = synchronized(this) {
+            val wirelessServer = additionalServers.firstOrNull() ?: return false
+            wiredBridgeRetired = true
+            val wiredResources = Triple(serverSocket, bridge, tun)
+            serverSocket = wirelessServer
+            additionalServers = additionalServers.drop(1)
+            bridge = null
+            tun = null
+            wiredResources
+        }
+        runCatching { retired.first?.close() }
+        runCatching { retired.second?.close() }
+        runCatching { retired.third?.close() }
+        return true
     }
 
     @Synchronized
@@ -370,7 +396,8 @@ class CarPlayVpnService : VpnService() {
                 session.start()
             }
         } catch (error: IOException) {
-            if (active.get()) {
+            if (active.get() && generation == attachGeneration &&
+                (serverSocket === server || additionalServers.any { it === server })) {
                 attachment?.listener?.let { onTransportError(generation, it, error) }
             }
         }
@@ -402,6 +429,7 @@ class CarPlayVpnService : VpnService() {
         generation: Int,
         listener: AirPlaySessionListener,
         error: Throwable,
+        fromWiredBridge: Boolean = false,
     ) {
         val message = error.message ?: error.javaClass.simpleName
         Log.e(TAG, "CarPlay transport stopped: $message", error)
@@ -409,6 +437,7 @@ class CarPlayVpnService : VpnService() {
             {
                 val releasedGeneration = synchronized(this) {
                     if (generation != attachGeneration) return@Thread
+                    if (fromWiredBridge && wiredBridgeRetired) return@Thread
                     releaseLocked()
                     attachGeneration
                 }
@@ -427,6 +456,7 @@ class CarPlayVpnService : VpnService() {
     /** Caller must hold this service's monitor. Closes only resources active for this attachment. */
     private fun releaseLocked() {
         attachGeneration += 1
+        wiredBridgeRetired = false
         active.set(false)
         attachment = null
         serverSocket?.close()

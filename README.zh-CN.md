@@ -12,7 +12,7 @@
 | 车机系统 | **Android 4.2.2 / API17**（不可提高最低版本） |
 | 应用包名 | `com.shihab.diplay` |
 | 源码版本字段 | `0.2.28`（另有后续诊断与兼容代码提交） |
-| 核心链路 | 有线 USB CarPlay；新增需先 USB 配对的 Wi-Fi 切换测试模式 |
+| 核心链路 | 默认 Auto：USB 优先，拔线后尝试切换 Wi-Fi，重新插线恢复 USB；另有纯有线和 Wi-Fi 测试模式 |
 | GitHub Releases | **2026-10-09 已全部清空，当前无公开 Release APK** |
 | 当前 APK 获取途径 | GitHub Actions 成功运行的 Artifacts / 自行编译 |
 
@@ -59,6 +59,7 @@ carplay-crv-v<版本>-<时间>-p<PID>-b<运行时间>.log
 
 ## 更多资料
 
+- [代码导览：模块、连接链路、媒体、日志与修改入口](docs/CODEBASE-GUIDE.zh-CN.md)
 - [主 README：架构、MediaCore、API17、发布流程与开发优先级](README.md)
 - [CR-V 实车测试清单](CRV-2021-TESTING.md)
 - [编译与签名说明](docs/BUILD.md)

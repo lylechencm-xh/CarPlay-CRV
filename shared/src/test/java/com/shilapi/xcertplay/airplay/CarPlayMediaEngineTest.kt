@@ -67,6 +67,32 @@ class CarPlayMediaEngineTest {
     }
 
     @Test
+    fun sessionCloseStopsAudioRenderers() {
+        val stopped = mutableListOf<AudioStreamId>()
+        val sink = object : MediaSink {
+            override fun onAudioStopped(id: AudioStreamId) {
+                stopped += id
+            }
+        }
+        val session = testSession()
+        val engine = CarPlayMediaEngine(sink)
+        val streamsField = CarPlayMediaEngine::class.java.getDeclaredField("streams").apply {
+            isAccessible = true
+        }
+        @Suppress("UNCHECKED_CAST")
+        val streams = streamsField.get(engine) as
+            MutableMap<CarPlayMediaEngine.StreamKey, Closeable>
+        streams[CarPlayMediaEngine.StreamKey(session, 100, "media")] = Closeable {}
+        streams[CarPlayMediaEngine.StreamKey(session, 101, "default")] = Closeable {}
+
+        engine.onSessionClosed(session)
+        session.close()
+
+        assertEquals(setOf(AudioStreamId(100, "media"), AudioStreamId(101, "default")), stopped.toSet())
+        assertTrue(streams.isEmpty())
+    }
+
+    @Test
     fun videoRemoteControlSessionsAreAcceptedOnlyWithVideoInCar() {
         val stream = mapOf("type" to 130L, "clientTypeUUID" to "A6B27562-B43A-4F2D-B75F-82391E250194", "controlType" to 1L)
         val engine = CarPlayMediaEngine(object : MediaSink {})

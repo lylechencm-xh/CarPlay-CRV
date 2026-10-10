@@ -75,4 +75,6 @@ data class AirPlayConfig(
     val videoInCar: Boolean = false,
     /** Media prebuffer held by the CR-V renderer; advertised so iPhone can compensate A/V timing. */
     val mediaBufferMillis: Int = 0,
+    /** Keep media stereo at the entertainment rate while voice streams retain narrowband formats. */
+    val highFidelityMediaOutput: Boolean = false,
 )
