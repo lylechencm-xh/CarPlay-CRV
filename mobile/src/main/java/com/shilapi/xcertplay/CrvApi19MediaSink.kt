@@ -363,8 +363,9 @@ class CrvApi19MediaSink(
             val annexB = MediaCodecSupport.toAnnexB(packet)
             if (annexB.isEmpty()) return
 
+            val randomAccess = MediaCodecSupport.isRandomAccess(annexB, lastCodec)
             if (waitingForKeyFrame) {
-                if (!MediaCodecSupport.isRandomAccess(annexB, lastCodec)) {
+                if (!randomAccess) {
                     requestKeyFrameIfDue()
                     return
                 }
@@ -383,7 +384,6 @@ class CrvApi19MediaSink(
                     requestKeyFrameIfDue()
                     return
                 }
-                waitingForKeyFrame = false
             }
 
             try {
@@ -420,6 +420,7 @@ class CrvApi19MediaSink(
                     System.nanoTime() / 1000L,
                     0,
                 )
+                if (randomAccess) waitingForKeyFrame = false
             } catch (error: Exception) {
                 recover("video input failed: ${error.javaClass.simpleName}")
             }
@@ -435,8 +436,9 @@ class CrvApi19MediaSink(
                         index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> Unit
                         index == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> Unit
                         index >= 0 -> {
-                            codec.releaseOutputBuffer(index, true)
-                            if (!firstRendered) {
+                            val render = !waitingForKeyFrame
+                            codec.releaseOutputBuffer(index, render)
+                            if (render && !firstRendered) {
                                 firstRendered = true
                                 diagnostic("first frame rendered")
                             }

@@ -23,8 +23,8 @@ android {
         applicationId = "com.shihab.diplay"
         minSdk = 17
         targetSdk = 28
-        versionCode = 47
-        versionName = "0.2.28"
+        versionCode = 48
+        versionName = "0.2.28.1"
         ndk {
             abiFilters += listOf("armeabi-v7a", "x86")
         }
