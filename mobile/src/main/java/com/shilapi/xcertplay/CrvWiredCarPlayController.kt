@@ -72,9 +72,15 @@ class CrvWiredCarPlayController(
         Executors.newSingleThreadExecutor { task -> Thread(task, "crv-carplay-wired").apply { isDaemon = true } }
     private val closeRequested = AtomicBoolean(false)
     private val stoppedNotified = AtomicBoolean(false)
+    private val closedLatch = CountDownLatch(1)
+    private val closeLock = Any()
+    private var workerSubmitted = false
+    private var workerUsbSession: Iap2UsbSession? = null
     @Volatile private var wifiCredentialsSent = false
     @Volatile private var autoUsbDetached = false
     @Volatile private var autoHotspotInfo: CrvApi19WirelessHotspot.Info? = null
+    @Volatile private var lastAirPlayRxNanos: Long? = null
+    @Volatile private var lastAirPlayTxNanos: Long? = null
     private val lifecycle = CrvCarPlayStateMachine { transition ->
         report(
             "Controller state ${transition.previous.phase} -> ${transition.current.phase} " +
@@ -85,7 +91,11 @@ class CrvWiredCarPlayController(
     private val protocolTrace = CrvProtocolTraceRecorder(recordProtocolTrace)
     private val recovery = CrvControllerRecovery(
         closeControl = { resources.csm?.close() },
-        releaseTransport = resources::releaseTransport,
+        releaseTransport = {
+            runCatching { resources.releaseTransport() }
+            runCatching { unbindVpn() }
+            runCatching { sink.close() }
+        },
         notifyStopped = ::notifyStopped,
     )
 
@@ -213,6 +223,8 @@ class CrvWiredCarPlayController(
         }
 
         override fun onDebugLog(message: String) {
+            if (message.startsWith("airplay rx ", ignoreCase = true)) lastAirPlayRxNanos = System.nanoTime()
+            if (message.startsWith("airplay tx ", ignoreCase = true)) lastAirPlayTxNanos = System.nanoTime()
             when {
                 message.startsWith("airplay rx SETUP", ignoreCase = true) ->
                     protocolTrace.record(
@@ -247,42 +259,61 @@ class CrvWiredCarPlayController(
     }
 
     fun start(device: UsbDevice, usbSession: Iap2UsbSession) {
-        wiredUsbIdentity = CrvUsbIdentity(device.deviceName, device.deviceId, device.vendorId, device.productId)
-        protocolTrace.signal(CrvProtocolLayer.USB, "attached", detail = mode.name)
-        lifecycle.start()
-        executor.execute {
-            try {
-                runWired(device, usbSession)
-            } catch (error: Throwable) {
-                val userRequestedStop = lifecycle.isStopping()
-                if (!userRequestedStop) {
-                    val failedLayer = traceLayerFor(lifecycle.snapshot().phase)
-                    lifecycle.fail(error.javaClass.simpleName)
-                    protocolTrace.fault(
-                        failedLayer,
-                        "controller",
-                        error.javaClass.simpleName,
-                    )
-                    reportFailure("CarPlay controller", error)
-                    report(
-                        "CarPlay failed: " + error.javaClass.name + ": " +
-                            (error.message ?: "no message"),
-                    )
+        synchronized(closeLock) {
+            if (closeRequested.get()) {
+                usbSession.close()
+                return
+            }
+            wiredUsbIdentity = CrvUsbIdentity(device.deviceName, device.deviceId, device.vendorId, device.productId)
+            protocolTrace.signal(CrvProtocolLayer.USB, "attached", detail = mode.name)
+            lifecycle.start()
+            workerUsbSession = usbSession
+            workerSubmitted = true
+            executor.execute {
+                try {
+                    if (!closeRequested.get()) runWired(device, usbSession)
+                } catch (error: Throwable) {
+                    val userRequestedStop = lifecycle.isStopping()
+                    if (!userRequestedStop) {
+                        val failedLayer = traceLayerFor(lifecycle.snapshot().phase)
+                        lifecycle.fail(error.javaClass.simpleName)
+                        protocolTrace.fault(
+                            failedLayer,
+                            "controller",
+                            error.javaClass.simpleName,
+                        )
+                        reportFailure("CarPlay controller", error)
+                        report(
+                            "CarPlay failed: " + error.javaClass.name + ": " +
+                                (error.message ?: "no message"),
+                        )
+                    }
+                } finally {
+                    lifecycle.requestStop("worker-finished")
+                    runCatching { touchDispatcher.close() }
+                    synchronized(closeLock) { completeWorker(usbSession) }
                 }
-            } finally {
-                lifecycle.requestStop("worker-finished")
-                touchDispatcher.close()
-                recovery.completeWorker(
-                    closeUsbSession = { usbSession.close() },
-                    finishLifecycle = {
-                        if (lifecycle.snapshot().phase == CrvControllerPhase.STOPPING) {
-                            lifecycle.finishStop()
-                        }
-                    },
-                )
             }
         }
     }
+
+    private fun completeWorker(usbSession: Iap2UsbSession?) {
+        recovery.completeWorker(
+            closeUsbSession = { usbSession?.close() },
+            finishLifecycle = {
+                if (lifecycle.snapshot().phase == CrvControllerPhase.STOPPING) {
+                    lifecycle.finishStop()
+                }
+            },
+        )
+        workerUsbSession = null
+        executor.shutdown()
+    }
+
+    internal val recoveryTrigger: CrvRecoveryTrigger? get() = recovery.trigger
+
+    internal fun awaitClosed(timeoutMillis: Long): Boolean =
+        closedLatch.await(timeoutMillis, TimeUnit.MILLISECONDS)
 
     internal var wiredUsbIdentity: CrvUsbIdentity? = null
         private set
@@ -655,6 +686,12 @@ class CrvWiredCarPlayController(
                         "ncmBackend=${if (activeKernelNcm != null) "kernel" else "userspace"} " +
                         "networkAttached=${vpn.isAttached()} airPlayPort=$airPlayPort",
                 )
+                val now = System.nanoTime()
+                fun age(last: Long?): String = last?.let {
+                    ((now - it).coerceAtLeast(0) / 1_000_000L).toString()
+                } ?: "never"
+                report("CarPlay timeout snapshot ${vpn.diagnosticSnapshot()} " +
+                    "airPlayRxIdleMs=${age(lastAirPlayRxNanos)} airPlayTxIdleMs=${age(lastAirPlayTxNanos)}")
             }
         }
         if (mode == CrvConnectionMode.AUTO && autoUsbDetached && autoWifi != null) {
@@ -1192,23 +1229,29 @@ class CrvWiredCarPlayController(
     override fun close() = close(CrvRecoveryTrigger.ACTIVE_DISCONNECT)
 
     internal fun close(reason: CrvRecoveryTrigger) {
-        if (!closeRequested.compareAndSet(false, true)) return
-        lifecycle.requestStop("close:${reason.name}")
-        touchDispatcher.close()
-        recovery.breakBlockingControl(reason)
-        resources.releaseTransport()
-        unbindVpn()
-        sink.close()
-        executor.shutdownNow()
-        if (lifecycle.snapshot().phase == CrvControllerPhase.STOPPING) {
-            lifecycle.finishStop()
+        synchronized(closeLock) {
+            if (!closeRequested.compareAndSet(false, true)) return
+            lifecycle.requestStop("close:${reason.name}")
+            runCatching { touchDispatcher.close() }
+            recovery.breakBlockingControl(reason)
+            runCatching { resources.releaseTransport() }
+            runCatching { unbindVpn() }
+            runCatching { sink.close() }
+            val pending = executor.shutdownNow()
+            // A task removed from the queue never reaches its finally block.
+            if (!workerSubmitted || pending.isNotEmpty()) {
+                completeWorker(workerUsbSession)
+            }
         }
-        notifyStopped()
     }
 
     private fun notifyStopped() {
         if (stoppedNotified.compareAndSet(false, true)) {
-            runCatching(onStopped)
+            try {
+                runCatching(onStopped)
+            } finally {
+                closedLatch.countDown()
+            }
         }
     }
 

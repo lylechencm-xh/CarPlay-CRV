@@ -61,6 +61,9 @@ class Ipv6NcmBridge(
     private lateinit var ncmToTunThread: Thread
     private lateinit var tunToNcmThread: Thread
 
+    fun diagnosticSnapshot(): String =
+        "bridgeRunning=${running.get()} peerMacLearned=${peerMac != null} ${ncm.diagnosticSnapshot()}"
+
     fun start() {
         check(running.compareAndSet(false, true)) { "bridge is already started" }
         ncmToTunThread = Thread(::runNcmToTun, "ncm-ipv6-in").apply {

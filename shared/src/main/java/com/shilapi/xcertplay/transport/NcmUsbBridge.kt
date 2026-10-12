@@ -8,6 +8,7 @@ import android.util.Log
 import java.io.Closeable
 import java.util.ArrayDeque
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * A blocking NCM data pipe that moves Ethernet frames as NTB16 blocks over bulk endpoints.
@@ -64,8 +65,20 @@ class NcmUsbBridge internal constructor(
     private var consecutiveWriteFailures = 0
     private val presenceGuard = NcmUsbPresenceGuard(isDeviceAttached)
     private val frames = ArrayDeque<ByteArray>()
-    private var queuedBytes = 0
-    private val wireDecoder = Ntb16WireDecoder()
+    @Volatile private var queuedBytes = 0
+    @Volatile private var queuedFrames = 0
+    private val rxBytes = AtomicLong()
+    private val txBytes = AtomicLong()
+    private val rxFrames = AtomicLong()
+    private val txFrames = AtomicLong()
+    @Volatile private var lastRxNanos: Long? = null
+    @Volatile private var lastTxNanos: Long? = null
+    private val wireDecoder = Ntb16WireDecoder(
+        packetSize = inEndpoint.maxPacketSize.takeIf { it > 0 } ?: 512,
+        onResync = { skipped, total ->
+            Log.w(IphoneCarPlayConfiguration.TAG, "ncm resync skippedBytes=$skipped total=$total")
+        },
+    )
     private val readBuffer = ByteArray(READ_CHUNK_BYTES)
     private val writeBuffer = ByteArray(NcmLegacyUsbBulk.MAX_TRANSACTION_BYTES)
     private val statusRunning = AtomicBoolean(statusEndpoint != null)
@@ -93,6 +106,7 @@ class NcmUsbBridge internal constructor(
             } catch (error: RuntimeException) {
                 throw failSession("NCM write failed", error)
             }
+            recordWritten(transferred)
             if (transferred <= 0) {
                 consecutiveWriteFailures++
                 if (presenceGuard.disconnectedAfterFailures(consecutiveWriteFailures)) {
@@ -126,6 +140,7 @@ class NcmUsbBridge internal constructor(
                 } catch (error: RuntimeException) {
                     throw failSession("NCM write failed", error)
                 }
+                recordWritten(transferred)
                 if (transferred <= 0) {
                     consecutiveWriteFailures++
                     if (presenceGuard.disconnectedAfterFailures(consecutiveWriteFailures)) {
@@ -151,6 +166,7 @@ class NcmUsbBridge internal constructor(
         }
 
         consecutiveWriteFailures = 0
+        txFrames.incrementAndGet()
         presenceGuard.reset()
         if (loggedWriteTimeout) {
             loggedWriteTimeout = false
@@ -182,9 +198,27 @@ class NcmUsbBridge internal constructor(
                 } catch (error: IllegalArgumentException) {
                     throw failSession("Invalid NCM NTB16 wire framing", error)
                 }
+                rxFrames.addAndGet(decodedFrames.size.toLong())
                 for (frame in decodedFrames) enqueueFrame(frame)
             }
         }
+    }
+
+    private fun recordWritten(bytes: Int) {
+        if (bytes <= 0) return
+        txBytes.addAndGet(bytes.toLong())
+        lastTxNanos = System.nanoTime()
+    }
+
+    /** Non-blocking counters: never wait on a USB read just to diagnose a handshake timeout. */
+    fun diagnosticSnapshot(): String {
+        val now = System.nanoTime()
+        fun age(last: Long?): String = last?.let { ((now - it).coerceAtLeast(0) / 1_000_000L).toString() } ?: "never"
+        return "ncm rxBytes=${rxBytes.get()} txBytes=${txBytes.get()} " +
+            "rxFrames=${rxFrames.get()} txFrames=${txFrames.get()} " +
+            "rxIdleMs=${age(lastRxNanos)} txIdleMs=${age(lastTxNanos)} " +
+            "queuedFrames=$queuedFrames queuedBytes=$queuedBytes " +
+            "resyncs=${wireDecoder.resynchronizations} discardedBytes=${wireDecoder.discardedBytes}"
     }
 
     override fun close() {
@@ -248,11 +282,13 @@ class NcmUsbBridge internal constructor(
             throw failSession("NCM frame queue exceeded its bounds")
         }
         frames.addLast(frame)
+        queuedFrames = frames.size
         queuedBytes += frame.size
     }
 
     private fun pollFrame(): ByteArray {
         val frame = frames.removeFirst()
+        queuedFrames = frames.size
         queuedBytes -= frame.size
         return frame
     }
@@ -277,6 +313,8 @@ class NcmUsbBridge internal constructor(
             return null
         }
         consecutiveReadFailures = 0
+        rxBytes.addAndGet(transferred.toLong())
+        lastRxNanos = System.nanoTime()
         presenceGuard.reset()
         return transferred
     }
@@ -325,7 +363,7 @@ class NcmUsbBridge internal constructor(
                 // same interface id, so it must be claimed once and switched with setInterface.
                 val sameInterface = function.control.id == function.data.id
                 val first = if (sameInterface) function.data else function.control
-                val firstClaimed = connection.claimInterface(first, forceClaim)
+                val firstClaimed = claimWithRetry(connection, first, forceClaim)
                 Log.i(
                     IphoneCarPlayConfiguration.TAG,
                     "claim iface=${first.id} class=${first.interfaceClass}" +
@@ -340,7 +378,7 @@ class NcmUsbBridge internal constructor(
                 }
                 claimed.add(first)
                 if (!sameInterface) {
-                    val dataClaimed = connection.claimInterface(function.data, forceClaim)
+                    val dataClaimed = claimWithRetry(connection, function.data, forceClaim)
                     Log.i(
                         IphoneCarPlayConfiguration.TAG,
                         "claim iface=${function.data.id}" +
@@ -373,11 +411,12 @@ class NcmUsbBridge internal constructor(
                         )
                     }
                 }
-                val altSelected = selectInterface(
-                    connection,
-                    function.data,
-                    function.dataAlternateSetting,
-                )
+                val altSelected = NcmInterfaceRetry.run(
+                    onAttempt = { attempt, success ->
+                        if (attempt > 1 || !success) Log.i(IphoneCarPlayConfiguration.TAG,
+                            "ncm select iface=${function.data.id}/${function.dataAlternateSetting} attempt=$attempt ok=$success")
+                    },
+                ) { selectInterface(connection, function.data, function.dataAlternateSetting) }
                 Log.i(
                     IphoneCarPlayConfiguration.TAG,
                     "setInterface iface=${function.data.id}/${function.dataAlternateSetting} ok=$altSelected",
@@ -413,6 +452,19 @@ class NcmUsbBridge internal constructor(
                 throw IphoneUsbException.DeviceUnavailable("Android NCM open failed", error)
             }
         }
+
+        private fun claimWithRetry(
+            connection: UsbDeviceConnection,
+            usbInterface: UsbInterface,
+            force: Boolean,
+        ): Boolean = NcmInterfaceRetry.run(
+            // A kernel-owned interface is expected to refuse the preserve-driver claim.
+            attempts = if (force) 5 else 1,
+            onAttempt = { attempt, success ->
+                if (attempt > 1 || !success) Log.i(IphoneCarPlayConfiguration.TAG,
+                    "ncm claim iface=${usbInterface.id} force=$force attempt=$attempt ok=$success")
+            },
+        ) { connection.claimInterface(usbInterface, force) }
 
         /**
          * UsbDeviceConnection.setInterface() is API21. Android 4.2.2 can select an alternate

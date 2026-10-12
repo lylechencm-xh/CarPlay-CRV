@@ -2,6 +2,7 @@ package com.shilapi.xcertplay.media
 
 import com.shilapi.xcertplay.airplay.VideoCodec
 import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 
 /**
  * Pure byte helpers that convert the CarPlay screen/audio payloads into the
@@ -114,6 +115,58 @@ object MediaCodecSupport {
         }
         return false
     }
+
+    /** Validated output size; the four-byte NAL length is replaced by a four-byte start code. */
+    fun videoInputSize(packet: ByteArray): Int {
+        if (hasAnnexBPrefix(packet)) return packet.size
+        var offset = 0
+        while (offset + 4 <= packet.size) {
+            val length = readU32Be(packet, offset)
+            offset += 4
+            if (length <= 0 || length > packet.size - offset) return 0
+            offset += length
+        }
+        return if (offset == packet.size) offset else 0
+    }
+
+    /** Write directly into MediaCodec's input buffer without an intermediate full-frame array. */
+    fun putVideoInput(packet: ByteArray, target: ByteBuffer): Boolean {
+        val size = videoInputSize(packet)
+        if (size == 0 || size > target.remaining()) return false
+        if (hasAnnexBPrefix(packet)) {
+            target.put(packet)
+            return true
+        }
+        var offset = 0
+        while (offset < packet.size) {
+            val length = readU32Be(packet, offset)
+            offset += 4
+            target.put(START_CODE)
+            target.put(packet, offset, length)
+            offset += length
+        }
+        return true
+    }
+
+    /** Length-prefixed packets expose NAL headers directly; skip their payloads when finding IDR. */
+    fun isRandomAccessPacket(packet: ByteArray, codec: VideoCodec): Boolean {
+        if (videoInputSize(packet) == 0) return false
+        if (hasAnnexBPrefix(packet)) return isRandomAccess(packet, codec)
+        var offset = 0
+        while (offset < packet.size) {
+            val length = readU32Be(packet, offset)
+            offset += 4
+            val header = packet[offset].toInt() and 255
+            if (codec == VideoCodec.H264 && header and 31 == 5) return true
+            if (codec == VideoCodec.H265 && length >= 2 && (header shr 1) and 63 in 16..21) return true
+            offset += length
+        }
+        return false
+    }
+
+    private fun hasAnnexBPrefix(packet: ByteArray): Boolean =
+        packet.size >= 4 && packet[0] == 0.toByte() && packet[1] == 0.toByte() &&
+            packet[2] == 0.toByte() && packet[3] == 1.toByte()
 
     /** Wraps one raw AAC-LC access unit in an MPEG-4 ADTS frame. */
     fun adtsFrame(accessUnit: ByteArray, sampleRate: Int, channels: Int): ByteArray =

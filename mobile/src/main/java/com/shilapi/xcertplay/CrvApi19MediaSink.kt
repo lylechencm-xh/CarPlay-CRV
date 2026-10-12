@@ -231,10 +231,11 @@ class CrvApi19MediaSink(
         private val diagnostic: (String) -> Unit,
     ) : Closeable {
         private val queue = CrvVideoJobQueue(VIDEO_QUEUE_CAPACITY, VIDEO_QUEUE_MAX_BYTES)
+        private val drainSchedule = CrvCodecDrainSchedule()
+        private val backlogScratch = CrvVideoJobQueue.Backlog(0, null)
         private val running = AtomicBoolean(true)
         private val thread = Thread(::run, "crv-api19-video").apply {
             isDaemon = true
-            start()
         }
 
         private var decoder: MediaCodec? = null
@@ -280,7 +281,7 @@ class CrvApi19MediaSink(
                 // Best-effort: OEM firmware can reject priority changes; decoding must continue.
                 runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY) }
                 while (running.get()) {
-                    if (queue.poll(20L, job)) when (job.type) {
+                    if (queue.poll(drainSchedule.queueWaitMillis(System.nanoTime()), job)) when (job.type) {
                         CrvVideoJobQueue.TYPE_CONFIG -> {
                             backlogRecovery.reset()
                             val codec = job.codec
@@ -371,14 +372,15 @@ class CrvApi19MediaSink(
         }
 
         private fun feed(packet: ByteArray, receivedNs: Long) {
+            val feedStartNs = System.nanoTime()
             val config = lastConfig ?: return
             if (decoder == null) configureNow(lastCodec, config)
             val codec = decoder ?: return
 
-            val annexB = MediaCodecSupport.toAnnexB(packet)
-            if (annexB.isEmpty()) return
+            val inputSize = MediaCodecSupport.videoInputSize(packet)
+            if (inputSize == 0) return
 
-            val randomAccess = MediaCodecSupport.isRandomAccess(annexB, lastCodec)
+            val randomAccess = MediaCodecSupport.isRandomAccessPacket(packet, lastCodec)
             if (waitingForKeyFrame) {
                 if (!randomAccess) {
                     requestKeyFrameIfDue()
@@ -422,33 +424,46 @@ class CrvApi19MediaSink(
                     return
                 }
                 input.clear()
-                if (annexB.size > input.remaining()) {
+                if (inputSize > input.remaining() || !MediaCodecSupport.putVideoInput(packet, input)) {
                     codec.queueInputBuffer(index, 0, 0, 0L, 0)
                     recover("video frame exceeds decoder input")
                     return
                 }
-                input.put(annexB)
                 codec.queueInputBuffer(
                     index,
                     0,
-                    annexB.size,
-                    System.nanoTime() / 1000L,
+                    inputSize,
+                    receivedNs / 1000L,
                     0,
                 )
+                val submittedNs = System.nanoTime()
+                drainSchedule.submitted(submittedNs)
+                fedFrames++
+                maxQueueAgeNs = maxOf(maxQueueAgeNs, (feedStartNs - receivedNs).coerceAtLeast(0L))
+                maxFeedNs = maxOf(maxFeedNs, submittedNs - feedStartNs)
                 if (randomAccess) waitingForKeyFrame = false
             } catch (error: Exception) {
                 recover("video input failed: ${error.javaClass.simpleName}")
             }
         }
 
+        private var fedFrames = 0L
+        private var renderedFrames = 0L
+        private var maxQueueAgeNs = 0L
+        private var maxFeedNs = 0L
+        private var maxOutputAgeUs = 0L
         private val decodedVideoOutput = CrvDecodedVideoOutput { index, render ->
             decoder?.releaseOutputBuffer(index, render)
+            if (render) renderedFrames++
             if (render && !firstRendered) {
                 firstRendered = true
                 diagnostic("first frame rendered")
             }
         }
         private var videoOutputStatsAtNs = System.nanoTime()
+
+        // Start after every decoder field is initialized; the worker can wake immediately.
+        init { thread.start() }
 
         private fun drain() {
             val codec = decoder ?: return
@@ -460,6 +475,13 @@ class CrvApi19MediaSink(
                         index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> Unit
                         index == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> Unit
                         index >= 0 -> {
+                            if (outputInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
+                                drainSchedule.outputReady()
+                            }
+                            val ageUs = System.nanoTime() / 1000L - outputInfo.presentationTimeUs
+                            if (outputInfo.presentationTimeUs != 0L && ageUs >= 0L) {
+                                maxOutputAgeUs = maxOf(maxOutputAgeUs, ageUs)
+                            }
                             decodedVideoOutput.offer(index)
                         }
                         else -> break
@@ -468,7 +490,13 @@ class CrvApi19MediaSink(
                 decodedVideoOutput.finish(render = !waitingForKeyFrame && running.get())
                 val now = System.nanoTime()
                 if (now - videoOutputStatsAtNs >= 5_000_000_000L) {
-                    diagnostic("decoded output staleSkippedTotal=${decodedVideoOutput.discardedTotal}")
+                    diagnostic("decoded output fedTotal=$fedFrames renderedTotal=$renderedFrames " +
+                        "staleSkippedTotal=${decodedVideoOutput.discardedTotal} " +
+                        "queueMaxMs=${maxQueueAgeNs / 1_000_000L} feedMaxUs=${maxFeedNs / 1000L} " +
+                        "outputAgeMaxMs=${maxOutputAgeUs / 1000L}")
+                    maxQueueAgeNs = 0L
+                    maxFeedNs = 0L
+                    maxOutputAgeUs = 0L
                     videoOutputStatsAtNs = now
                 }
             } catch (error: Exception) {
@@ -477,7 +505,7 @@ class CrvApi19MediaSink(
             }
         }
 
-        private fun backlogAfterCurrent(): CrvVideoJobQueue.Backlog = queue.backlogAfterCurrent()
+        private fun backlogAfterCurrent(): CrvVideoJobQueue.Backlog = queue.backlogAfterCurrent(backlogScratch)
 
         private fun discardCurrentFrameChain() {
             queue.discardLeadingFrames()
@@ -493,6 +521,8 @@ class CrvApi19MediaSink(
                     .onFailure { diagnostic("video decoder flush failed: " + it.javaClass.simpleName) }
                     .isSuccess
                 if (flushed) {
+                    drainSchedule.reset()
+                    decodedVideoOutput.reset()
                     @Suppress("DEPRECATION")
                     val buffers = runCatching { active.inputBuffers }.getOrNull()
                     inputBuffers = buffers
@@ -523,6 +553,8 @@ class CrvApi19MediaSink(
         }
 
         private fun releaseDecoder() {
+            drainSchedule.reset()
+            decodedVideoOutput.reset()
             val codec = decoder ?: return
             decoder = null
             inputBuffers = null
@@ -539,6 +571,7 @@ class CrvApi19MediaSink(
     ) : Closeable {
         private val queue = CrvAudioPacketQueue(AUDIO_QUEUE_CAPACITY)
         private val packetHolder = CrvAudioPacketQueue.MutablePacket()
+        private val drainSchedule = CrvCodecDrainSchedule()
         private val running = AtomicBoolean(true)
         private val thread = Thread(::run, "crv-api19-audio").apply {
             isDaemon = true
@@ -602,7 +635,7 @@ class CrvApi19MediaSink(
                 // immediate underrun on this older audio stack.
                 while (running.get()) {
                     updateGain()
-                    if (queue.poll(20L, packetHolder)) {
+                    if (queue.poll(drainSchedule.queueWaitMillis(System.nanoTime()), packetHolder)) {
                         val rtp = packetHolder.rtp
                         if (rtp != null) handle(rtp, packetHolder.sample)
                         packetHolder.rtp = null
@@ -697,6 +730,7 @@ class CrvApi19MediaSink(
         }
 
         private fun configureDecoder() {
+            drainSchedule.reset()
             val mime = when (format.codec) {
                 AudioCodecKind.LPCM -> return
                 AudioCodecKind.AAC_LC -> "audio/mp4a-latm"
@@ -741,6 +775,7 @@ class CrvApi19MediaSink(
         }
 
         private fun activateOpusFallback(reason: String): Boolean {
+            drainSchedule.reset()
             if (format.codec != AudioCodecKind.OPUS) return false
             if (softwareOpus != null) return true
             decoder?.let { codec ->
@@ -866,6 +901,7 @@ class CrvApi19MediaSink(
                 }
                 input.put(bytes, byteOffset, byteCount)
                 codec.queueInputBuffer(index, 0, inputBytes, timestampUs, 0)
+                drainSchedule.submitted(System.nanoTime())
             } catch (error: Exception) {
                 if (!activateOpusFallback("hardware input failure: " + error.javaClass.simpleName)) {
                     report("Audio decoder input failed")
@@ -887,6 +923,9 @@ class CrvApi19MediaSink(
                         }
                         index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> Unit
                         index >= 0 -> {
+                            if (outputInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
+                                drainSchedule.outputReady()
+                            }
                             var copiedBytes = 0
                             try {
                                 if (outputInfo.size > 0) {
@@ -1056,6 +1095,7 @@ class CrvApi19MediaSink(
         }
 
         private fun release() {
+            drainSchedule.reset()
             decoder?.let { codec ->
                 runCatching { codec.stop() }
                 runCatching { codec.release() }

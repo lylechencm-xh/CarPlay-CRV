@@ -69,9 +69,40 @@ class Ntb16WireDecoderTest {
         assertArrayEquals(secondFrame, frames[1])
     }
 
+    @Test fun garbageBeforeHeaderIsSkippedAcrossUsbReads() {
+        val decoder = Ntb16WireDecoder()
+        val data = Ntb16Codec.build(byteArrayOf(3, 4, 5), 2)
+        assertTrue(decoder.append(ByteArray(28) + data.copyOfRange(0, 7)).isEmpty())
+        val blocks = decoder.append(data.copyOfRange(7, data.size))
+        assertArrayEquals(byteArrayOf(3, 4, 5), Ntb16Codec.parse(blocks.single()).single())
+        assertTrue(decoder.resynchronizations > 0)
+        assertEquals(28L, decoder.discardedBytes)
+    }
+
+    @Test fun resyncBudgetRecoversAfterWindowAndReportsDiscardedBytes() {
+        var now = 0L
+        var reportedBytes = 0L
+        val decoder = Ntb16WireDecoder(clockNanos = { now }, onResync = { bytes, _ -> reportedBytes += bytes })
+        repeat(16) { decoder.append(ByteArray(16) { 0x55 }) }
+        now += 10_000_000_000L
+        decoder.append(ByteArray(16) { 0x55 })
+        assertEquals(17L, decoder.resynchronizations)
+        assertEquals(reportedBytes, decoder.discardedBytes)
+    }
+
+    @Test fun alternateEndpointPacketSizeSkipsOptionalPad() {
+        val decoder = Ntb16WireDecoder(64)
+        val first = Ntb16Codec.build(ByteArray(36) { 1 }, 1)
+        val second = Ntb16Codec.build(byteArrayOf(9), 2)
+        val blocks = decoder.append(first.copyOfRange(0, 64) + byteArrayOf(0) + second)
+        assertEquals(2, blocks.size)
+        assertArrayEquals(byteArrayOf(9), Ntb16Codec.parse(blocks[1]).single())
+    }
+
     @Test(expected = IllegalArgumentException::class)
-    fun invalidNtbSignatureIsRejected() {
-        Ntb16WireDecoder().append(ByteArray(28))
+    fun repeatedCorruptionEventuallyFails() {
+        val decoder = Ntb16WireDecoder()
+        repeat(17) { decoder.append(ByteArray(16) { 0x55 }) }
     }
 
     @Test fun legacyBulkTransferChunksNeverExceed16KiB() {

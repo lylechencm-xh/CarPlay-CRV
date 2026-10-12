@@ -8,6 +8,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CrvVideoJobQueueTest {
+    @Test fun reusableBacklogSnapshotClearsOldValuesAndPreservesControlBoundary() {
+        val queue = CrvVideoJobQueue(5, 100)
+        val snapshot = CrvVideoJobQueue.Backlog(99, 99L)
+        queue.offerFrame(byteArrayOf(1), 10L)
+        queue.offerFrame(byteArrayOf(2), 20L)
+        queue.offerConfig(VideoCodec.H264, byteArrayOf(3))
+        org.junit.Assert.assertSame(snapshot, queue.backlogAfterCurrent(snapshot))
+        assertEquals(2, snapshot.pendingFrames)
+        assertEquals(20L, snapshot.newestPendingReceivedNs)
+        queue.discardLeadingFrames()
+        queue.backlogAfterCurrent(snapshot)
+        assertEquals(0, snapshot.pendingFrames)
+        assertEquals(null, snapshot.newestPendingReceivedNs)
+    }
+
     @Test
     fun preservesConfigAndFrameOrderWithoutJobObjects() {
         val queue = CrvVideoJobQueue(capacity = 4, maxFrameBytes = 100)

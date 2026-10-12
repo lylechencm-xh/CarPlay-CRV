@@ -3,15 +3,26 @@ package com.shilapi.xcertplay.transport
 /**
  * Frames NTB16 blocks from the USB byte stream.
  *
- * Some peers transmit a 512-byte NTB followed by a zero-byte short-packet marker;
+ * Some peers transmit a packet-aligned NTB followed by a zero-byte short-packet marker;
  * others end the transfer with a USB zero-length packet (which contributes no bytes).
  * Linux CDC-NCM can also include a short-packet byte in wBlockLength. Never wait for
  * a mandatory extra byte when wBlockLength is already complete.
  */
-internal class Ntb16WireDecoder {
+internal class Ntb16WireDecoder(
+    private val packetSize: Int = 512,
+    private val clockNanos: () -> Long = System::nanoTime,
+    private val onResync: (Int, Long) -> Unit = { _, _ -> },
+) {
+    init { require(packetSize > 0) }
     private var buffered = ByteArray(0)
     private var bufferedSize = 0
     private var optionalPadPending = false
+    private var resyncCount = 0
+    private var resyncWindowStart: Long? = null
+    @Volatile var resynchronizations = 0L
+        private set
+    @Volatile var discardedBytes = 0L
+        private set
 
     fun append(source: ByteArray, length: Int = source.size): List<ByteArray> =
         appendInternal(source, length, framesOnly = false)
@@ -49,17 +60,11 @@ internal class Ntb16WireDecoder {
                 optionalPadPending = false
             }
             if (bufferedSize < 12) break
-            val signature =
-                (buffered[0].toInt() and 0xff) or
-                    ((buffered[1].toInt() and 0xff) shl 8) or
-                    ((buffered[2].toInt() and 0xff) shl 16) or
-                    ((buffered[3].toInt() and 0xff) shl 24)
-            require(signature == Ntb16Codec.NTH16_SIG) {
-                "NCM wire data does not begin with an NTH16 header"
+            if (!plausibleHeader(0)) {
+                resync()
+                continue
             }
-            val blockLength =
-                (buffered[8].toInt() and 0xff) or ((buffered[9].toInt() and 0xff) shl 8)
-            require(blockLength >= 28) { "Invalid NTB16 block length " + blockLength }
+            val blockLength = readU16(8)
             if (bufferedSize < blockLength) break
 
             if (framesOnly) {
@@ -68,9 +73,44 @@ internal class Ntb16WireDecoder {
                 output.add(buffered.copyOfRange(0, blockLength))
             }
             consume(blockLength)
-            optionalPadPending = blockLength % 512 == 0
+            optionalPadPending = blockLength % packetSize == 0
         }
         return output
+    }
+
+    private fun plausibleHeader(offset: Int): Boolean {
+        if (offset + 12 > bufferedSize) return false
+        val signature =
+            (buffered[offset].toInt() and 0xff) or
+                ((buffered[offset + 1].toInt() and 0xff) shl 8) or
+                ((buffered[offset + 2].toInt() and 0xff) shl 16) or
+                ((buffered[offset + 3].toInt() and 0xff) shl 24)
+        if (signature != Ntb16Codec.NTH16_SIG || readU16(offset + 4) != 12) return false
+        val blockLength = readU16(offset + 8)
+        val ndpIndex = readU16(offset + 10)
+        return blockLength >= 28 && ndpIndex >= 12 && ndpIndex <= blockLength - 16
+    }
+
+    private fun readU16(offset: Int): Int =
+        (buffered[offset].toInt() and 0xff) or
+            ((buffered[offset + 1].toInt() and 0xff) shl 8)
+
+    private fun resync() {
+        val now = clockNanos()
+        val windowStart = resyncWindowStart
+        if (windowStart == null || now - windowStart >= 10_000_000_000L) {
+            resyncWindowStart = now
+            resyncCount = 0
+        }
+        require(++resyncCount <= 16) { "NCM wire data repeatedly lost NTB16 alignment" }
+        val next = (1..bufferedSize - 12).firstOrNull(::plausibleHeader)
+        // Preserve a possible split header at the end of this USB read.
+        val skipped = next ?: maxOf(1, bufferedSize - 11)
+        consume(skipped)
+        resynchronizations++
+        discardedBytes += skipped
+        runCatching { onResync(skipped, resynchronizations) }
+        optionalPadPending = false
     }
 
     private fun consume(count: Int) {

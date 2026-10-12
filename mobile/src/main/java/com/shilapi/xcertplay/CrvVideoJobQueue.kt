@@ -29,8 +29,8 @@ internal class CrvVideoJobQueue(
     }
 
     data class Backlog(
-        val pendingFrames: Int,
-        val newestPendingReceivedNs: Long?,
+        var pendingFrames: Int,
+        var newestPendingReceivedNs: Long?,
     )
 
     enum class FrameOffer {
@@ -148,17 +148,21 @@ internal class CrvVideoJobQueue(
         }
     }
 
-    fun backlogAfterCurrent(): Backlog = synchronized(lock) {
+    fun backlogAfterCurrent(): Backlog = backlogAfterCurrent(Backlog(0, null))
+
+    fun backlogAfterCurrent(target: Backlog): Backlog = synchronized(lock) {
         var pending = 0
-        var newest: Long? = null
+        var newest = Long.MIN_VALUE
         for (offset in 0 until size) {
             val index = index(offset)
             if (types[index] != TYPE_FRAME) break
             pending++
             val time = received[index]
-            newest = newest?.let { maxOf(it, time) } ?: time
+            newest = maxOf(newest, time)
         }
-        Backlog(pending, newest)
+        target.pendingFrames = pending
+        target.newestPendingReceivedNs = if (pending > 0) newest else null
+        target
     }
 
     fun discardLeadingFrames() = synchronized(lock) {

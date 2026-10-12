@@ -22,7 +22,10 @@ enum class CrvConnectionStage {
 }
 
 internal fun isCrvUiDiagnostic(message: String): Boolean =
-    message.startsWith("Receive:", ignoreCase = true)
+    message.startsWith("Receive:", ignoreCase = true) ||
+        message.startsWith("Audio playback type=", ignoreCase = true) ||
+        message.startsWith("Touch delivery depth=", ignoreCase = true) ||
+        message.startsWith("Video: decoded output ", ignoreCase = true)
 
 internal fun isCrvConnectionError(message: String): Boolean {
     val value = message.lowercase(java.util.Locale.US)

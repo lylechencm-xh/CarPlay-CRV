@@ -10,6 +10,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 internal enum class CrvRecoveryTrigger {
     ACTIVE_DISCONNECT,
+    MODE_CHANGE,
+    MANUAL_DISCONNECT,
+    ACTIVITY_DESTROYED,
+    USB_REATTACHED,
     VPN_SERVICE_DISCONNECTED,
     SYSTEM_VPN_REVOKED,
     TCP_EOF,

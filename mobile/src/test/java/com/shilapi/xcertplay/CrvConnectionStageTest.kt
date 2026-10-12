@@ -4,6 +4,15 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class CrvConnectionStageTest {
+    @Test fun periodicPlaybackStatisticsDoNotRedrawConnectionUiButFailuresRemainVisible() {
+        for (message in listOf("Audio playback type=media queueDepth=0",
+            "Touch delivery depth=0 sent=30", "Video: decoded output fedTotal=90")) {
+            assertEquals(true, isCrvUiDiagnostic(message))
+        }
+        assertEquals(false, isCrvUiDiagnostic("Video: video output failed: CodecException"))
+        assertEquals(false, isCrvUiDiagnostic("Audio renderer failed: IllegalStateException"))
+    }
+
     @Test
     fun receiveStatisticsRemainDiagnosticOnlyAndAreNotErrors() {
         val message = "Receive: video packets=6 bytes=768 " +

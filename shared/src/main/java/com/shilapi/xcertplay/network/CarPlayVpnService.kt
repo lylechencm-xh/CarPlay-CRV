@@ -274,6 +274,18 @@ class CarPlayVpnService : VpnService() {
     /** Port the AirPlay listener actually bound, which may differ from the configured port. */
     fun boundPort(): Int? = attachment?.config?.port
 
+    /** Capture listener ownership and counters without reading sockets or USB synchronously. */
+    fun diagnosticSnapshot(): String {
+        val listener = synchronized(this) {
+            val sockets = listOfNotNull(serverSocket) + additionalServers
+            "networkAttached=${active.get() && attachment != null} " +
+                "listenerPorts=${sockets.filter { it.isBound && !it.isClosed }.map { it.localPort }} " +
+                "${bridge?.diagnosticSnapshot() ?: "ncmCounters=unavailable"}"
+        }
+        val sessionCount = synchronized(sessionsLock) { sessions.size }
+        return "$listener airPlaySessions=$sessionCount"
+    }
+
     /**
      * Installs the authenticator after the wired transport has reached the MFi boundary.
      *
