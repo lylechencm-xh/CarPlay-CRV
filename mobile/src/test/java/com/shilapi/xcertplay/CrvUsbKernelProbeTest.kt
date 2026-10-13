@@ -6,6 +6,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CrvUsbKernelProbeTest {
+    @Test fun readinessWaitPreservesDiscoveryAndAddressAcquisitionButBoundsFailedEnable() {
+        fun result(name: String?, code: Int?, error: String? = null) =
+            CrvUsbKernelProbe.KernelBringUpResult(name, true, code, error)
+        assertEquals(2_500L, result(null, null).readinessWaitMillis(2_500L, 4_000L))
+        assertEquals(4_000L, result("usb2", 0).readinessWaitMillis(2_500L, 4_000L))
+        assertEquals(300L, result("usb2", -1).readinessWaitMillis(2_500L, 4_000L))
+        assertEquals(300L, result("usb2", null, "SecurityException").readinessWaitMillis(2_500L, 4_000L))
+    }
+
     @Test
     fun bringUpSuccessRequiresMatchingInterfaceNoErrorAndZeroResult() {
         assertTrue(

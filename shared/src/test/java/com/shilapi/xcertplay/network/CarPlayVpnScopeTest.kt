@@ -17,6 +17,9 @@ import com.shilapi.xcertplay.transport.NcmUsbBridge
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -39,6 +42,41 @@ import org.robolectric.util.ReflectionHelpers.ClassParameter
 @Config(sdk = [28, 33], manifest = Config.NONE, shadows = [VpnScopeBuilderShadow::class])
 class CarPlayVpnScopeTest {
     @Before fun resetVpnBoundary() { VpnScopeBoundary.reset() }
+
+    @Test fun wiredFailureRetainsWirelessBeforeTheUsbDetachBroadcastAndRetirementIsIdempotent() {
+        withService { service ->
+            val lost = CountDownLatch(1)
+            val fatal = CountDownLatch(1)
+            val listener = object : AirPlaySessionListener {
+                override fun onWiredTransportLost(message: String) { lost.countDown() }
+                override fun onTransportError(message: String) { fatal.countDown() }
+            }
+            assertEquals(CarPlayVpnService.AttachResult.Started, service.attachKernelNetwork(
+                InetAddress.getByName("127.0.0.1"), config, identity, PairingStore(), null,
+                listener, object : AirPlayMediaHandler {}, listOf(InetAddress.getByName("127.0.0.2")),
+            ))
+            val wired = ReflectionHelpers.getField<ServerSocket>(service, "serverSocket")
+            val wireless = ReflectionHelpers.getField<List<ServerSocket>>(service, "additionalServers").single()
+            val generation = ReflectionHelpers.getField<Int>(service, "attachGeneration")
+            val method = CarPlayVpnService::class.java.getDeclaredMethod("onTransportError",
+                Int::class.javaPrimitiveType, AirPlaySessionListener::class.java, Throwable::class.java,
+                Boolean::class.javaPrimitiveType).apply { isAccessible = true }
+            method.invoke(service, generation, listener, IOException("USB detached"), true)
+            assertTrue(lost.await(2, TimeUnit.SECONDS))
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+            while (!wired.isClosed && System.nanoTime() < deadline) Thread.sleep(5)
+            assertTrue(wired.isClosed)
+            assertFalse(wireless.isClosed)
+            assertTrue(service.isAttached())
+            assertEquals(wireless, ReflectionHelpers.getField<ServerSocket>(service, "serverSocket"))
+            assertTrue(service.detachWiredTransportPreservingWireless())
+            assertFalse(wireless.isClosed)
+            assertEquals(1L, fatal.count)
+            service.detach()
+            assertTrue(wireless.isClosed)
+            assertReleased(service)
+        }
+    }
 
     @Test fun allowlistRejectionNeverEstablishesAnUnrestrictedTunnel() {
         VpnScopeBoundary.allowFailure = PackageManager.NameNotFoundException("scope rejected")

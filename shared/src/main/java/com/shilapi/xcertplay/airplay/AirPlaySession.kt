@@ -31,6 +31,8 @@ interface AirPlaySessionListener {
     fun onSessionEnded(session: AirPlaySession) {}
     fun onVideoFrameRendered(session: AirPlaySession) {}
     fun onTransportError(message: String) {}
+    /** The USB bridge failed, but an independently bound Wi-Fi listener has been retained. */
+    fun onWiredTransportLost(message: String) { onTransportError(message) }
     fun onDeviceInfo(session: AirPlaySession, info: AirPlayDeviceInfo) {}
     fun onHostUiRequested(session: AirPlaySession) {}
     fun onCommand(session: AirPlaySession, type: String, params: Map<String, Any?>) {}

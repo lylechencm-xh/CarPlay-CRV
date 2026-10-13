@@ -129,8 +129,12 @@ class CrvWiredCarPlayController(
 
     private val vpnConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, binder: IBinder) {
-            resources.vpnService = (binder as CarPlayVpnService.LocalBinder).service
-            vpnLatch.countDown()
+            synchronized(closeLock) {
+                if (vpnBound && !lifecycle.isStopping()) {
+                    resources.vpnService = (binder as CarPlayVpnService.LocalBinder).service
+                }
+                vpnLatch.countDown()
+            }
         }
 
         override fun onServiceDisconnected(name: ComponentName) {
@@ -167,6 +171,11 @@ class CrvWiredCarPlayController(
             if (activeSession != null && activeSession !== session) {
                 report("Ignoring stale CarPlay session end while another session is active")
                 return
+            }
+            if (mode == CrvConnectionMode.AUTO && session.localAddress != autoHotspotInfo?.hostAddress &&
+                shouldKeepWirelessOnUsbDetach()) {
+                // TCP EOF can precede Android's delayed USB detach broadcast.
+                onUsbDetached()
             }
             if (activeSession === session) resources.activeSession = null
             val disposition = lifecycle.classifySessionEnd()
@@ -213,6 +222,15 @@ class CrvWiredCarPlayController(
             report("CarPlay transport error: $message")
             // Break the blocking wired control loop so the worker can tear the complete stack down.
             recovery.breakBlockingControl(recoveryTriggerForTransport(message))
+        }
+
+        override fun onWiredTransportLost(message: String) {
+            if (mode == CrvConnectionMode.AUTO && shouldKeepWirelessOnUsbDetach()) {
+                report("USB network stopped; retaining prepared Wi-Fi listener: ${message.take(200)}")
+                onUsbDetached()
+            } else {
+                onTransportError(message)
+            }
         }
 
         override fun onCommand(session: AirPlaySession, type: String, params: Map<String, Any?>) {
@@ -378,6 +396,8 @@ class CrvWiredCarPlayController(
 
     private fun runWired(device: UsbDevice, usbSession: Iap2UsbSession) {
         check(!lifecycle.isStopping()) { "controller is stopping" }
+        // Binding is asynchronous; overlap service creation with USB/Lockdown startup.
+        bindVpn()
 
         report(CrvMfiProvider.status(appContext))
 
@@ -386,7 +406,7 @@ class CrvWiredCarPlayController(
         // immediately before iAP2 identification and installed into the AirPlay listener first.
         // NCM is opened before Lockdown/iAP2 so the iPhone sees both CarPlay interfaces active.
         val initialNcm = if (mode != CrvConnectionMode.WIFI_HANDOFF) {
-            openInitialWiredNcm(device)
+            measureStartup("ncm") { openInitialWiredNcm(device) }
         } else {
             WiredNcmPaths(null, null, null)
         }
@@ -398,10 +418,10 @@ class CrvWiredCarPlayController(
             protocolTrace.signal(CrvProtocolLayer.NCM, "ready")
         }
 
-        val session = openCarKitSession(usbSession)
+        val session = measureStartup("lockdown-iap2") { openCarKitSession(usbSession) }
 
         if (mode == CrvConnectionMode.WIFI_HANDOFF) {
-            val mfi = loadMfi()
+            val mfi = measureStartup("mfi-load") { loadMfi() }
             report("MFi authentication ready source=${resources.mfiLease?.source ?: "unknown"}")
             runWirelessHandoff(session, mfi)
             return
@@ -426,7 +446,7 @@ class CrvWiredCarPlayController(
                 resources.wifiHotspot = null
             }.getOrNull()?.also { autoHotspotInfo = it }
         } else null
-        val vpn = awaitVpnService()
+        val vpn = measureStartup("network-service") { awaitVpnService() }
             ?: throw IphoneUsbException.DeviceUnavailable("CarPlay network service did not bind")
         report("CarPlay network service ready")
 
@@ -628,7 +648,7 @@ class CrvWiredCarPlayController(
         report("Transport pre-auth ready")
         report(CrvMfiProvider.status(appContext))
         val mfi = try {
-            loadMfi()
+            measureStartup("mfi-load") { loadMfi() }
         } catch (error: java.io.FileNotFoundException) {
             report(
                 "MFi identity missing; transport pre-auth verified. Provision " +
@@ -668,6 +688,7 @@ class CrvWiredCarPlayController(
                 report(message)
             },
         ) } catch (error: Throwable) {
+            if (mode == CrvConnectionMode.AUTO && shouldKeepWirelessOnUsbDetach()) onUsbDetached()
             if (mode != CrvConnectionMode.AUTO || !autoUsbDetached || autoWifi == null) throw error
             report("Wired iAP2 ended after USB detach; awaiting Wi-Fi")
             null
@@ -694,6 +715,7 @@ class CrvWiredCarPlayController(
                     "airPlayRxIdleMs=${age(lastAirPlayRxNanos)} airPlayTxIdleMs=${age(lastAirPlayTxNanos)}")
             }
         }
+        if (mode == CrvConnectionMode.AUTO && shouldKeepWirelessOnUsbDetach()) onUsbDetached()
         if (mode == CrvConnectionMode.AUTO && autoUsbDetached && autoWifi != null) {
             val deadline = android.os.SystemClock.elapsedRealtime() + WIFI_JOIN_TIMEOUT_MILLIS
             while (!lifecycle.isStopping() && recovery.trigger == null) {
@@ -705,6 +727,8 @@ class CrvWiredCarPlayController(
                 }
                 Thread.sleep(250L)
             }
+            if (lifecycle.isStopping() || recovery.trigger != null ||
+                resources.activeSession?.localAddress != autoWifi.hostAddress) return
             report("Auto Wi-Fi CarPlay active after USB detach")
             while (!lifecycle.isStopping() && recovery.trigger == null &&
                 resources.activeSession?.localAddress == autoWifi.hostAddress) {
@@ -724,21 +748,23 @@ class CrvWiredCarPlayController(
         val expected = inspectExpectedKernelNcm(device).also {
             report("Kernel NCM identity " + CrvUsbKernelProbe.describeExpected(it))
         }
-        var kernel = CrvUsbKernelProbe.waitForKernelNcm(expected, KERNEL_NCM_WAIT_MILLIS)?.also {
+        // An administratively down OEM netdev cannot become ready until enabled.
+        var bringUp = CrvUsbKernelProbe.tryBringUpKernelNcm(expected)
+        reportKernelBringUp(bringUp)
+        var kernel = CrvUsbKernelProbe.waitForKernelNcm(
+            expected,
+            bringUp.readinessWaitMillis(KERNEL_NCM_WAIT_MILLIS, KERNEL_NCM_BRINGUP_WAIT_MILLIS),
+        )?.also {
             reportKernelNcmReady(it)
         }
-        var bringUp: CrvUsbKernelProbe.KernelBringUpResult? = null
-        if (kernel == null) {
+        // If the driver appeared during discovery, enable it before waiting for its address.
+        if (kernel == null && bringUp.interfaceName == null) {
             bringUp = CrvUsbKernelProbe.tryBringUpKernelNcm(expected)
-            report(
-                "Honda kernel CDC-NCM bring-up interface=${bringUp.interfaceName ?: "none"} " +
-                    "attempted=${bringUp.attempted} result=${bringUp.resultCode ?: -1}" +
-                    (bringUp.error?.let { " detail=$it" } ?: ""),
-            )
+            reportKernelBringUp(bringUp)
             if (bringUp.interfaceName != null) {
                 kernel = CrvUsbKernelProbe.waitForKernelNcm(
                     expected,
-                    KERNEL_NCM_BRINGUP_WAIT_MILLIS,
+                    bringUp.readinessWaitMillis(KERNEL_NCM_WAIT_MILLIS, KERNEL_NCM_BRINGUP_WAIT_MILLIS),
                 )?.also { reportKernelNcmReady(it) }
             }
         }
@@ -750,7 +776,7 @@ class CrvWiredCarPlayController(
                     "Kernel USB configuration does not match active iPhone CarPlay configuration",
                 )
             }
-            val fallbackReason = checkNotNull(bringUp).fallbackReason.diagnostic
+            val fallbackReason = bringUp.fallbackReason.diagnostic
             report(
                 "Honda kernel CDC-NCM fallback reason=$fallbackReason " +
                     "kernelDriverDetachAllowed=false",
@@ -933,6 +959,16 @@ class CrvWiredCarPlayController(
         }
     }
 
+    private inline fun <T> measureStartup(stage: String, action: () -> T): T {
+        val started = System.nanoTime()
+        var success = false
+        try {
+            return action().also { success = true }
+        } finally {
+            report("Connection startup stage=$stage elapsedMs=${(System.nanoTime() - started) / 1_000_000L} success=$success")
+        }
+    }
+
     private fun preflightLockdownTls(pairRecord: LockdownPairRecord) {
         val supported = LockdownTlsEngineFactory.supportedSocketProtocols(pairRecord)
         val enabled = listOf("TLSv1.3", "TLSv1.2").filter(supported.toSet()::contains)
@@ -973,7 +1009,7 @@ class CrvWiredCarPlayController(
         }
     }
 
-    private fun bindVpn() {
+    private fun bindVpn(): Unit = synchronized(closeLock) {
         if (vpnBound || lifecycle.isStopping()) return
         vpnBound = true
         try {
@@ -992,11 +1028,19 @@ class CrvWiredCarPlayController(
         }
     }
 
-    private fun unbindVpn() {
+    private fun unbindVpn(): Unit = synchronized(closeLock) {
         if (!vpnBound) return
         vpnBound = false
         runCatching { appContext.unbindService(vpnConnection) }
         resources.vpnService = null
+    }
+
+    private fun reportKernelBringUp(bringUp: CrvUsbKernelProbe.KernelBringUpResult) {
+        report(
+            "Honda kernel CDC-NCM bring-up interface=${bringUp.interfaceName ?: "none"} " +
+                "attempted=${bringUp.attempted} result=${bringUp.resultCode ?: -1}" +
+                (bringUp.error?.let { " detail=$it" } ?: ""),
+        )
     }
 
     private fun reportKernelNcmReady(network: CrvUsbKernelProbe.KernelNcmNetwork) {

@@ -34,6 +34,7 @@ class CrvApi19MediaSink(
     private val videoHeight: Int,
     private val report: (String) -> Unit = {},
 ) : MediaSink, Closeable {
+    override fun acceptsLengthPrefixedVideo(type: Int): Boolean = true
     @Volatile private var outputSurface: Surface? = surface
     private val videoLock = Any()
     private val closed = AtomicBoolean(false)
@@ -247,6 +248,8 @@ class CrvApi19MediaSink(
         private var firstRendered = false
         private var lastKeyFrameRequestNs = 0L
         private val backlogRecovery = CrvVideoBacklogRecovery()
+        private val outputRecovery = CrvVideoOutputRecovery()
+        private var decoderGeneration = 0L
 
         fun configure(codec: VideoCodec, data: ByteArray) {
             queue.offerConfig(codec, data.copyOf())
@@ -357,6 +360,7 @@ class CrvApi19MediaSink(
                     @Suppress("DEPRECATION")
                     val buffers = codec.inputBuffers
                     inputBuffers = buffers
+                    decoderGeneration++
                     diagnostic("API17 H.264 decoder ready")
                     codec
                 } catch (error: Exception) {
@@ -377,10 +381,19 @@ class CrvApi19MediaSink(
             if (decoder == null) configureNow(lastCodec, config)
             val codec = decoder ?: return
 
+            // Release/render available output before another potentially slow input copy/submit.
+            // drain() may flush this same codec object, so don't feed an old-chain frame afterward.
+            val beforeDrainGeneration = decoderGeneration
+            drain()
+            if (!running.get() || decoder !== codec || decoderGeneration != beforeDrainGeneration) return
+
             val inputSize = MediaCodecSupport.videoInputSize(packet)
             if (inputSize == 0) return
 
-            val randomAccess = MediaCodecSupport.isRandomAccessPacket(packet, lastCodec)
+            // Once the reference chain is established, every valid interframe is fed unchanged.
+            // Only recovery needs an IDR check; scanning Annex B payloads on every frame wastes
+            // CPU on API17 head units while touch, decryption and audio share the same cores.
+            val randomAccess = waitingForKeyFrame && MediaCodecSupport.isRandomAccessPacket(packet, lastCodec)
             if (waitingForKeyFrame) {
                 if (!randomAccess) {
                     requestKeyFrameIfDue()
@@ -404,13 +417,18 @@ class CrvApi19MediaSink(
             }
 
             try {
+                val feedGeneration = decoderGeneration
                 var index = -1
                 var attempt = 0
                 while (running.get() && attempt < VIDEO_INPUT_RETRY_ATTEMPTS) {
+                    val inputWaitStartNs = System.nanoTime()
                     index = codec.dequeueInputBuffer(VIDEO_INPUT_TIMEOUT_US)
+                    maxInputWaitNs = maxOf(maxInputWaitNs, System.nanoTime() - inputWaitStartNs)
                     if (index >= 0) break
                     drain()
-                    if (decoder !== codec) return
+                    // drain() can flush the same codec object while resolving input backpressure.
+                    // A frame from the old reference chain must not enter that new generation.
+                    if (decoder !== codec || decoderGeneration != feedGeneration) return
                     attempt++
                 }
                 if (index < 0) {
@@ -423,12 +441,15 @@ class CrvApi19MediaSink(
                     recover("video input buffer unavailable")
                     return
                 }
+                val copyStartNs = System.nanoTime()
                 input.clear()
                 if (inputSize > input.remaining() || !MediaCodecSupport.putVideoInput(packet, input)) {
                     codec.queueInputBuffer(index, 0, 0, 0L, 0)
                     recover("video frame exceeds decoder input")
                     return
                 }
+                maxInputCopyNs = maxOf(maxInputCopyNs, System.nanoTime() - copyStartNs)
+                val inputSubmitStartNs = System.nanoTime()
                 codec.queueInputBuffer(
                     index,
                     0,
@@ -437,7 +458,9 @@ class CrvApi19MediaSink(
                     0,
                 )
                 val submittedNs = System.nanoTime()
+                maxInputSubmitNs = maxOf(maxInputSubmitNs, submittedNs - inputSubmitStartNs)
                 drainSchedule.submitted(submittedNs)
+                outputRecovery.submitted(receivedNs / 1000L)
                 fedFrames++
                 maxQueueAgeNs = maxOf(maxQueueAgeNs, (feedStartNs - receivedNs).coerceAtLeast(0L))
                 maxFeedNs = maxOf(maxFeedNs, submittedNs - feedStartNs)
@@ -451,9 +474,16 @@ class CrvApi19MediaSink(
         private var renderedFrames = 0L
         private var maxQueueAgeNs = 0L
         private var maxFeedNs = 0L
+        private var maxInputWaitNs = 0L
+        private var maxInputCopyNs = 0L
+        private var maxInputSubmitNs = 0L
         private var maxOutputAgeUs = 0L
+        private var maxRenderedAgeUs = 0L
+        private var maxReleaseNs = 0L
         private val decodedVideoOutput = CrvDecodedVideoOutput { index, render ->
+            val start = System.nanoTime()
             decoder?.releaseOutputBuffer(index, render)
+            maxReleaseNs = maxOf(maxReleaseNs, System.nanoTime() - start)
             if (render) renderedFrames++
             if (render && !firstRendered) {
                 firstRendered = true
@@ -468,6 +498,7 @@ class CrvApi19MediaSink(
         private fun drain() {
             val codec = decoder ?: return
             try {
+                var newestOutputUs = 0L
                 while (running.get()) {
                     val index = codec.dequeueOutputBuffer(outputInfo, 0L)
                     when {
@@ -475,9 +506,12 @@ class CrvApi19MediaSink(
                         index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> Unit
                         index == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> Unit
                         index >= 0 -> {
-                            if (outputInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
-                                drainSchedule.outputReady()
+                            if (outputInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
+                                codec.releaseOutputBuffer(index, false)
+                                continue
                             }
+                            drainSchedule.outputReady()
+                            newestOutputUs = outputInfo.presentationTimeUs
                             val ageUs = System.nanoTime() / 1000L - outputInfo.presentationTimeUs
                             if (outputInfo.presentationTimeUs != 0L && ageUs >= 0L) {
                                 maxOutputAgeUs = maxOf(maxOutputAgeUs, ageUs)
@@ -487,16 +521,34 @@ class CrvApi19MediaSink(
                         else -> break
                     }
                 }
+                if (!waitingForKeyFrame && running.get() && newestOutputUs > 0L) {
+                    maxRenderedAgeUs = maxOf(maxRenderedAgeUs,
+                        (System.nanoTime() / 1000L - newestOutputUs).coerceAtLeast(0L))
+                }
                 decodedVideoOutput.finish(render = !waitingForKeyFrame && running.get())
                 val now = System.nanoTime()
+                if (!waitingForKeyFrame && running.get() &&
+                    outputRecovery.observe(now, newestOutputUs)) {
+                    discardCurrentFrameChain()
+                    backlogRecovery.reset()
+                    recover("video codec ${outputRecovery.reason}; requesting fresh frame chain", preferFlush = true)
+                }
                 if (now - videoOutputStatsAtNs >= 5_000_000_000L) {
-                    diagnostic("decoded output fedTotal=$fedFrames renderedTotal=$renderedFrames " +
+                    diagnostic("decoded output generation=$decoderGeneration fedTotal=$fedFrames renderedTotal=$renderedFrames " +
                         "staleSkippedTotal=${decodedVideoOutput.discardedTotal} " +
                         "queueMaxMs=${maxQueueAgeNs / 1_000_000L} feedMaxUs=${maxFeedNs / 1000L} " +
-                        "outputAgeMaxMs=${maxOutputAgeUs / 1000L}")
+                        "outputAgeMaxMs=${maxOutputAgeUs / 1000L} " +
+                        "renderedAgeMaxMs=${maxRenderedAgeUs / 1000L} releaseMaxUs=${maxReleaseNs / 1000L} " +
+                        "inputWaitMaxUs=${maxInputWaitNs / 1000L} inputCopyMaxUs=${maxInputCopyNs / 1000L} " +
+                        "inputSubmitMaxUs=${maxInputSubmitNs / 1000L}")
                     maxQueueAgeNs = 0L
                     maxFeedNs = 0L
+                    maxInputWaitNs = 0L
+                    maxInputCopyNs = 0L
+                    maxInputSubmitNs = 0L
                     maxOutputAgeUs = 0L
+                    maxRenderedAgeUs = 0L
+                    maxReleaseNs = 0L
                     videoOutputStatsAtNs = now
                 }
             } catch (error: Exception) {
@@ -521,6 +573,8 @@ class CrvApi19MediaSink(
                     .onFailure { diagnostic("video decoder flush failed: " + it.javaClass.simpleName) }
                     .isSuccess
                 if (flushed) {
+                    decoderGeneration++
+                    outputRecovery.reset()
                     drainSchedule.reset()
                     decodedVideoOutput.reset()
                     @Suppress("DEPRECATION")
@@ -553,6 +607,7 @@ class CrvApi19MediaSink(
         }
 
         private fun releaseDecoder() {
+            outputRecovery.reset()
             drainSchedule.reset()
             decodedVideoOutput.reset()
             val codec = decoder ?: return
@@ -579,6 +634,13 @@ class CrvApi19MediaSink(
 
         private var started = false
         private val frameBytes = format.channels.coerceAtLeast(1) * 2
+        private val pcmBatch = CrvPcmBatch(frameBytes,
+            maxOf(frameBytes, format.sampleRate * frameBytes * 20 / 1000))
+        private val ratePolicy = CrvAudioRatePolicy(format.sampleRate)
+        private var appliedPlaybackRate = format.sampleRate
+        private var rateCorrectionAvailable = true
+        private var writeCalls = 0L
+        private var batchedPackets = 0L
         private val bufferProgress = CrvAudioBufferProgress(frameBytes)
         @Volatile private var lastPacketNs = 0L
         private var decoder: MediaCodec? = null
@@ -596,6 +658,8 @@ class CrvApi19MediaSink(
         private var lastPcmWriteNs = 0L
         private var rebufferCount = 0
         private var rebuffering = false
+        private var freshPcmAfterPause = false
+        private var drainingTail = false
         private var statsAtNs = System.nanoTime()
         private var maxWriteNs = 0L
         private var appliedGain = 1f
@@ -637,7 +701,11 @@ class CrvApi19MediaSink(
                     updateGain()
                     if (queue.poll(drainSchedule.queueWaitMillis(System.nanoTime()), packetHolder)) {
                         val rtp = packetHolder.rtp
-                        if (rtp != null) handle(rtp, packetHolder.sample)
+                        if (rtp != null) {
+                            if (format.codec == AudioCodecKind.LPCM && format.audioType == "media") {
+                                handlePcmBatch(rtp)
+                            } else handle(rtp, packetHolder.sample)
+                        }
                         packetHolder.rtp = null
                     }
                     drainDecoder()
@@ -850,6 +918,18 @@ class CrvApi19MediaSink(
             }
         }
 
+        private fun handlePcmBatch(first: ByteArray) {
+            pcmBatch.clear()
+            if (pcmBatch.append(first)) batchedPackets++
+            // Never wait to fill a batch. Bound each pass so playback maintenance stays responsive.
+            var packets = 1
+            while (running.get() && !pcmBatch.full && packets < 8 && queue.poll(0L, packetHolder)) {
+                packetHolder.rtp?.let { if (pcmBatch.append(it)) batchedPackets++ }
+                packets++
+            }
+            if (pcmBatch.size > 0) writePcm(pcmBatch.bytes, pcmBatch.size)
+        }
+
         private fun feedDecoder(
             bytes: ByteArray,
             timestampUs: Long,
@@ -963,13 +1043,17 @@ class CrvApi19MediaSink(
         ) {
             val audio = track ?: return
             if (byteOffset < 0 || byteCount <= 0 || byteOffset + byteCount > bytes.size) return
+            drainingTail = false // Newly decoded PCM ends the idle-tail episode.
             voicePcm(bytes, byteOffset, byteCount)
             updateGain()
             var offset = 0
             while (offset < byteCount && running.get()) {
                 val writeStartNs = System.nanoTime()
+                val requestedBytes = CrvAudioPrimeWriteSize.next(
+                    byteCount - offset, playbackStarted, primeTargetBytes, primedBytes)
                 @Suppress("DEPRECATION")
-                val written = audio.write(bytes, byteOffset + offset, byteCount - offset)
+                val written = audio.write(bytes, byteOffset + offset, requestedBytes)
+                writeCalls++
                 maxWriteNs = maxOf(maxWriteNs, System.nanoTime() - writeStartNs)
                 if (written <= 0) {
                     if (running.get()) report("Audio write failed type=${format.audioType} code=$written")
@@ -979,6 +1063,7 @@ class CrvApi19MediaSink(
                 bufferProgress.written(written)
                 lastPcmWriteNs = System.nanoTime()
                 if (!playbackStarted) {
+                    if (rebuffering) freshPcmAfterPause = true
                     primedBytes += written
                     if (primedBytes >= primeTargetBytes) {
                         audio.play()
@@ -1015,8 +1100,16 @@ class CrvApi19MediaSink(
             val now = System.nanoTime()
             if (!ended && now - statsAtNs < 5_000_000_000L) return
             val stats = queue.stats()
+            val pcmQueueMs = if (format.codec == AudioCodecKind.LPCM) {
+                stats.payloadBytes * 1000L / (format.sampleRate.toLong() * frameBytes)
+            } else -1L
+            val trackBytes = track?.let { bufferProgress.queuedBytes(it.playbackHeadPosition) } ?: 0L
             runCatching { report("Audio playback type=${format.audioType} queueDepth=${stats.depth} " +
                 "queueHighWater=${stats.highWater} droppedTotal=${stats.dropped} " +
+                "queuePayloadBytes=${stats.payloadBytes} queuePcmMs=$pcmQueueMs " +
+                "oldestPacketMs=${stats.oldestAgeNs / 1_000_000L} trackQueuedBytes=$trackBytes " +
+                "trackQueuedMs=${trackBytes * 1000L / (format.sampleRate.toLong() * frameBytes)} " +
+                "playbackRateHz=$appliedPlaybackRate writeCallsTotal=$writeCalls batchedPacketsTotal=$batchedPackets " +
                 "writeMaxUs=${maxWriteNs / 1000} rebufferTotal=$rebufferCount ended=$ended") }
             maxWriteNs = 0L
             statsAtNs = now
@@ -1027,13 +1120,29 @@ class CrvApi19MediaSink(
             if (format.audioType != "media") return
 
             val now = System.nanoTime()
+            if (format.codec == AudioCodecKind.LPCM && rateCorrectionAvailable) {
+                val queueMs = queue.queuedPayloadBytes() * 1000L / (format.sampleRate.toLong() * frameBytes)
+                val desired = ratePolicy.desiredRate(now, queueMs, playbackStarted)
+                if (desired != appliedPlaybackRate) {
+                    val result = runCatching { audio.setPlaybackRate(desired) }.getOrDefault(AudioTrack.ERROR)
+                    if (result == AudioTrack.SUCCESS) appliedPlaybackRate = desired
+                    else {
+                        // Stop attempting the hint on OEMs that reject it; restore nominal speed.
+                        runCatching { audio.setPlaybackRate(format.sampleRate) }
+                            .onSuccess { if (it == AudioTrack.SUCCESS) appliedPlaybackRate = format.sampleRate }
+                        rateCorrectionAvailable = false
+                        report("Audio rate correction unavailable code=$result rate=$appliedPlaybackRate")
+                    }
+                }
+            }
             val lastPacket = lastPacketNs
             val queuedBytes = if (playbackStarted) {
                 bufferProgress.queuedBytes(audio.playbackHeadPosition)
             } else {
                 primedBytes.toLong()
             }
-            val recoveryFloor = primeTargetBytes / 2L
+            val recoveryFloor = CrvMediaRebufferPolicy.recoveryFloorBytes(
+                primeTargetBytes, format.sampleRate, frameBytes)
             if (
                 CrvMediaRebufferPolicy.shouldPause(
                     isMedia = true,
@@ -1044,36 +1153,37 @@ class CrvApi19MediaSink(
                     queuedBytes = queuedBytes,
                     recoveryFloorBytes = recoveryFloor,
                     minimumPacketGapNs = MEDIA_REBUFFER_GAP_NS,
+                    drainingTail = drainingTail,
                 )
             ) {
                 val paused = runCatching { audio.pause() }.isSuccess
                 if (paused) {
                     playbackStarted = false
                     rebuffering = true
+                    freshPcmAfterPause = false
                     primedBytes = queuedBytes.coerceAtMost(primeTargetBytes.toLong()).toInt()
                     lastPcmWriteNs = now
                     rebufferCount++
                     report(
                         "Audio media rebuffer count=$rebufferCount queuedBytes=$queuedBytes " +
-                            "targetBytes=$primeTargetBytes",
+                            "targetBytes=$primeTargetBytes floorBytes=$recoveryFloor " +
+                            "packetGapMs=${(now - lastPacket).coerceAtLeast(0L) / 1_000_000L}",
                     )
                 }
             }
 
-            // Tail resume is only for a short stream that never reached the initial threshold.
-            // Starvation recovery must wait for fresh PCM to rebuild the full media prebuffer.
-            if (
-                !rebuffering &&
-                !playbackStarted &&
-                primedBytes > 0 &&
-                queue.isEmpty() &&
-                lastPcmWriteNs != 0L &&
-                now - lastPcmWriteNs >= MEDIA_TAIL_RESUME_NS &&
-                (lastPacket == 0L || now - lastPacket >= MEDIA_TAIL_RESUME_NS)
-            ) {
+            // A recovered short tail must not wait forever for an unreachable full prebuffer.
+            // Require fresh PCM and a longer idle period so old paused data cannot flap play/pause.
+            if (CrvMediaTailResumePolicy.shouldResume(
+                    rebuffering, freshPcmAfterPause, playbackStarted, primedBytes,
+                    queue.isEmpty(), lastPcmWriteNs, lastPacket, now)) {
                 if (runCatching { audio.play() }.isSuccess) {
                     playbackStarted = true
-                    report("Audio media tail resumed bytes=$primedBytes")
+                    val wasRebuffering = rebuffering
+                    drainingTail = true
+                    rebuffering = false
+                    freshPcmAfterPause = false
+                    report("Audio media tail resumed bytes=$primedBytes recovered=$wasRebuffering")
                 }
             }
         }
@@ -1121,7 +1231,6 @@ class CrvApi19MediaSink(
         const val MEDIA_AUDIO_PRIME_MILLIS = 300
         const val MEDIA_AUDIO_HEADROOM_MILLIS = 200
         const val MEDIA_REBUFFER_GAP_NS = 80_000_000L
-        const val MEDIA_TAIL_RESUME_NS = 180_000_000L
         const val MIN_AUDIO_TRACK_BUFFER_BYTES = 16 * 1024
         const val MAX_VIDEO_INPUT = 8 * 1024 * 1024
         const val VIDEO_INPUT_TIMEOUT_US = 2_000L

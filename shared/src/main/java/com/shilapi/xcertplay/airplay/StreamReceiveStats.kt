@@ -18,6 +18,17 @@ internal class StreamReceiveStats(
     private var lastReceivedNs = 0L
     private var maxInterArrivalNs = 0L
     private var maxProcessNs = 0L
+    private var maxDecryptNs = 0L
+    private var maxConvertNs = 0L
+    private var maxSubmitNs = 0L
+    private var maxFrameBytes = 0
+
+    fun videoStages(decryptNs: Long, convertNs: Long, submitNs: Long, frameBytes: Int) {
+        maxDecryptNs = maxOf(maxDecryptNs, decryptNs)
+        maxConvertNs = maxOf(maxConvertNs, convertNs)
+        maxSubmitNs = maxOf(maxSubmitNs, submitNs)
+        maxFrameBytes = maxOf(maxFrameBytes, frameBytes)
+    }
     private var lastTimestamp: Int? = null
     private var nextSequence: Int? = null
     private var forwardGapPackets = 0
@@ -78,7 +89,10 @@ internal class StreamReceiveStats(
             "seqGapLast=[$lastSequenceGap] seqGapAtMs=$lastSequenceGapAtMs ended=$ended " +
             "windowMs=${(now - windowStart).coerceAtLeast(0) / 1_000_000} " +
             "readsOver250Ms=$readsOver250Ms seqGapAfterReadOver250Ms=$seqGapAfterReadOver250Ms " +
-            "seqMissingAfterReadOver250Ms=$seqMissingAfterReadOver250Ms") }
+            "seqMissingAfterReadOver250Ms=$seqMissingAfterReadOver250Ms" +
+            if (label == "video") " decryptMaxUs=${maxDecryptNs / 1000} " +
+                "convertMaxUs=${maxConvertNs / 1000} submitMaxUs=${maxSubmitNs / 1000} " +
+                "frameMaxBytes=$maxFrameBytes" else "") }
         windowStart = now
         packets = 0
         bytes = 0
@@ -88,6 +102,10 @@ internal class StreamReceiveStats(
         seqMissingAfterReadOver250Ms = 0
         maxInterArrivalNs = 0
         maxProcessNs = 0
+        maxDecryptNs = 0L
+        maxConvertNs = 0L
+        maxSubmitNs = 0L
+        maxFrameBytes = 0
         forwardGapPackets = 0
         sequenceGapEvents = 0
         maxSequenceGap = 0

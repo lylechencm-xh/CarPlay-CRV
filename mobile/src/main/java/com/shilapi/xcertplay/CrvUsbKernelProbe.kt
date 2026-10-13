@@ -138,6 +138,13 @@ internal object CrvUsbKernelProbe {
         val error: String?,
     ) {
         val successful: Boolean get() = interfaceName != null && error == null && resultCode == 0
+        fun readinessWaitMillis(discoveryMillis: Long, addressMillis: Long): Long = when {
+            interfaceName == null -> discoveryMillis
+            successful -> addressMillis
+            // A denied/failed enable cannot be repaired by waiting for IPv6. Allow a
+            // short grace period in case the OEM enables the same interface concurrently.
+            else -> 300L
+        }
         val fallbackReason: KernelFallbackReason get() = if (interfaceName != null) {
             KernelFallbackReason.DRIVER_BOUND_NETWORK_NOT_READY
         } else {

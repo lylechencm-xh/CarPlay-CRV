@@ -22,6 +22,7 @@ enum class VideoCodec { H264, H265 }
  */
 class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String) -> Unit = {}) : Closeable {
     interface Listener {
+        fun wantsLengthPrefixedFrames(): Boolean = false
         fun onCodec(codec: VideoCodec) {}
         fun onConfig(codecData: ByteArray) {}
         fun onFrame(naluBytes: ByteArray) {}
@@ -93,7 +94,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
                 }
                 if (!readFully(input, bodyBuffer, bodySize)) break
                 stats.received(HEADER_LEN + bodySize)
-                onMessage(header, bodyBuffer, bodySize)
+                onMessage(header, bodyBuffer, bodySize, stats)
                 stats.processed()
             }
         } catch (error: Exception) {
@@ -106,9 +107,10 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         }
     }
 
-    private fun onMessage(header: ByteArray, body: ByteArray, bodySize: Int) {
+    private fun onMessage(header: ByteArray, body: ByteArray, bodySize: Int, stats: StreamReceiveStats) {
         when (header[OPCODE_OFFSET].toInt() and 0xff) {
             OP_VIDEO_FRAME -> {
+                val decryptStartNs = System.nanoTime()
                 val payload = if (bodySize >= ScreenCodec.TAG_SIZE) {
                     opener.open(
                         nonce = AirPlayCrypto.nonce64(frameCounter.get(), frameNonce),
@@ -120,6 +122,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
                 } else {
                     body.copyOf(bodySize)
                 }
+                val decryptedNs = System.nanoTime()
                 if (firstFrameLogged.compareAndSet(false, true)) {
                     Log.i(
                         TAG,
@@ -127,7 +130,12 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
                             "head=${payload.hexPrefix(16)}",
                     )
                 }
-                listener.onFrame(ScreenCodec.lengthPrefixedToAnnexB(payload))
+                val convertStartNs = System.nanoTime()
+                val frame = ScreenCodec.prepareFrame(payload, listener.wantsLengthPrefixedFrames())
+                val convertedNs = System.nanoTime()
+                listener.onFrame(frame)
+                stats.videoStages(decryptedNs - decryptStartNs, convertedNs - convertStartNs,
+                    System.nanoTime() - convertedNs, frame.size)
             }
             OP_VIDEO_CONFIG -> {
                 val configBody = body.copyOf(bodySize)
@@ -187,6 +195,10 @@ private fun ByteArray.hexPrefix(length: Int): String =
 
 /** Extracts the avcC/hvcC codec-data record from a VideoConfig payload. */
 object ScreenCodec {
+    /** Keep the owned decrypted payload intact for sinks that convert directly into codec input. */
+    fun prepareFrame(payload: ByteArray, lengthPrefixed: Boolean): ByteArray =
+        if (lengthPrefixed) payload else lengthPrefixedToAnnexB(payload)
+
     fun decryptFrame(key: ByteArray, counter: Long, header: ByteArray, body: ByteArray): ByteArray =
         if (body.size < TAG_SIZE) body
         else AirPlayCrypto.chachaOpen(key, AirPlayCrypto.nonce64(counter), body, header)

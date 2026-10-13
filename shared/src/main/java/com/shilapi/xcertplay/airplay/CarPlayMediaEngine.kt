@@ -15,6 +15,8 @@ data class AudioStreamId(val type: Int, val audioType: String)
 
 /** Rendering seam for the decrypted CarPlay media streams. */
 interface MediaSink {
+    /** Opt in only when the sink validates and converts length-prefixed NALs at codec input. */
+    fun acceptsLengthPrefixedVideo(type: Int): Boolean = false
     fun onVideoCodec(type: Int, codec: VideoCodec) {}
     fun onVideoConfig(type: Int, codecData: ByteArray) {}
     fun onVideoFrame(type: Int, naluBytes: ByteArray) {}
@@ -45,6 +47,7 @@ interface MediaSink {
  */
 internal fun currentScreenListener(type: Int, sink: MediaSink, isCurrent: () -> Boolean): ScreenStream.Listener =
     object : ScreenStream.Listener {
+        override fun wantsLengthPrefixedFrames(): Boolean = sink.acceptsLengthPrefixedVideo(type)
         override fun onCodec(codec: VideoCodec) {
             if (isCurrent()) sink.onVideoCodec(type, codec)
         }

@@ -2,6 +2,25 @@ package com.shilapi.xcertplay
 
 import java.util.BitSet
 
+/** Credentials borrowed from a vehicle AP; never include the password in diagnostics. */
+internal class CrvExistingHotspotCredentials(val ssid: String, val passphrase: String) {
+    companion object {
+        fun from(ssid: String?, passphrase: String?, wpaPsk: Boolean): CrvExistingHotspotCredentials {
+            fun normalize(value: String?): String = value.orEmpty().let {
+                if (it.length >= 2 && it.first() == '"' && it.last() == '"') it.substring(1, it.length - 1) else it
+            }
+            val name = normalize(ssid)
+            val secret = normalize(passphrase)
+            require(wpaPsk) { "Existing vehicle hotspot must use WPA/WPA2 PSK" }
+            require(name.toByteArray(Charsets.UTF_8).size in 1..32) { "Existing vehicle hotspot SSID is unavailable" }
+            require(secret.length in 8..63 && secret.all { it.code in 32..126 } && !secret.all { it == '*' }) {
+                "Existing vehicle hotspot password is unavailable or hidden"
+            }
+            return CrvExistingHotspotCredentials(name, secret)
+        }
+    }
+}
+
 /** No generated toString: configuration secrets must never appear in diagnostics. */
 internal class CrvHotspotConfiguration(
     private val ssid: String?,

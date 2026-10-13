@@ -82,10 +82,44 @@ class LocalMfiAuthenticationClientTest {
 
     @Test fun rejectsDifferentPrivateKey() {
         val directory = identity()
+        LocalMfiAuthenticationClient.load(directory)
         val generator = KeyPairGenerator.getInstance("EC")
         generator.initialize(ECGenParameterSpec("secp256r1"))
         File(directory, "identity.pk8").writeBytes(generator.generateKeyPair().private.encoded)
         assertThrows(IllegalArgumentException::class.java) { LocalMfiAuthenticationClient.load(directory) }
+    }
+
+    @Test fun cachedIdentityStillReadsCertificateAndDetectsDeletion() {
+        val directory = identity()
+        val original = File(directory, "certificate.p7b").readBytes()
+        LocalMfiAuthenticationClient.load(directory)
+        File(directory, "certificate.p7b").writeBytes(byteArrayOf(1, 2, 3))
+        assertThrows(Exception::class.java) { LocalMfiAuthenticationClient.load(directory) }
+        File(directory, "certificate.p7b").writeBytes(original)
+        assertArrayEquals(original, LocalMfiAuthenticationClient.load(directory).readCertificate())
+        assertTrue(File(directory, "identity.pk8").delete())
+        assertThrows(Exception::class.java) { LocalMfiAuthenticationClient.load(directory) }
+    }
+
+    @Test fun cachedIdentityPreservesPerLoadSignatureCallbacksAndSupportsRotation() {
+        val directory = identity()
+        var firstCount = 0
+        var secondCount = 0
+        LocalMfiAuthenticationClient.load(directory) { firstCount++ }
+        val second = LocalMfiAuthenticationClient.load(directory) { secondCount++ }
+        second.signChallenge(ByteArray(32))
+        assertEquals(0, firstCount)
+        assertEquals(1, secondCount)
+
+        val replacement = identity()
+        val expected = File(replacement, "certificate.p7b").readBytes()
+        for (name in listOf("identity.pk8", "certificate.p7b")) {
+            File(directory, name).writeBytes(File(replacement, name).readBytes())
+        }
+        val rotated = LocalMfiAuthenticationClient.load(directory)
+        assertArrayEquals(expected, rotated.readCertificate())
+        assertFalse(second.readCertificate().contentEquals(rotated.readCertificate()))
+        assertEquals(64, rotated.signChallenge(ByteArray(32)).size)
     }
 
     @Test fun rejectsIncompleteIdentityAndWrongChallengeLength() {

@@ -15,22 +15,34 @@ internal class CrvAudioPacketQueue(private val capacity: Int) {
     private val lock = Object()
     private val packets = arrayOfNulls<ByteArray>(capacity)
     private val samples = IntArray(capacity)
+    private val payloadSizes = IntArray(capacity)
+    private val receivedNs = LongArray(capacity)
+    private var payloadBytes = 0L
     private var head = 0
     private var size = 0
     private var dropped = 0L
     private var highWater = 0
 
-    data class Stats(val depth: Int, val highWater: Int, val dropped: Long)
-    fun stats(): Stats = synchronized(lock) { Stats(size, highWater, dropped) }
+    data class Stats(val depth: Int, val highWater: Int, val dropped: Long,
+        val payloadBytes: Long, val oldestAgeNs: Long)
+    fun stats(nowNs: Long = System.nanoTime()): Stats = synchronized(lock) {
+        Stats(size, highWater, dropped, payloadBytes,
+            if (size == 0) 0L else (nowNs - receivedNs[head]).coerceAtLeast(0L))
+    }
+    fun queuedPayloadBytes(): Long = synchronized(lock) { payloadBytes }
 
     init {
         require(capacity > 0)
     }
 
-    fun offer(rtp: ByteArray, sample: Int) {
+    fun offer(rtp: ByteArray, sample: Int, nowNs: Long = System.nanoTime()) {
+        val start = CrvLegacyRtp.payloadStart(rtp)
+        val end = CrvLegacyRtp.payloadEnd(rtp, start)
+        val payloadSize = if (start >= 0 && end > start) end - start else 0
         synchronized(lock) {
             if (size == capacity) {
                 dropped++
+                payloadBytes -= payloadSizes[head]
                 packets[head] = null
                 head = (head + 1) % capacity
                 size--
@@ -38,6 +50,9 @@ internal class CrvAudioPacketQueue(private val capacity: Int) {
             val tail = (head + size) % capacity
             packets[tail] = rtp
             samples[tail] = sample
+            payloadSizes[tail] = payloadSize
+            receivedNs[tail] = nowNs
+            payloadBytes += payloadSize
             size++
             highWater = maxOf(highWater, size)
             lock.notify()
@@ -66,6 +81,8 @@ internal class CrvAudioPacketQueue(private val capacity: Int) {
 
             target.rtp = packets[head]
             target.sample = samples[head]
+            payloadBytes -= payloadSizes[head]
+            payloadSizes[head] = 0
             packets[head] = null
             head = (head + 1) % capacity
             size--

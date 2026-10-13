@@ -7,6 +7,23 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CrvAudioPacketQueueTest {
+    @Test fun tracksActualPayloadBytesAndAgeAcrossOverflowAndPoll() {
+        val queue = CrvAudioPacketQueue(2)
+        val holder = CrvAudioPacketQueue.MutablePacket()
+        fun packet(size: Int) = ByteArray(12 + size).also { it[0] = 0x80.toByte() }
+        queue.offer(packet(4), 1, 100L)
+        queue.offer(packet(8), 2, 200L)
+        assertEquals(12L, queue.queuedPayloadBytes())
+        assertEquals(200L, queue.stats(300L).oldestAgeNs)
+        queue.offer(packet(12), 3, 300L)
+        assertEquals(20L, queue.stats(400L).payloadBytes)
+        assertEquals(200L, queue.stats(400L).oldestAgeNs)
+        assertTrue(queue.poll(0L, holder))
+        assertEquals(12L, queue.queuedPayloadBytes())
+        assertTrue(queue.poll(0L, holder))
+        assertEquals(0L, queue.stats(500L).payloadBytes)
+        assertEquals(0L, queue.stats(500L).oldestAgeNs)
+    }
     @Test
     fun preservesPacketOrderWithoutAllocatingEntries() {
         val queue = CrvAudioPacketQueue(3)

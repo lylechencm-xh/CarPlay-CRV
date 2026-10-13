@@ -75,6 +75,15 @@ internal class CrvApi19WirelessHotspot(
         // Never replace an active vehicle hotspot or change its saved configuration without
         // being able to restore it. These methods are vendor APIs on Android 4.2.2.
         var apState = readApState()
+        if (apState == CrvHotspotState.ENABLING) {
+            report("Waiting for existing vehicle hotspot startup")
+            check(awaitCrvCondition(timeoutMillis) {
+                check(!closed) { "Wi-Fi hotspot was closed" }
+                apState = readApState()
+                apState != CrvHotspotState.ENABLING
+            }) { "Existing vehicle hotspot startup timed out" }
+        }
+        if (apState == CrvHotspotState.ENABLED) return borrowVehicleHotspot(timeoutMillis)
         if (apState == CrvHotspotState.DISABLING) {
             apState = awaitApDisabled()
         }
@@ -172,6 +181,34 @@ internal class CrvApi19WirelessHotspot(
             .toSet()
     } catch (_: Exception) {
         emptySet()
+    }
+
+    private fun borrowVehicleHotspot(timeoutMillis: Long): Info {
+        val config = readApConfiguration()
+            ?: throw IllegalStateException("Existing vehicle hotspot configuration is unavailable")
+        val credentials = CrvExistingHotspotCredentials.from(
+            config.SSID, config.preSharedKey,
+            config.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WPA_PSK),
+        )
+        val snapshot = configurationSnapshot(config)
+        var endpoint: Pair<String, InetAddress>? = null
+        check(awaitCrvCondition(timeoutMillis) {
+            check(!closed) { "Wi-Fi hotspot was closed" }
+            check(readApState() == CrvHotspotState.ENABLED) { "Existing vehicle hotspot stopped during preparation" }
+            endpoint = findApEndpoint(emptySet())
+            endpoint != null
+        }) { "Existing vehicle hotspot has no AP address" }
+        check(readApConfiguration()?.let { snapshot.matches(configurationSnapshot(it)) } == true) {
+            "Existing vehicle hotspot configuration changed during preparation"
+        }
+        val ready = checkNotNull(endpoint)
+        synchronized(lock) {
+            check(!closed) { "Wi-Fi hotspot was closed" }
+            // Borrow the vehicle AP: close() must not stop it or restore our generated settings.
+            started = true
+        }
+        report("Wi-Fi hotspot ready source=existing-vehicle interface=${ready.first} address=${ready.second.hostAddress}")
+        return Info(credentials.ssid, credentials.passphrase, currentApChannel(config), ready.second, ready.first)
     }
 
     private fun findApEndpoint(beforeStart: Set<String>): Pair<String, InetAddress>? {

@@ -249,19 +249,28 @@ class CarPlayVpnService : VpnService() {
     /** Retain the Wi-Fi listener and active AirPlay session after the USB NCM path disappears. */
     fun detachWiredTransportPreservingWireless(): Boolean {
         val retired = synchronized(this) {
-            val wirelessServer = additionalServers.firstOrNull() ?: return false
-            wiredBridgeRetired = true
-            val wiredResources = Triple(serverSocket, bridge, tun)
-            serverSocket = wirelessServer
-            additionalServers = additionalServers.drop(1)
-            bridge = null
-            tun = null
-            wiredResources
+            if (wiredBridgeRetired) return true
+            retireWiredTransportLocked() ?: return false
         }
+        closeRetiredWiredTransport(retired)
+        return true
+    }
+
+    private fun retireWiredTransportLocked(): Triple<ServerSocket?, Ipv6NcmBridge?, ParcelFileDescriptor?>? {
+        val wirelessServer = additionalServers.firstOrNull() ?: return null
+        wiredBridgeRetired = true
+        val retired = Triple(serverSocket, bridge, tun)
+        serverSocket = wirelessServer
+        additionalServers = additionalServers.drop(1)
+        bridge = null
+        tun = null
+        return retired
+    }
+
+    private fun closeRetiredWiredTransport(retired: Triple<ServerSocket?, Ipv6NcmBridge?, ParcelFileDescriptor?>) {
         runCatching { retired.first?.close() }
         runCatching { retired.second?.close() }
         runCatching { retired.third?.close() }
-        return true
     }
 
     @Synchronized
@@ -447,11 +456,25 @@ class CarPlayVpnService : VpnService() {
         Log.e(TAG, "CarPlay transport stopped: $message", error)
         Thread(
             {
-                val releasedGeneration = synchronized(this) {
+                var releasedGeneration = generation
+                val retired = synchronized(this) {
                     if (generation != attachGeneration) return@Thread
                     if (fromWiredBridge && wiredBridgeRetired) return@Thread
-                    releaseLocked()
-                    attachGeneration
+                    if (fromWiredBridge && additionalServers.isNotEmpty()) {
+                        retireWiredTransportLocked()
+                    } else {
+                        releaseLocked()
+                        releasedGeneration = attachGeneration
+                        null
+                    }
+                }
+                if (retired != null) {
+                    try {
+                        listener.onWiredTransportLost(message)
+                    } finally {
+                        closeRetiredWiredTransport(retired)
+                    }
+                    return@Thread
                 }
                 listener.onTransportError(message)
                 synchronized(this) {
