@@ -30,34 +30,29 @@
 
 **请先下载源码到本地，再进行本地构建。**
 
-由于 CarPlay MFi 认证需要本地合法配置文件，公开仓库不会上传 MFi 私钥、证书或认证文件。
+由于 CarPlay MFi 认证需要本地配置文件，公开仓库不会上传 MFi 私钥、证书或认证文件。
 
-构建流程：
+Release 构建：
 
 ```bash
 git clone https://github.com/lylechencm-xh/CarPlay-CRV.git
 cd CarPlay-CRV
 # 配置本地 MFi 文件后执行
-./gradlew assembleRelease
+./gradlew :mobile:assembleRelease :automotive:assembleRelease
 ```
 
 APK 输出：
 
 ```
-CarPlay-CRV/release/
+mobile/build/outputs/apk/release/
+automotive/build/outputs/apk/release/
 ```
 
 请使用本地 MFi 配置完成 Release 构建后生成测试 APK。
 
 ## 测试反馈
 
-请保留 `carplay-crv-*.log`、APK版本、iPhone/iOS版本和测试现象。日志通常位于：
-
-```
-/sdcard/Android/data/com.shihab.diplay/files/
-```
-
-分享日志前请删除敏感信息。
+请保留 `carplay-crv-*.log`、APK版本、iPhone/iOS版本和测试现象。
 
 > **免责声明：本项目仅供测试、学习与交流使用，请勿用于商业用途。**
 
@@ -72,14 +67,16 @@ CarPlay adaptation project for the **2021 Honda CR-V**, based on [DiPlay](https:
 - Package: `com.shihab.diplay`
 - Components: USB, USBMUX, Lockdown, iAP2/MFi, CDC-NCM, AirPlay, video, audio and touch
 
-> **Vehicle test passed:** Wired CarPlay has been tested on a 2021 Honda CR-V with normal connection and navigation display. The current focus is improving smoothness, including video decoding, buffering, synchronization and long-term stability.
+> **Vehicle test passed:** Wired CarPlay has been tested on a 2021 Honda CR-V with normal connection and navigation display. Current focus is smoothness optimization.
+
+![2021 Honda CR-V CarPlay Test](asset/crv-2021-wired-carplay-test-2026-10-09.png)
 
 ## Current Optimization Focus
 
 Current main issue: **CarPlay smoothness optimization**.
 
 Targets:
-- Improve video receiving and decoding performance;
+- Improve video decoding performance;
 - Improve MediaCodec stability;
 - Reduce latency and frame stutter;
 - Optimize audio/video scheduling and buffering;
@@ -89,21 +86,22 @@ Targets:
 
 **Clone the source code locally before building.**
 
-MFi authentication requires local authorized configuration files. Private keys, certificates and authentication assets are not included in this public repository.
+MFi authentication requires local configuration files. Private keys, certificates and authentication assets are not included in this public repository.
 
-Build:
+Release build:
 
 ```bash
 git clone https://github.com/lylechencm-xh/CarPlay-CRV.git
 cd CarPlay-CRV
 # Configure local MFi files first
-./gradlew assembleRelease
+./gradlew :mobile:assembleRelease :automotive:assembleRelease
 ```
 
 APK output:
 
 ```
-CarPlay-CRV/release/
+mobile/build/outputs/apk/release/
+automotive/build/outputs/apk/release/
 ```
 
 Build the test APK locally with your own MFi configuration.
