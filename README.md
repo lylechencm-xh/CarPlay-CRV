@@ -38,15 +38,16 @@ Release 构建：
 git clone https://github.com/lylechencm-xh/CarPlay-CRV.git
 cd CarPlay-CRV
 # 配置本地 MFi 文件后执行
-./gradlew :mobile:assembleRelease :automotive:assembleRelease
+./gradlew :mobile:assembleRelease
 ```
 
 APK 输出：
 
 ```
 mobile/build/outputs/apk/release/
-automotive/build/outputs/apk/release/
 ```
+
+如使用其他构建任务，请以 Gradle 实际生成目录为准。
 
 请使用本地 MFi 配置完成 Release 构建后生成测试 APK。
 
@@ -94,17 +95,16 @@ Release build:
 git clone https://github.com/lylechencm-xh/CarPlay-CRV.git
 cd CarPlay-CRV
 # Configure local MFi files first
-./gradlew :mobile:assembleRelease :automotive:assembleRelease
+./gradlew :mobile:assembleRelease
 ```
 
 APK output:
 
 ```
 mobile/build/outputs/apk/release/
-automotive/build/outputs/apk/release/
 ```
 
-Build the test APK locally with your own MFi configuration.
+Use your local MFi configuration to generate the test APK.
 
 > **Disclaimer: For testing, learning, and educational exchange only. Not for commercial use.**
 
