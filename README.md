@@ -4,45 +4,59 @@
 
 ## 简体中文
 
-基于 [DiPlay](https://github.com/shihabal3amri/DiPlay) 开发，面向 **2021 款 Honda CR-V** 的 CarPlay 适配项目，优先实现有线连接。
+基于 [DiPlay](https://github.com/shihabal3amri/DiPlay) 开发，面向 **2021 Honda CR-V** 的 CarPlay 适配项目，优先实现有线 CarPlay。
 
 **适配环境**
-- 车机系统：Android **4.2.2 / API 17**（`minSdk=17`，不提高兼容基线）
+- 车机：Android **4.2.2 / API 17** (`minSdk=17`)
 - 包名：`com.shihab.diplay`
-- 主要功能模块：USB、USBMUX、Lockdown、iAP2/MFi、CDC-NCM、AirPlay、音视频与触控
+- 模块：USB、USBMUX、Lockdown、iAP2/MFi、CDC-NCM、AirPlay、音视频与触控
 
-> **车机实测正常：** 2026-10-09 在 2021 款 CR-V 上，有线 CarPlay 正常连接，导航画面在车机上正常显示。音频、麦克风、触控和长时间稳定性仍需分别验证。当前默认 Auto 模式会尝试为拔线后的无线切换做准备；自动切换尚未完成实车验收。
+> **车机实测正常：** 已在 2021 款 CR-V 实车验证有线 CarPlay 连接，导航画面正常显示。当前重点优化 CarPlay 流畅度，包括视频解码、缓冲策略、音视频同步和长时间稳定性。
 
-![2021 款 CR-V 车机有线 CarPlay 导航实测画面](asset/crv-2021-wired-carplay-test-2026-10-09.png)
+![2021 Honda CR-V CarPlay Test](asset/crv-2021-wired-carplay-test-2026-10-09.png)
 
-*2026-10-09 车机实测：有线 CarPlay 导航显示正常。*
-
-**当前优化重点**
+## 当前优化重点
 
 当前主要问题：**CarPlay 流畅度优化**。
 
-后续优化方向：
-- 视频接收与解码队列优化，降低画面延迟和卡顿；
-- MediaCodec 解码稳定性优化；
-- 视频关键帧请求与异常恢复优化；
-- 音视频线程调度和缓冲策略优化；
+优化方向：
+- 视频接收与解码性能优化；
+- MediaCodec 稳定性优化；
+- 降低画面延迟和卡顿；
+- 音视频线程调度与缓冲优化；
 - 长时间运行稳定性测试。
 
-当前状态：功能链路已打通，下一阶段重点提升接近原厂 CarPlay 的流畅体验。
+## 构建与下载
 
-**构建与下载**
+**请先下载源码到本地，再进行本地构建。**
+
+由于 CarPlay MFi 认证需要本地合法配置文件，公开仓库不会上传 MFi 私钥、证书或认证文件。
+
+构建流程：
 
 ```bash
+git clone https://github.com/lylechencm-xh/CarPlay-CRV.git
+cd CarPlay-CRV
 ./gradlew :mobile:assembleDebug
 ```
 
-APK 输出：`mobile/build/outputs/apk/debug/mobile-debug.apk`。也可从 [GitHub Actions](https://github.com/lylechencm-xh/CarPlay-CRV/actions/workflows/crv-2021.yml) 成功运行的 **Artifacts** 中下载。当前没有 GitHub Release 安装包；公开构建不包含 MFi 私钥或证书。
+如需使用本地 MFi 配置进行测试，请按照构建说明配置对应文件后再执行构建。
 
-**测试反馈**
+APK 输出：
 
-发生故障时，请保留 `carplay-crv-*.log`、APK 版本、iPhone/iOS 版本和故障现象。日志通常位于 `/sdcard/Android/data/com.shihab.diplay/files/`；分享前请脱敏。
+```
+mobile/build/outputs/apk/debug/mobile-debug.apk
+```
 
-详细说明：[代码导览](docs/CODEBASE-GUIDE.zh-CN.md) · [构建指南](docs/BUILD.md) · [实车测试清单](CRV-2021-TESTING.md)
+## 测试反馈
+
+请保留 `carplay-crv-*.log`、APK版本、iPhone/iOS版本和测试现象。日志通常位于：
+
+```
+/sdcard/Android/data/com.shihab.diplay/files/
+```
+
+分享日志前请删除敏感信息。
 
 > **免责声明：本项目仅供测试、学习与交流使用，请勿用于商业用途。**
 
@@ -50,48 +64,62 @@ APK 输出：`mobile/build/outputs/apk/debug/mobile-debug.apk`。也可从 [GitH
 
 ## English
 
-CarPlay adaptation project for the **2021 Honda CR-V**, based on [DiPlay](https://github.com/shihabal3amri/DiPlay), with wired CarPlay as the primary focus.
+CarPlay adaptation project for the **2021 Honda CR-V**, based on [DiPlay](https://github.com/shihabal3amri/DiPlay).
 
 **Compatibility**
-- Head unit: Android **4.2.2 / API 17** (`minSdk=17`; this baseline will not be raised)
+- Head unit: Android **4.2.2 / API 17** (`minSdk=17`)
 - Package: `com.shihab.diplay`
-- Main components: USB, USBMUX, Lockdown, iAP2/MFi, CDC-NCM, AirPlay, video, audio, and touch input
+- Components: USB, USBMUX, Lockdown, iAP2/MFi, CDC-NCM, AirPlay, video, audio and touch
 
-> **Vehicle test passed:** On 2026-10-09, wired CarPlay connected normally on a 2021 CR-V and displayed navigation on the head unit. Audio, microphone, touch input, and long-term stability still need separate verification. Auto mode now prepares Wi-Fi handoff when available; automatic switching still needs vehicle testing.
+> **Vehicle test passed:** Wired CarPlay has been tested on a 2021 Honda CR-V with normal connection and navigation display. The current focus is improving smoothness, including video decoding, buffering, synchronization and long-term stability.
 
-![Wired CarPlay navigation displayed on a 2021 CR-V head unit](asset/crv-2021-wired-carplay-test-2026-10-09.png)
+![2021 Honda CR-V CarPlay Test](asset/crv-2021-wired-carplay-test-2026-10-09.png)
 
-*2026-10-09 vehicle test: wired CarPlay navigation display working normally.*
-
-**Current Optimization Focus**
+## Current Optimization Focus
 
 Current main issue: **CarPlay smoothness optimization**.
 
-Optimization targets:
-- Improve video receiving and decoding pipeline to reduce latency and stutter;
-- Improve MediaCodec decoding stability;
-- Optimize keyframe recovery and error handling;
-- Tune audio/video thread scheduling and buffering;
-- Perform long-duration stability testing.
+Targets:
+- Improve video receiving and decoding performance;
+- Improve MediaCodec stability;
+- Reduce latency and frame stutter;
+- Optimize audio/video scheduling and buffering;
+- Long-term stability testing.
 
-Current status: The main connection path is working. The next stage focuses on improving smoothness and approaching factory CarPlay experience.
+## Build & Download
 
-**Build & Download**
+**Clone the source code locally before building.**
+
+MFi authentication requires local authorized configuration files. Private keys, certificates and authentication assets are not included in this public repository.
+
+Build:
 
 ```bash
+git clone https://github.com/lylechencm-xh/CarPlay-CRV.git
+cd CarPlay-CRV
 ./gradlew :mobile:assembleDebug
 ```
 
-APK output: `mobile/build/outputs/apk/debug/mobile-debug.apk`. Alternatively, download the **Artifacts** from a successful [GitHub Actions](https://github.com/lylechencm-xh/CarPlay-CRV/actions/workflows/crv-2021.yml) run. No GitHub Release APK is currently available. Public builds do not include MFi private keys or certificates.
+For MFi-enabled testing, configure your local MFi assets according to the build instructions before building.
 
-**Testing & Feedback**
+APK output:
 
-If a connection fails, keep the `carplay-crv-*.log` file and note the APK version, iPhone/iOS version, and symptoms. Logs are typically under `/sdcard/Android/data/com.shihab.diplay/files/`. Remove sensitive data before sharing.
+```
+mobile/build/outputs/apk/debug/mobile-debug.apk
+```
 
-More details: [Codebase Guide (Chinese)](docs/CODEBASE-GUIDE.zh-CN.md) · [Build Guide](docs/BUILD.md) · [Vehicle Testing Checklist](CRV-2021-TESTING.md)
+## Testing & Feedback
+
+Keep `carplay-crv-*.log`, APK version, iPhone/iOS version and test results. Logs are usually stored at:
+
+```
+/sdcard/Android/data/com.shihab.diplay/files/
+```
+
+Remove sensitive information before sharing.
 
 > **Disclaimer: For testing, learning, and educational exchange only. Not for commercial use.**
 
 ---
 
-Based on [DiPlay](https://github.com/shihabal3amri/DiPlay). Original project and third-party license notices must be respected.
+Based on [DiPlay](https://github.com/shihabal3amri/DiPlay). Original project and third-party licenses must be respected.
