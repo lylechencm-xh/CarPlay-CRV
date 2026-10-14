@@ -17,6 +17,19 @@
 
 *2026-10-09 车机实测：有线 CarPlay 导航显示正常。*
 
+**当前优化重点**
+
+当前主要问题：**CarPlay 流畅度优化**。
+
+后续优化方向：
+- 视频接收与解码队列优化，降低画面延迟和卡顿；
+- MediaCodec 解码稳定性优化；
+- 视频关键帧请求与异常恢复优化；
+- 音视频线程调度和缓冲策略优化；
+- 长时间运行稳定性测试。
+
+当前状态：功能链路已打通，下一阶段重点提升接近原厂 CarPlay 的流畅体验。
+
 **构建与下载**
 
 ```bash
@@ -49,6 +62,19 @@ CarPlay adaptation project for the **2021 Honda CR-V**, based on [DiPlay](https:
 ![Wired CarPlay navigation displayed on a 2021 CR-V head unit](asset/crv-2021-wired-carplay-test-2026-10-09.png)
 
 *2026-10-09 vehicle test: wired CarPlay navigation display working normally.*
+
+**Current Optimization Focus**
+
+Current main issue: **CarPlay smoothness optimization**.
+
+Optimization targets:
+- Improve video receiving and decoding pipeline to reduce latency and stutter;
+- Improve MediaCodec decoding stability;
+- Optimize keyframe recovery and error handling;
+- Tune audio/video thread scheduling and buffering;
+- Perform long-duration stability testing.
+
+Current status: The main connection path is working. The next stage focuses on improving smoothness and approaching factory CarPlay experience.
 
 **Build & Download**
 
