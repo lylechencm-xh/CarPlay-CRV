@@ -37,16 +37,17 @@
 ```bash
 git clone https://github.com/lylechencm-xh/CarPlay-CRV.git
 cd CarPlay-CRV
-./gradlew :mobile:assembleDebug
+# 配置本地 MFi 文件后执行
+./gradlew assembleRelease
 ```
-
-如需使用本地 MFi 配置进行测试，请按照构建说明配置对应文件后再执行构建。
 
 APK 输出：
 
 ```
-mobile/build/outputs/apk/debug/mobile-debug.apk
+CarPlay-CRV/release/
 ```
+
+请使用本地 MFi 配置完成 Release 构建后生成测试 APK。
 
 ## 测试反馈
 
@@ -73,8 +74,6 @@ CarPlay adaptation project for the **2021 Honda CR-V**, based on [DiPlay](https:
 
 > **Vehicle test passed:** Wired CarPlay has been tested on a 2021 Honda CR-V with normal connection and navigation display. The current focus is improving smoothness, including video decoding, buffering, synchronization and long-term stability.
 
-![2021 Honda CR-V CarPlay Test](asset/crv-2021-wired-carplay-test-2026-10-09.png)
-
 ## Current Optimization Focus
 
 Current main issue: **CarPlay smoothness optimization**.
@@ -97,26 +96,17 @@ Build:
 ```bash
 git clone https://github.com/lylechencm-xh/CarPlay-CRV.git
 cd CarPlay-CRV
-./gradlew :mobile:assembleDebug
+# Configure local MFi files first
+./gradlew assembleRelease
 ```
-
-For MFi-enabled testing, configure your local MFi assets according to the build instructions before building.
 
 APK output:
 
 ```
-mobile/build/outputs/apk/debug/mobile-debug.apk
+CarPlay-CRV/release/
 ```
 
-## Testing & Feedback
-
-Keep `carplay-crv-*.log`, APK version, iPhone/iOS version and test results. Logs are usually stored at:
-
-```
-/sdcard/Android/data/com.shihab.diplay/files/
-```
-
-Remove sensitive information before sharing.
+Build the test APK locally with your own MFi configuration.
 
 > **Disclaimer: For testing, learning, and educational exchange only. Not for commercial use.**
 
