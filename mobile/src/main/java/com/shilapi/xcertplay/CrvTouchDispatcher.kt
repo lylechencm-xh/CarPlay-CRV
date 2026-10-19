@@ -2,12 +2,33 @@ package com.shilapi.xcertplay
 
 import java.io.Closeable
 import java.util.ArrayDeque
+import com.shilapi.xcertplay.airplay.AirPlayHid
 
 internal data class CrvTouchFrame<T>(
     val target: T, val x0: Double, val y0: Double, val down0: Boolean,
     val x1: Double, val y1: Double, val down1: Boolean, val move: Boolean,
     val queuedNs: Long = System.nanoTime(),
 )
+
+/** Suppress only MOVE reports identical to the last successfully sent HID state. */
+internal class CrvTouchMoveFilter<T>(private val xMax: Int, private val yMax: Int) {
+    private val pending = ByteArray(AirPlayHid.TOUCH_REPORT_BYTES)
+    private val delivered = ByteArray(AirPlayHid.TOUCH_REPORT_BYTES)
+    private var target: T? = null
+    private var valid = false
+
+    fun shouldSend(frame: CrvTouchFrame<T>): Boolean {
+        AirPlayHid.writeTouchReport(pending, frame.x0, frame.y0, frame.down0,
+            frame.x1, frame.y1, frame.down1, xMax, yMax)
+        return !frame.move || !valid || target !== frame.target || !pending.contentEquals(delivered)
+    }
+
+    fun completed(frame: CrvTouchFrame<T>, success: Boolean) {
+        valid = success
+        target = if (success) frame.target else null
+        if (success) System.arraycopy(pending, 0, delivered, 0, pending.size)
+    }
+}
 
 /** Bounded input history: replace only consecutive MOVE frames, never a normal gesture edge. */
 internal class CrvTouchQueue<T>(private val capacity: Int = 32) {
@@ -48,6 +69,7 @@ internal class CrvTouchQueue<T>(private val capacity: Int = 32) {
 internal class CrvTouchDispatcher<T>(
     private val send: (CrvTouchFrame<T>) -> Boolean,
     private val report: (String) -> Unit,
+    private val moveFilter: CrvTouchMoveFilter<T>? = null,
 ) : Closeable {
     private val lock = java.lang.Object()
     private val queue = CrvTouchQueue<T>()
@@ -69,6 +91,7 @@ internal class CrvTouchDispatcher<T>(
     private fun run() {
         var sent = 0L
         var failures = 0L
+        var unchangedMoves = 0L
         var sendMaxNs = 0L
         var queueMaxNs = 0L
         var reportAt = System.nanoTime()
@@ -81,14 +104,20 @@ internal class CrvTouchDispatcher<T>(
                 if (frame != null && !closed) {
                     val start = System.nanoTime()
                     queueMaxNs = maxOf(queueMaxNs, start - frame.queuedNs)
-                    if (runCatching { send(frame) }.getOrDefault(false)) sent++ else failures++
-                    sendMaxNs = maxOf(sendMaxNs, System.nanoTime() - start)
+                    if (moveFilter?.shouldSend(frame) == false) {
+                        unchangedMoves++
+                    } else {
+                        val success = runCatching { send(frame) }.getOrDefault(false)
+                        moveFilter?.completed(frame, success)
+                        if (success) sent++ else failures++
+                        sendMaxNs = maxOf(sendMaxNs, System.nanoTime() - start)
+                    }
                 }
                 val now = System.nanoTime()
                 if (now - reportAt >= 5_000_000_000L) {
                     val snapshot = synchronized(lock) { "depth=${queue.size} coalesced=${queue.coalesced} resets=${queue.resets}" }
                     runCatching { report("Touch delivery $snapshot sent=$sent failures=$failures " +
-                        "sendMaxUs=${sendMaxNs / 1000} queueMaxUs=${queueMaxNs / 1000}") }
+                        "unchangedMoves=$unchangedMoves sendMaxUs=${sendMaxNs / 1000} queueMaxUs=${queueMaxNs / 1000}") }
                     sendMaxNs = 0L; queueMaxNs = 0L; reportAt = now
                 }
             }

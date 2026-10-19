@@ -12,6 +12,27 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [29], manifest = Config.NONE)
 class CarPlayAudioStreamIsolationTest {
+    @Test fun retiredSessionCleanupDoesNotStopReplacementSessionsAudio() {
+        val stopped = mutableListOf<AudioStreamId>()
+        val engine = CarPlayMediaEngine(object : MediaSink {
+            override fun onAudioStopped(id: AudioStreamId) { stopped.add(id) }
+        })
+        val old = session(); val next = session()
+        try {
+            assertNotNull(engine.onAudio(old, 100, setup("media")))
+            assertNotNull(engine.onAudio(next, 100, setup("media")))
+            stopped.clear()
+            engine.onSessionClosed(old)
+            engine.onTeardown(old, 100)
+            assertTrue(stopped.isEmpty())
+            assertTrue(streams(engine).containsKey(CarPlayMediaEngine.StreamKey(next, 100, "media")))
+            engine.onTeardown(next, 100)
+            assertEquals(listOf(AudioStreamId(100, "media")), stopped)
+        } finally {
+            engine.onSessionClosed(old); engine.onSessionClosed(next)
+            old.close(); next.close()
+        }
+    }
     @Test fun guidanceSetupAndMediaReplacementKeepTheOtherAudioStreamAlive() {
         val session = session()
         val engine = CarPlayMediaEngine(object : MediaSink {})

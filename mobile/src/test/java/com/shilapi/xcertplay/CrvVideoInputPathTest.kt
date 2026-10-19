@@ -10,6 +10,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CrvVideoInputPathTest {
+    @Test fun visibilityFollowsSinkAndRetiredStreamsCannotClaimDisplayPriority() {
+        var visible = true
+        var current = true
+        val adapter = listener(object : MediaSink {
+            override fun isVideoVisible(type: Int): Boolean = visible
+        }) { current }
+        assertTrue(adapter.isVideoVisible())
+        visible = false
+        assertFalse(adapter.isVideoVisible())
+        visible = true
+        current = false
+        assertFalse(adapter.isVideoVisible())
+    }
     private fun packet(vararg nals: ByteArray): ByteArray {
         val buffer = ByteBuffer.allocate(nals.sumOf { it.size + 4 })
         nals.forEach { buffer.putInt(it.size); buffer.put(it) }

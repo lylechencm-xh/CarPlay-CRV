@@ -19,7 +19,7 @@ class CarPlayMediaEngineTest {
     }
 
     @Test
-    fun screenStreamTeardownReportsInactive() {
+    fun teardownWithoutOwnershipDoesNotDeactivateAnotherScreen() {
         val events = mutableListOf<Pair<Int, Boolean>>()
         val sink = object : MediaSink {
             override fun onScreenStreamActive(type: Int, active: Boolean) {
@@ -36,7 +36,7 @@ class CarPlayMediaEngineTest {
             session.close()
         }
 
-        assertEquals(listOf(110 to false), events)
+        assertTrue(events.isEmpty())
     }
 
     @Test
@@ -58,6 +58,9 @@ class CarPlayMediaEngineTest {
         streams[CarPlayMediaEngine.StreamKey(session, 110)] = Closeable {}
         streams[CarPlayMediaEngine.StreamKey(session, 111)] = Closeable {}
         streams[CarPlayMediaEngine.StreamKey(session, 100)] = Closeable {}
+        val ownership = ownership(engine)
+        for (type in listOf(110, 111)) ownership.claimScreen(type, streams.getValue(CarPlayMediaEngine.StreamKey(session, type)))
+        events.clear()
 
         engine.onSessionClosed(session)
         session.close()
@@ -84,6 +87,9 @@ class CarPlayMediaEngineTest {
             MutableMap<CarPlayMediaEngine.StreamKey, Closeable>
         streams[CarPlayMediaEngine.StreamKey(session, 100, "media")] = Closeable {}
         streams[CarPlayMediaEngine.StreamKey(session, 101, "default")] = Closeable {}
+        val ownership = ownership(engine)
+        for ((key, owner) in streams) ownership.claimAudio(AudioStreamId(key.type, key.audioType), owner)
+        stopped.clear()
 
         engine.onSessionClosed(session)
         session.close()
@@ -109,6 +115,10 @@ class CarPlayMediaEngineTest {
             video.close()
         }
     }
+
+    private fun ownership(engine: CarPlayMediaEngine): MediaSinkOwnership =
+        CarPlayMediaEngine::class.java.getDeclaredField("ownership").apply { isAccessible = true }
+            .get(engine) as MediaSinkOwnership
 
     private fun testSession(videoInCar: Boolean = false): AirPlaySession = AirPlaySession(
         socket = Socket(),

@@ -40,6 +40,13 @@ internal class CrvTouchSlotState {
         return true
     }
 
+    /** True means a new DOWN edge; an ignored third pointer can take a newly free slot. */
+    fun updateContact(pointerId: Int, x: Double, y: Double): Boolean {
+        if (slotOf(pointerId) < 0) return press(pointerId, x, y) >= 0
+        move(pointerId, x, y)
+        return false
+    }
+
     fun lift(pointerId: Int, x: Double, y: Double): Int {
         val slot = slotOf(pointerId)
         if (slot < 0) return -1

@@ -1,6 +1,8 @@
 package com.shilapi.xcertplay
 
 import android.app.Activity
+import android.app.AlertDialog
+import android.view.KeyEvent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
@@ -89,22 +91,35 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private var surfaceHeight = Crv2021Config.CARPLAY_HEIGHT
 
     private var controller: CrvWiredCarPlayController? = null
+    private var activityResumed = false
     private var mediaCoreMonitor: CrvHondaMediaCoreMonitor? = null
     private lateinit var runtimeSnapshotProbe: CrvRuntimeSnapshotProbe
     private val snapshotReasons = HashSet<String>()
 
     override fun onResume() {
         super.onResume()
+        activityResumed = true
+        controller?.setVideoVisible(true)
         if (::diagnostics.isInitialized) {
             diagnostics.log("CarPlay activity resumed stage=$displayedConnectionStage")
         }
     }
 
     override fun onPause() {
+        activityResumed = false
+        controller?.setVideoVisible(false)
         if (::diagnostics.isInitialized) {
             diagnostics.log("CarPlay activity paused stage=$displayedConnectionStage")
         }
         super.onPause()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (CrvMediaButtonReceiver.dispatch(event)) return true
+        if (event.action == KeyEvent.ACTION_DOWN && ::diagnostics.isInitialized) {
+            diagnostics.log("Hardware key keyCode=${event.keyCode} scanCode=${event.scanCode} repeat=${event.repeatCount}")
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onCreate(state: Bundle?) {
@@ -160,6 +175,25 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 } else {
                     hideConnectionStatus()
                 }
+            }
+        }
+
+        val navigationVolume = TextView(this).apply {
+            text = "导航音量"
+            setTextColor(Color.WHITE)
+            textSize = 15f
+            setPadding(dp(18), dp(12), dp(18), dp(12))
+            isFocusable = true
+            setOnClickListener {
+                val settings = getSharedPreferences("crv_audio", Context.MODE_PRIVATE)
+                val values = intArrayOf(100, 150, 200, 300)
+                AlertDialog.Builder(this@CrvCarPlayActivity)
+                    .setTitle("导航播报音量")
+                    .setSingleChoiceItems(arrayOf("原始音量", "增强 1.5 倍", "增强 2 倍", "增强 3 倍"),
+                        values.indexOf(settings.getInt("navigation_gain_percent", 150))) { dialog, index ->
+                        settings.edit().putInt("navigation_gain_percent", values[index]).apply()
+                        dialog.dismiss()
+                    }.setNegativeButton("取消", null).show()
             }
         }
 
@@ -243,6 +277,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             if (!Crv2021Config.WIRED_ONLY) {
                 addView(modeButton, LinearLayout.LayoutParams(-2, -2))
             }
+            addView(navigationVolume, LinearLayout.LayoutParams(-2, -2))
         }
 
         stageCard = LinearLayout(this).apply {
@@ -644,6 +679,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             },
         )
         controller = next
+        next.setVideoVisible(activityResumed)
         connectionStatus(
             if (connectionMode == CrvConnectionMode.WIFI_HANDOFF) {
                 "Starting Wi-Fi CarPlay handoff"
@@ -1155,6 +1191,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private fun handleCarPlayTouch(view: View, event: MotionEvent): Boolean {
         val width = view.width.coerceAtLeast(1).toDouble()
         val height = view.height.coerceAtLeast(1).toDouble()
+        var introducedContact = false
 
         fun normalizedX(index: Int): Double = event.getX(index).toDouble() / width
         fun normalizedY(index: Int): Double = event.getY(index).toDouble() / height
@@ -1173,7 +1210,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             }
 
             MotionEvent.ACTION_MOVE -> {
-                updateTouchMoves(event, width, height)
+                introducedContact = updateTouchMoves(event, width, height)
             }
 
             MotionEvent.ACTION_POINTER_UP -> {
@@ -1208,23 +1245,21 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             else -> return true
         }
 
-        sendTouchSlots(move = event.actionMasked == MotionEvent.ACTION_MOVE)
+        // A previously ignored third finger taking a free slot is a DOWN edge,
+        // even though Android delivered it inside MOVE. Never discard it as old motion.
+        sendTouchSlots(move = event.actionMasked == MotionEvent.ACTION_MOVE && !introducedContact)
         return true
     }
 
-    private fun updateTouchMoves(event: MotionEvent, width: Double, height: Double) {
+    private fun updateTouchMoves(event: MotionEvent, width: Double, height: Double): Boolean {
+        var introducedContact = false
         for (index in 0 until event.pointerCount) {
             val pointerId = event.getPointerId(index)
             val x = event.getX(index).toDouble() / width
             val y = event.getY(index).toDouble() / height
-            if (touchSlots.slotOf(pointerId) < 0) {
-                // If a third finger was ignored while both HID slots were full, let it take a
-                // slot on the next MOVE after one of the tracked fingers has lifted.
-                touchSlots.press(pointerId, x, y)
-            } else {
-                touchSlots.move(pointerId, x, y)
-            }
+            if (touchSlots.updateContact(pointerId, x, y)) introducedContact = true
         }
+        return introducedContact
     }
 
     private fun sendTouchSlots(move: Boolean = false) {

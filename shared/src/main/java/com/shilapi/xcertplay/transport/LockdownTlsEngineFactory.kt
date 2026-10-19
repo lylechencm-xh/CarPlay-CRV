@@ -9,6 +9,7 @@ import java.security.KeyFactory
 import java.security.Principal
 import java.security.PrivateKey
 import java.security.cert.CertificateFactory
+import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import java.security.spec.PKCS8EncodedKeySpec
 import org.bouncycastle.util.encoders.Base64
@@ -44,8 +45,15 @@ object LockdownTlsEngineFactory {
             privateKeyDer = decodePkcs8Pem(privateKeyPem)
             val privateKey = KeyFactory.getInstance("RSA")
                 .generatePrivate(PKCS8EncodedKeySpec(privateKeyDer))
-            val certificate = CertificateFactory.getInstance("X.509")
-                .generateCertificate(ByteArrayInputStream(certificatePem)) as X509Certificate
+            val certificate = try {
+                CertificateFactory.getInstance("X.509")
+                    .generateCertificate(ByteArrayInputStream(certificatePem)) as X509Certificate
+            } catch (_: CertificateException) {
+                // Lockdown pairing certificates intentionally have empty names. Android
+                // accepts them, but desktop SunX509 can reject the same paired identity.
+                CertificateFactory.getInstance("X.509", org.bouncycastle.jce.provider.BouncyCastleProvider())
+                    .generateCertificate(ByteArrayInputStream(certificatePem)) as X509Certificate
+            }
             // Honda API17 firmware can advertise PKIX without providing its factory.
             // There is exactly one paired identity, so no keystore/factory is necessary.
             return createContext(arrayOf(PairedIdentityKeyManager(privateKey, certificate)))

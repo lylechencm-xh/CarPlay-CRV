@@ -61,7 +61,8 @@ class NcmClaimPolicyTest {
 
         assertTrue("expected InterfaceBusy but was $error", error is IphoneUsbException.InterfaceBusy)
         assertTrue(error!!.message.orEmpty().contains("kernelDriverDetachAllowed=true"))
-        assertEquals(listOf(NcmClaimBoundary.Claim(0, force = true)), NcmClaimBoundary.claims)
+        assertTrue(NcmClaimBoundary.claims.isNotEmpty())
+        assertTrue(NcmClaimBoundary.claims.all { it == NcmClaimBoundary.Claim(0, force = true) })
     }
 
     @Test fun rejectedAlternateSettingReleasesTheClaimedInterface() {

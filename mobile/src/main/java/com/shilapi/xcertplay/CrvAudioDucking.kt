@@ -7,13 +7,13 @@ internal class CrvAudioDucking(private val nowMs: () -> Long = { System.nanoTime
 
     @Synchronized fun command(duck: Boolean) { commandDuck = duck }
 
-    @Synchronized fun voicePcm(bytes: ByteArray, offset: Int, count: Int) {
+    @Synchronized fun voicePcm(bytes: ByteArray, offset: Int, count: Int, playoutMs: Long = 0L) {
         if (offset < 0 || count < 2 || offset > bytes.size - count) return
         var index = offset
         while (index + 1 < offset + count) {
             val sample = ((bytes[index].toInt() and 0xff) or (bytes[index + 1].toInt() shl 8)).toShort().toInt()
             if (sample > 64 || sample < -64) {
-                voiceUntilMs = nowMs() + VOICE_HOLD_MS
+                voiceUntilMs = maxOf(voiceUntilMs, nowMs() + VOICE_HOLD_MS + playoutMs.coerceIn(0L, 2000L))
                 return
             }
             index += 2

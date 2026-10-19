@@ -6,6 +6,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CrvTouchSlotStateTest {
+    @Test fun promotedThirdFingerIsReportedAsAnEdgeRatherThanMotion() {
+        val state = CrvTouchSlotState()
+        state.press(1, 0.1, 0.1)
+        state.press(2, 0.2, 0.2)
+        assertFalse(state.updateContact(3, 0.3, 0.3))
+        assertFalse(state.updateContact(2, 0.25, 0.25))
+        state.lift(1, 0.1, 0.1)
+        state.release(1)
+        assertTrue(state.updateContact(3, 0.4, 0.4))
+        assertEquals(0, state.slotOf(3))
+        assertEquals(1, state.slotOf(2))
+        assertTrue(state.isDown(0))
+        assertFalse(state.updateContact(3, 0.5, 0.5))
+        assertEquals(0.5, state.x(0), 0.0)
+    }
     @Test
     fun pointerKeepsItsSlotWhenOtherFingerLifts() {
         val state = CrvTouchSlotState()

@@ -22,8 +22,16 @@ internal class StreamReceiveStats(
     private var maxConvertNs = 0L
     private var maxSubmitNs = 0L
     private var maxFrameBytes = 0
+    private var videoFrames = 0
+    private var decryptTotalNs = 0L
+    private var decryptCpuTotalNs = 0L
+    private var maxDecryptCpuNs = 0L
 
-    fun videoStages(decryptNs: Long, convertNs: Long, submitNs: Long, frameBytes: Int) {
+    fun videoStages(decryptNs: Long, convertNs: Long, submitNs: Long, frameBytes: Int, decryptCpuNs: Long = 0L) {
+        videoFrames++
+        decryptTotalNs += decryptNs.coerceAtLeast(0L)
+        decryptCpuTotalNs += decryptCpuNs.coerceAtLeast(0L)
+        maxDecryptCpuNs = maxOf(maxDecryptCpuNs, decryptCpuNs)
         maxDecryptNs = maxOf(maxDecryptNs, decryptNs)
         maxConvertNs = maxOf(maxConvertNs, convertNs)
         maxSubmitNs = maxOf(maxSubmitNs, submitNs)
@@ -92,7 +100,9 @@ internal class StreamReceiveStats(
             "seqMissingAfterReadOver250Ms=$seqMissingAfterReadOver250Ms" +
             if (label == "video") " decryptMaxUs=${maxDecryptNs / 1000} " +
                 "convertMaxUs=${maxConvertNs / 1000} submitMaxUs=${maxSubmitNs / 1000} " +
-                "frameMaxBytes=$maxFrameBytes" else "") }
+                "frameMaxBytes=$maxFrameBytes videoFrames=$videoFrames " +
+                "decryptTotalUs=${decryptTotalNs / 1000} decryptCpuTotalUs=${decryptCpuTotalNs / 1000} " +
+                "decryptCpuMaxUs=${maxDecryptCpuNs / 1000}" else "") }
         windowStart = now
         packets = 0
         bytes = 0
@@ -106,6 +116,10 @@ internal class StreamReceiveStats(
         maxConvertNs = 0L
         maxSubmitNs = 0L
         maxFrameBytes = 0
+        videoFrames = 0
+        decryptTotalNs = 0L
+        decryptCpuTotalNs = 0L
+        maxDecryptCpuNs = 0L
         forwardGapPackets = 0
         sequenceGapEvents = 0
         maxSequenceGap = 0

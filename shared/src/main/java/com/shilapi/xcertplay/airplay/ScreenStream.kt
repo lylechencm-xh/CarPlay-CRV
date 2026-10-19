@@ -2,6 +2,7 @@ package com.shilapi.xcertplay.airplay
 
 import android.util.Log
 import android.os.Process
+import android.os.Debug
 import java.io.Closeable
 import java.io.InputStream
 import java.net.InetAddress
@@ -22,6 +23,7 @@ enum class VideoCodec { H264, H265 }
  */
 class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String) -> Unit = {}) : Closeable {
     interface Listener {
+        fun isVideoVisible(): Boolean = true
         fun wantsLengthPrefixedFrames(): Boolean = false
         fun onCodec(codec: VideoCodec) {}
         fun onConfig(codecData: ByteArray) {}
@@ -37,7 +39,18 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
     private var server: ServerSocket? = null
     private var socket: Socket? = null
     private var thread: Thread? = null
+    @Volatile private var receiveTid = 0
     @Volatile private var listener: Listener = object : Listener {}
+
+    /** May be called from a visibility callback while a large frame is still decrypting. */
+    fun refreshVideoPriority() {
+        val tid = receiveTid
+        if (tid == 0) return
+        runCatching {
+            Process.setThreadPriority(tid, if (listener.isVideoVisible())
+                Process.THREAD_PRIORITY_DISPLAY else Process.THREAD_PRIORITY_BACKGROUND)
+        }
+    }
 
     fun listen(bindAddress: InetAddress, listener: Listener): Int {
         this.listener = listener
@@ -77,14 +90,22 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
     }
 
     private fun run(sock: Socket) {
-        runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY) }
+        receiveTid = Process.myTid()
+        refreshVideoPriority()
         var failure: Throwable? = null
         val stats = StreamReceiveStats("video", onDiagnostic)
         try {
             val input = sock.getInputStream()
             val header = ByteArray(HEADER_LEN)
             var bodyBuffer = ByteArray(INITIAL_BODY_BUFFER_BYTES)
+            var visible: Boolean? = null
             while (!closed.get()) {
+                val nextVisible = listener.isVideoVisible()
+                if (visible != nextVisible) {
+                    visible = nextVisible
+                    refreshVideoPriority()
+                    onDiagnostic("video receive visible=$nextVisible")
+                }
                 stats.reading()
                 if (!readFully(input, header)) break
                 val bodySize = readU32Le(header, 0)
@@ -100,6 +121,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         } catch (error: Exception) {
             failure = error
         } finally {
+            receiveTid = 0
             stats.flush(ended = true)
             if (socket === sock) socket = null
             closeSocket(sock)
@@ -111,6 +133,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         when (header[OPCODE_OFFSET].toInt() and 0xff) {
             OP_VIDEO_FRAME -> {
                 val decryptStartNs = System.nanoTime()
+                val decryptCpuStartNs = Debug.threadCpuTimeNanos()
                 val payload = if (bodySize >= ScreenCodec.TAG_SIZE) {
                     opener.open(
                         nonce = AirPlayCrypto.nonce64(frameCounter.get(), frameNonce),
@@ -123,6 +146,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
                     body.copyOf(bodySize)
                 }
                 val decryptedNs = System.nanoTime()
+                val decryptCpuNs = (Debug.threadCpuTimeNanos() - decryptCpuStartNs).coerceAtLeast(0L)
                 if (firstFrameLogged.compareAndSet(false, true)) {
                     Log.i(
                         TAG,
@@ -130,12 +154,16 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
                             "head=${payload.hexPrefix(16)}",
                     )
                 }
+                if (!listener.isVideoVisible()) {
+                    stats.videoStages(decryptedNs - decryptStartNs, 0L, 0L, payload.size, decryptCpuNs)
+                    return
+                }
                 val convertStartNs = System.nanoTime()
                 val frame = ScreenCodec.prepareFrame(payload, listener.wantsLengthPrefixedFrames())
                 val convertedNs = System.nanoTime()
                 listener.onFrame(frame)
                 stats.videoStages(decryptedNs - decryptStartNs, convertedNs - convertStartNs,
-                    System.nanoTime() - convertedNs, frame.size)
+                    System.nanoTime() - convertedNs, frame.size, decryptCpuNs)
             }
             OP_VIDEO_CONFIG -> {
                 val configBody = body.copyOf(bodySize)

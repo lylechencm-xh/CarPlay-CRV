@@ -505,9 +505,11 @@ class AirPlaySession(
     fun sendKnobSelect(down: Boolean) =
         sendHidReport(AirPlayHid.KNOB_HID_UID, AirPlayHid.knobReport(AirPlayKnobState(select = down)))
 
-    fun sendMedia(index: Int) {
-        sendHidReport(AirPlayHid.MEDIA_HID_UID, AirPlayHid.mediaReport(index))
-        sendHidReport(AirPlayHid.MEDIA_HID_UID, AirPlayHid.mediaReport(0))
+    fun sendMedia(index: Int): Boolean = synchronized(eventWriteLock) {
+        if (index !in 1..5) return@synchronized false
+        val pressed = sendHidReportLocked(AirPlayHid.MEDIA_HID_UID, AirPlayHid.mediaReport(index))
+        val released = sendHidReportLocked(AirPlayHid.MEDIA_HID_UID, AirPlayHid.mediaReport(0))
+        pressed && released
     }
 
     fun sendTelephony(index: Int) {
@@ -643,6 +645,7 @@ class AirPlaySession(
                 var plaintext = buffer.copyOf(count)
                 val activeCipher = cipher
                 if (activeCipher != null) {
+                    RtspMessage.checkAppend(encBuf.size, plaintext.size)
                     encBuf += plaintext
                     val decrypted = try {
                         activeCipher.decrypt(encBuf)
@@ -654,6 +657,7 @@ class AirPlaySession(
                     encBuf = decrypted.rest
                     plaintext = decrypted.data
                 }
+                RtspMessage.checkAppend(accumulated.size, plaintext.size)
                 accumulated += plaintext
                 val parsed = RtspMessage.parseMessages(accumulated)
                 accumulated = parsed.rest
@@ -721,6 +725,9 @@ class AirPlaySession(
     }
 
     private fun handle(request: RtspMessage.Request): RtspMessage.Response {
+        if (request.method in setOf("SETUP", "RECORD", "TEARDOWN") && !pairVerify.isVerified) {
+            return RtspMessage.Response(status = 403, statusText = "Forbidden")
+        }
         when (request.method) {
             "SETUP" -> return handleSetup(request)
             "RECORD" -> {
@@ -776,7 +783,9 @@ class AirPlaySession(
                     body = BplistCodec.encode(info),
                 )
             }
-            request.method == "POST" && path.endsWith("/command") -> handleCommand(request)
+            request.method == "POST" && path.endsWith("/command") ->
+                if (pairVerify.isVerified) handleCommand(request)
+                else RtspMessage.Response(status = 403, statusText = "Forbidden")
             request.method == "POST" && path.endsWith("/feedback") -> {
                 val body = media.onFeedback(this)
                 if (body == null) {
@@ -1081,6 +1090,7 @@ class AirPlaySession(
                 val count = input.read(buffer)
                 if (count < 0) break
                 val cipher = eventCipher ?: break
+                RtspMessage.checkAppend(encrypted.size, count)
                 encrypted += buffer.copyOf(count)
                 val decrypted = try {
                     cipher.decrypt(encrypted)
@@ -1092,6 +1102,7 @@ class AirPlaySession(
                     break
                 }
                 encrypted = decrypted.rest
+                RtspMessage.checkAppend(plaintext.size, decrypted.data.size)
                 plaintext += decrypted.data
                 val parsed = RtspMessage.parseMessages(plaintext)
                 plaintext = parsed.rest

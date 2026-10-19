@@ -1,17 +1,42 @@
 package com.shilapi.xcertplay.network
 
 import android.net.wifi.SoftApConfiguration
+import android.util.AtomicFile
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implements
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.RealObject
+import org.robolectric.shadow.api.Shadow
+import org.robolectric.util.ReflectionHelpers.ClassParameter
 import java.io.File
+import java.io.FileOutputStream
 import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [33], manifest = Config.NONE)
+@Config(sdk = [33], manifest = Config.NONE, shadows = [HotspotJoinNormalizedTransactionTest.PortableAtomicFile::class])
 class HotspotJoinNormalizedTransactionTest {
+    /** Model Android's POSIX replace on Windows, whose File.renameTo refuses existing targets. */
+    @Implements(AtomicFile::class)
+    class PortableAtomicFile {
+        @RealObject lateinit var real: AtomicFile
+        @Implementation fun finishWrite(stream: FileOutputStream?) {
+            if (!System.getProperty("os.name").orEmpty().startsWith("Windows")) {
+                Shadow.directlyOn<Any, AtomicFile>(real, AtomicFile::class.java, "finishWrite",
+                    ClassParameter.from(FileOutputStream::class.java, stream))
+                return
+            }
+            if (stream == null) return
+            stream.fd.sync()
+            stream.close()
+            Files.move(File(real.baseFile.path + ".new").toPath(), real.baseFile.toPath(),
+                StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
     class NormalizingWifiService(var config: SoftApConfiguration) {
         var writes = 0
         var accepted = true

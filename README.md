@@ -44,12 +44,12 @@ cd CarPlay-CRV
 APK 输出：
 
 ```
-mobile/build/outputs/apk/release/
+CarPlay-CRV/mobile/build/outputs/apk/release/mobile-release.apk
 ```
 
 如使用其他构建任务，请以 Gradle 实际生成目录为准。
 
-请使用本地 MFi 配置完成 Release 构建后生成测试 APK。
+请使用本地 MFi 配置和 Release 签名配置完成构建。该任务会执行 CR-V 回归测试与最终 API17 检查，需要 Android SDK 的 android-17 平台和 Python。详见 [构建说明](docs/BUILD.md)。
 
 ## 测试反馈
 
@@ -101,10 +101,10 @@ cd CarPlay-CRV
 APK output:
 
 ```
-mobile/build/outputs/apk/release/
+CarPlay-CRV/mobile/build/outputs/apk/release/mobile-release.apk
 ```
 
-Use your local MFi configuration to generate the test APK.
+Configure local MFi assets and release signing before building. This task runs CR-V regression tests and the final API17 check, requiring the android-17 SDK platform and Python. See [build instructions](docs/BUILD.md).
 
 > **Disclaimer: For testing, learning, and educational exchange only. Not for commercial use.**
 

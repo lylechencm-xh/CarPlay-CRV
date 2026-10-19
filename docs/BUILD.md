@@ -63,6 +63,18 @@ Then run:
 The build rejects missing, empty or unexpected credential containers. These files and the Android
 signing keystore must never enter Git.
 
+## Release build
+
+Configure `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and
+`ANDROID_KEY_PASSWORD` for the release signing identity. Standalone car authentication uses the
+same explicit `DIPLAY_AUTH_ASSETS_DIR` input described above.
+
+Run `./gradlew :mobile:assembleRelease`. Output is
+`mobile/build/outputs/apk/release/mobile-release.apk`; files are not automatically copied to `release/`.
+Release uses the same API17 shrink-only rules as debug. Assembly requires the CR-V regression tests
+and verifies the final APK's API17 member surface, single DEX035 and native libraries. This verification
+requires Python and the SDK's `platforms/android-17/android.jar`.
+
 ## Signing and publication
 
 The GitHub workflow uses the fixed CR-V test key when its four signing secrets are configured;

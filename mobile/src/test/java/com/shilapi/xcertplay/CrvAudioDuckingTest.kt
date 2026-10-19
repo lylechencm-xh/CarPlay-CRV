@@ -4,6 +4,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CrvAudioDuckingTest {
+    @Test fun queuedSpeechKeepsMusicLowUntilAudibleTailAndThenRecovers() {
+        var now = 0L
+        val policy = CrvAudioDucking { now }
+        policy.voicePcm(byteArrayOf(0, 4), 0, 2, 350L)
+        now = 800L
+        assertEquals(0.2f, policy.mediaGain(), 0f)
+        // A later short packet must not shorten the already scheduled hold.
+        policy.voicePcm(byteArrayOf(0, 4), 0, 2)
+        now = 1499L
+        assertEquals(0.2f, policy.mediaGain(), 0f)
+        now = 1500L
+        assertEquals(1f, policy.mediaGain(), 0f)
+    }
     private var clock = 0L
     private val ducking = CrvAudioDucking { clock }
     private val voice = byteArrayOf(0, 4) // little-endian PCM16, amplitude 1024

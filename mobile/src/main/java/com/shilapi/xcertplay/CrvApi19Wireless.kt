@@ -62,7 +62,7 @@ internal class CrvApi19WirelessHotspot(
         }
     }
 
-    fun start(timeoutMillis: Long = 15_000L): Info {
+    fun start(timeoutMillis: Long = 15_000L, existingStartupTimeoutMillis: Long = timeoutMillis): Info {
         // Retain a failed restoration across controller replacement. Do not replace its backup.
         pendingRestoration?.let { pending ->
             pending.close()
@@ -77,13 +77,13 @@ internal class CrvApi19WirelessHotspot(
         var apState = readApState()
         if (apState == CrvHotspotState.ENABLING) {
             report("Waiting for existing vehicle hotspot startup")
-            check(awaitCrvCondition(timeoutMillis) {
+            check(awaitCrvCondition(existingStartupTimeoutMillis) {
                 check(!closed) { "Wi-Fi hotspot was closed" }
                 apState = readApState()
                 apState != CrvHotspotState.ENABLING
             }) { "Existing vehicle hotspot startup timed out" }
         }
-        if (apState == CrvHotspotState.ENABLED) return borrowVehicleHotspot(timeoutMillis)
+        if (apState == CrvHotspotState.ENABLED) return borrowVehicleHotspot(existingStartupTimeoutMillis)
         if (apState == CrvHotspotState.DISABLING) {
             apState = awaitApDisabled()
         }

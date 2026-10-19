@@ -94,6 +94,7 @@ class CrvWiredCarPlayController(
         releaseTransport = {
             runCatching { resources.releaseTransport() }
             runCatching { unbindVpn() }
+            runCatching { mediaButtons.close() }
             runCatching { sink.close() }
         },
         notifyStopped = ::notifyStopped,
@@ -116,7 +117,9 @@ class CrvWiredCarPlayController(
         sink = sink,
         microphoneEnabled = true,
     )
+    private val mediaButtons = CrvMediaButtons(appContext, report)
     private val touchDispatcher = CrvTouchDispatcher<AirPlaySession>(
+        moveFilter = CrvTouchMoveFilter(displayWidth, displayHeight),
         send = { frame ->
             if (resources.activeSession !== frame.target || lifecycle.isStopping()) false
             else frame.target.sendTouches(frame.x0, frame.y0, frame.down0, frame.x1, frame.y1, frame.down1)
@@ -156,6 +159,7 @@ class CrvWiredCarPlayController(
                 return
             }
             resources.activeSession = session
+            mediaButtons.activate(session)
             if (mode == CrvConnectionMode.AUTO) {
                 report("Auto transport active=" +
                     if (session.localAddress == autoHotspotInfo?.hostAddress) "wifi" else "usb")
@@ -167,6 +171,7 @@ class CrvWiredCarPlayController(
         }
 
         override fun onSessionEnded(session: AirPlaySession) {
+            mediaButtons.deactivate(session)
             val activeSession = resources.activeSession
             if (activeSession != null && activeSession !== session) {
                 report("Ignoring stale CarPlay session end while another session is active")
@@ -340,6 +345,8 @@ class CrvWiredCarPlayController(
         sink.updateSurface(surface)
     }
 
+    fun setVideoVisible(visible: Boolean) = sink.setVideoVisible(visible)
+
     /** Keep the AirPlay listener alive once the phone has received Wi-Fi credentials. */
     fun shouldKeepWirelessOnUsbDetach(): Boolean {
         val keepWireless =
@@ -439,7 +446,7 @@ class CrvWiredCarPlayController(
             runCatching {
                 CrvApi19WirelessHotspot(appContext, report).also {
                     resources.wifiHotspot = it
-                }.start()
+                }.start(existingStartupTimeoutMillis = 1_000L)
             }.onFailure {
                 report("Auto Wi-Fi unavailable; wired CarPlay continues: ${it.javaClass.simpleName} message=${it.message.orEmpty().take(200)}")
                 runCatching { resources.wifiHotspot?.close() }
@@ -1280,6 +1287,7 @@ class CrvWiredCarPlayController(
             recovery.breakBlockingControl(reason)
             runCatching { resources.releaseTransport() }
             runCatching { unbindVpn() }
+            runCatching { mediaButtons.close() }
             runCatching { sink.close() }
             val pending = executor.shutdownNow()
             // A task removed from the queue never reaches its finally block.

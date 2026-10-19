@@ -77,8 +77,12 @@ android {
         }
         release {
             optimization {
-                enable = false
+                enable = true
             }
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-crv-api17.pro",
+            )
             signingConfig = signingConfigs.getByName("release")
         }
     }
@@ -143,9 +147,20 @@ val verifyStandaloneAuthentication by tasks.registering {
 tasks.named("preBuild") { mustRunAfter(verifyStandaloneAuthentication) }
 
 // The CR-V APK is never assembled without its target-specific regression tests.
-tasks.matching { it.name == "assembleDebug" }.configureEach {
+tasks.matching { it.name == "assembleDebug" || it.name == "assembleRelease" }.configureEach {
     dependsOn("testDebugUnitTest")
 }
+
+// Release must pass the same final DEX/native/API17 gate as the CI debug artifact.
+val verifyReleaseApi17 by tasks.registering(Exec::class) {
+    group = "verification"
+    dependsOn("packageRelease")
+    workingDir(rootProject.projectDir)
+    environment("ANDROID_HOME", androidComponents.sdkComponents.sdkDirectory.get().asFile.absolutePath)
+    commandLine("python", rootProject.file(".github/scripts/verify-crv-apk.py").absolutePath,
+        layout.buildDirectory.file("outputs/apk/release/mobile-release.apk").get().asFile.absolutePath)
+}
+tasks.matching { it.name == "assembleRelease" }.configureEach { dependsOn(verifyReleaseApi17) }
 tasks.register("assembleStandaloneDebug") {
     group = "build"
     description = "Build a standalone car-test APK with explicitly provisioned authentication."
