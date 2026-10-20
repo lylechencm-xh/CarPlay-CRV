@@ -66,6 +66,7 @@ class CrvWiredCarPlayController(
     private val reportFailure: (String, Throwable) -> Unit = { _, _ -> },
     private val mode: CrvConnectionMode = CrvConnectionMode.WIRED,
     private val onStopped: () -> Unit = {},
+    private val onConnectionEvent: (CrvConnectionEvent, String) -> Unit = { _, _ -> },
 ) : Closeable {
     private val appContext = context.applicationContext
     private val executor: ExecutorService =
@@ -112,6 +113,8 @@ class CrvWiredCarPlayController(
         videoWidth = displayWidth,
         videoHeight = displayHeight,
         report = report,
+        onVideoRendered = { onConnectionEvent(CrvConnectionEvent.VIDEO_RENDERED, "Video rendered") },
+        onVideoReset = { onConnectionEvent(CrvConnectionEvent.VIDEO_RESET, "Video target reset") },
     )
     private val media = CarPlayMediaEngine(
         sink = sink,
@@ -144,21 +147,27 @@ class CrvWiredCarPlayController(
             resources.vpnService = null
             vpnLatch.countDown()
             if (!lifecycle.isStopping()) {
+                onConnectionEvent(CrvConnectionEvent.FAILED, "CarPlay network service disconnected")
                 report("CarPlay network service disconnected")
                 recovery.breakBlockingControl(CrvRecoveryTrigger.VPN_SERVICE_DISCONNECTED)
             }
         }
     }
 
+    private val sessionEventLock = Any()
+    private var sessionEnding = false
     private val listener = object : AirPlaySessionListener {
         override fun onSessionActive(session: AirPlaySession) {
-            val replacingActive = mode == CrvConnectionMode.AUTO &&
-                resources.activeSession != null && !lifecycle.isStopping()
-            if (!replacingActive && !lifecycle.sessionActive()) {
-                report("Ignoring AirPlay active before iAP2 authentication acceptance or during shutdown")
+            val accepted = synchronized(sessionEventLock) {
+                val replacingActive = mode == CrvConnectionMode.AUTO && resources.activeSession != null
+                if (sessionEnding || lifecycle.isStopping() || resources.activeSession === session) false
+                else if (!replacingActive && !lifecycle.sessionActive()) false
+                else { resources.activeSession = session; true }
+            }
+            if (!accepted) {
+                report("Ignoring duplicate or unaccepted AirPlay active")
                 return
             }
-            resources.activeSession = session
             mediaButtons.activate(session)
             if (mode == CrvConnectionMode.AUTO) {
                 report("Auto transport active=" +
@@ -167,30 +176,39 @@ class CrvWiredCarPlayController(
             protocolTrace.signal(CrvProtocolLayer.CARPLAY_SESSION, "active")
             val vpn = resources.vpnService
             report("AirPlay transport attached=${vpn?.isAttached() == true} port=${vpn?.boundPort() ?: 0}")
+            onConnectionEvent(CrvConnectionEvent.ACTIVE, "CarPlay active")
             report("CarPlay active")
         }
 
         override fun onSessionEnded(session: AirPlaySession) {
-            mediaButtons.deactivate(session)
             val activeSession = resources.activeSession
-            if (activeSession != null && activeSession !== session) {
-                report("Ignoring stale CarPlay session end while another session is active")
+            if (!ownsCrvSessionEnd(activeSession, session)) {
+                // /info, pairing and probe TCP connections can close without owning CarPlay.
+                // The iAP2 handshake deadline handles a peer that never establishes a session.
+                report("Ignoring ended non-owning CarPlay TCP session")
                 return
             }
+            mediaButtons.deactivate(session)
             if (mode == CrvConnectionMode.AUTO && session.localAddress != autoHotspotInfo?.hostAddress &&
                 shouldKeepWirelessOnUsbDetach()) {
                 // TCP EOF can precede Android's delayed USB detach broadcast.
                 onUsbDetached()
             }
-            if (activeSession === session) resources.activeSession = null
-            val disposition = lifecycle.classifySessionEnd()
+            val waitingForHandoff = mode == CrvConnectionMode.AUTO && autoUsbDetached &&
+                session.localAddress != autoHotspotInfo?.hostAddress && autoHotspotInfo != null
+            val disposition = synchronized(sessionEventLock) {
+                if (resources.activeSession !== session) return
+                resources.activeSession = null
+                sessionEnding = !waitingForHandoff
+                lifecycle.classifySessionEnd()
+            }
+            if (disposition == CrvSessionEndDisposition.IGNORED) return
             report("CarPlay session ended")
-            if (mode == CrvConnectionMode.AUTO && autoUsbDetached &&
-                session.localAddress != autoHotspotInfo?.hostAddress &&
-                autoHotspotInfo != null) {
+            if (waitingForHandoff) {
                 report("Wired CarPlay ended after USB detach; waiting for Wi-Fi session")
                 return
             }
+            onConnectionEvent(CrvConnectionEvent.SESSION_ENDED, "CarPlay session ended")
             if (disposition == CrvSessionEndDisposition.HANDSHAKE_ENDED_BEFORE_ACTIVE) {
                 protocolTrace.fault(
                     CrvProtocolLayer.CARPLAY_SESSION,
@@ -224,6 +242,7 @@ class CrvWiredCarPlayController(
                 transportFaultClass(message),
             )
             report("AirPlay transport attached=${vpn?.isAttached() == true} port=${vpn?.boundPort() ?: 0}")
+            onConnectionEvent(CrvConnectionEvent.FAILED, "CarPlay transport error: $message")
             report("CarPlay transport error: $message")
             // Break the blocking wired control loop so the worker can tear the complete stack down.
             recovery.breakBlockingControl(recoveryTriggerForTransport(message))
@@ -294,7 +313,10 @@ class CrvWiredCarPlayController(
             workerSubmitted = true
             executor.execute {
                 try {
-                    if (!closeRequested.get()) runWired(device, usbSession)
+                    if (!closeRequested.get()) {
+                        check(CarPlayVpnService.prepare(appContext) == null) { "CarPlay network permission required" }
+                        runWired(device, usbSession)
+                    }
                 } catch (error: Throwable) {
                     val userRequestedStop = lifecycle.isStopping()
                     if (!userRequestedStop) {
@@ -306,6 +328,8 @@ class CrvWiredCarPlayController(
                             error.javaClass.simpleName,
                         )
                         reportFailure("CarPlay controller", error)
+                        onConnectionEvent(CrvConnectionEvent.FAILED,
+                            "CarPlay failed: ${error.message ?: error.javaClass.simpleName}")
                         report(
                             "CarPlay failed: " + error.javaClass.name + ": " +
                                 (error.message ?: "no message"),
@@ -332,6 +356,8 @@ class CrvWiredCarPlayController(
         workerUsbSession = null
         executor.shutdown()
     }
+
+    fun recoverVideo() = sink.recoverVideo()
 
     internal val recoveryTrigger: CrvRecoveryTrigger? get() = recovery.trigger
 
@@ -1237,6 +1263,7 @@ class CrvWiredCarPlayController(
                 widthPixels = displayWidth,
                 heightPixels = displayHeight,
                 fps = 30,
+                streamFpsLimit = Crv2021Config.CARPLAY_MAX_FPS,
             ),
             rightHandDrive = false,
             hevc = false,
@@ -1324,7 +1351,7 @@ class CrvWiredCarPlayController(
         private const val SOURCE_VERSION = "950.7.1"
         private const val LINK_LOCAL = "fe80::2"
         private const val WIFI_JOIN_TIMEOUT_MILLIS = 45_000L
-        private const val CRV_MEDIA_BUFFER_MILLIS = 300
+        private const val CRV_MEDIA_BUFFER_MILLIS = 120
         private const val AVAILABLE_CURRENT_MA = 1500
         private const val PAIR_TIMEOUT_MILLIS = 5 * 60_000L
         private const val VPN_CONNECT_TIMEOUT_MILLIS = 5_000L

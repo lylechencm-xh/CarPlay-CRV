@@ -31,10 +31,18 @@ internal class CrvHotspotConfiguration(
 ) {
     val canVerify: Boolean get() = !requiresSecret || visibleSecret(secret)
 
-    fun matches(actual: CrvHotspotConfiguration): Boolean =
-        canVerify && actual.canVerify && ssid == actual.ssid && hidden == actual.hidden &&
-            requiresSecret == actual.requiresSecret && security == actual.security &&
-            (!requiresSecret || unquote(secret) == unquote(actual.secret))
+    fun matches(actual: CrvHotspotConfiguration): Boolean = differences(actual).isEmpty()
+
+    fun differences(actual: CrvHotspotConfiguration): List<String> {
+        val changed = mutableListOf<String>()
+        if (!canVerify || !actual.canVerify) changed += "unverifiable-secret"
+        if (ssid != actual.ssid) changed += "ssid"
+        if (hidden != actual.hidden) changed += "hidden"
+        if (requiresSecret != actual.requiresSecret) changed += "authentication"
+        if (security != actual.security) changed += "security"
+        if (requiresSecret && unquote(secret) != unquote(actual.secret)) changed += "secret"
+        return changed
+    }
 
     private fun visibleSecret(value: String?): Boolean {
         val normalized = unquote(value)

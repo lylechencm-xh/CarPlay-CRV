@@ -23,12 +23,14 @@ internal class StreamReceiveStats(
     private var maxSubmitNs = 0L
     private var maxFrameBytes = 0
     private var videoFrames = 0
+    private var decryptedBytes = 0L
     private var decryptTotalNs = 0L
     private var decryptCpuTotalNs = 0L
     private var maxDecryptCpuNs = 0L
 
     fun videoStages(decryptNs: Long, convertNs: Long, submitNs: Long, frameBytes: Int, decryptCpuNs: Long = 0L) {
         videoFrames++
+        decryptedBytes += frameBytes.coerceAtLeast(0)
         decryptTotalNs += decryptNs.coerceAtLeast(0L)
         decryptCpuTotalNs += decryptCpuNs.coerceAtLeast(0L)
         maxDecryptCpuNs = maxOf(maxDecryptCpuNs, decryptCpuNs)
@@ -102,7 +104,8 @@ internal class StreamReceiveStats(
                 "convertMaxUs=${maxConvertNs / 1000} submitMaxUs=${maxSubmitNs / 1000} " +
                 "frameMaxBytes=$maxFrameBytes videoFrames=$videoFrames " +
                 "decryptTotalUs=${decryptTotalNs / 1000} decryptCpuTotalUs=${decryptCpuTotalNs / 1000} " +
-                "decryptCpuMaxUs=${maxDecryptCpuNs / 1000}" else "") }
+                "decryptCpuMaxUs=${maxDecryptCpuNs / 1000} decryptedBytes=$decryptedBytes " +
+                "decryptCpuUsPerMiB=${if (decryptedBytes > 0) decryptCpuTotalNs / 1000 * 1_048_576 / decryptedBytes else 0}" else "") }
         windowStart = now
         packets = 0
         bytes = 0
@@ -117,6 +120,7 @@ internal class StreamReceiveStats(
         maxSubmitNs = 0L
         maxFrameBytes = 0
         videoFrames = 0
+        decryptedBytes = 0L
         decryptTotalNs = 0L
         decryptCpuTotalNs = 0L
         maxDecryptCpuNs = 0L

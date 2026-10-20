@@ -35,6 +35,8 @@ class CrvApi19MediaSink(
     private val videoWidth: Int,
     private val videoHeight: Int,
     private val report: (String) -> Unit = {},
+    private val onVideoRendered: () -> Unit = {},
+    private val onVideoReset: () -> Unit = {},
 ) : MediaSink, Closeable {
     override fun acceptsLengthPrefixedVideo(type: Int): Boolean = true
     @Volatile private var outputSurface: Surface? = surface
@@ -107,8 +109,19 @@ class CrvApi19MediaSink(
     override fun onVideoConfig(type: Int, codecData: ByteArray) {
         if (closed.get()) return
         val codec = videoCodecs[type] ?: VideoCodec.H264
-        videoConfigs[type] = codecData.copyOf()
-        decoder(type)?.configure(codec, codecData)
+        synchronized(videoLock) {
+            videoConfigs[type] = codecData.copyOf()
+            val existing = videoDecoders[type]
+            if (existing == null) decoder(type)
+            else existing.configure(codec, codecData)
+        }
+    }
+
+    fun recoverVideo() {
+        synchronized(videoLock) {
+            videoDecoders.values.forEach { it.requestRecovery() }
+            recoveryHandlers.values.forEach { runCatching(it) }
+        }
     }
 
     override fun onVideoFrame(type: Int, naluBytes: ByteArray) {
@@ -121,6 +134,7 @@ class CrvApi19MediaSink(
         synchronized(videoLock) {
             if (closed.get()) return
             outputSurface = surface
+            onVideoReset()
             videoReady = false
             val generation = ++surfaceGeneration
             val oldDecoders = videoDecoders.values.toList()
@@ -150,6 +164,7 @@ class CrvApi19MediaSink(
 
     override fun onScreenStreamActive(type: Int, active: Boolean) {
         if (closed.get()) return
+        if (type == 110) onVideoReset()
         if (!active) {
             val decoder = synchronized(videoLock) { videoDecoders.remove(type) }
             decoder?.close()
@@ -261,7 +276,8 @@ class CrvApi19MediaSink(
             if (closed.get() || !videoVisible || !videoReady) return@synchronized null
             videoDecoders[type]?.let { return@synchronized it }
             val surface = outputSurface ?: return@synchronized null
-            LegacyVideoDecoder(
+            lateinit var next: LegacyVideoDecoder
+            next = LegacyVideoDecoder(
                 surface = surface,
                 width = videoWidth,
                 height = videoHeight,
@@ -269,10 +285,18 @@ class CrvApi19MediaSink(
                     if (isVideoVisible(type) && videoReady) recoveryHandlers[type]?.invoke()
                 },
                 diagnostic = { line ->
-                    diagnosticHandlers[type]?.invoke(line)
-                    report("Video: $line")
+                    val handler = diagnosticHandlers[type]
+                    if (handler != null) handler(line) else report("Video: $line")
                 },
-            ).also { next ->
+                onRendered = {
+                    synchronized(videoLock) {
+                        if (type == 110 && videoDecoders[type] === next && videoVisible && videoReady && !closed.get()) {
+                            onVideoRendered()
+                        }
+                    }
+                },
+            )
+            next.also {
                 videoDecoders[type] = next
                 videoConfigs[type]?.let { data ->
                     next.configure(videoCodecs[type] ?: VideoCodec.H264, data)
@@ -286,6 +310,7 @@ class CrvApi19MediaSink(
         private val height: Int,
         private val requestKeyFrame: () -> Unit,
         private val diagnostic: (String) -> Unit,
+        private val onRendered: () -> Unit,
     ) : Closeable {
         private val queue = CrvVideoJobQueue(VIDEO_QUEUE_CAPACITY, VIDEO_QUEUE_MAX_BYTES)
         private val drainSchedule = CrvCodecDrainSchedule()
@@ -295,17 +320,23 @@ class CrvApi19MediaSink(
             isDaemon = true
         }
 
-        private var decoder: MediaCodec? = null
+        @Volatile private var decoder: MediaCodec? = null
         private var inputBuffers: Array<ByteBuffer>? = null
         private val outputInfo = MediaCodec.BufferInfo()
         private var lastCodec = VideoCodec.H264
         private var lastConfig: ByteArray? = null
         private var waitingForKeyFrame = true
         private var firstRendered = false
+        private var lastRenderNotificationNs = 0L
         private var lastKeyFrameRequestNs = 0L
         private val backlogRecovery = CrvVideoBacklogRecovery()
         private val outputRecovery = CrvVideoOutputRecovery()
         private var decoderGeneration = 0L
+        private var duplicateConfigs = 0L
+
+        fun requestRecovery() {
+            queue.recover(null, 0L, "video first output watchdog")
+        }
 
         fun configure(codec: VideoCodec, data: ByteArray) {
             queue.offerConfig(codec, data.copyOf())
@@ -354,7 +385,6 @@ class CrvApi19MediaSink(
                 while (running.get()) {
                     if (queue.poll(drainSchedule.queueWaitMillis(System.nanoTime()), job)) when (job.type) {
                         CrvVideoJobQueue.TYPE_CONFIG -> {
-                            backlogRecovery.reset()
                             val codec = job.codec
                             val data = job.data
                             if (codec != null && data != null) configureNow(codec, data)
@@ -394,6 +424,13 @@ class CrvApi19MediaSink(
         }
 
         private fun configureNow(videoCodec: VideoCodec, data: ByteArray) {
+            if (!crvNeedsVideoConfiguration(decoder != null, lastCodec, lastConfig, videoCodec, data)) {
+                duplicateConfigs++
+                return
+            }
+            backlogRecovery.reset()
+            diagnostic("config apply codec=$videoCodec bytes=${data.size} signature=${data.contentHashCode()} " +
+                "reason=${if (decoder == null) "create-or-recover" else "changed"}")
             lastCodec = videoCodec
             lastConfig = data.copyOf()
             releaseDecoder()
@@ -429,7 +466,7 @@ class CrvApi19MediaSink(
                     val buffers = codec.inputBuffers
                     inputBuffers = buffers
                     decoderGeneration++
-                    diagnostic("API17 H.264 decoder ready")
+                    diagnostic("API17 H.264 decoder ready generation=$decoderGeneration")
                     codec
                 } catch (error: Exception) {
                     runCatching { codec.release() }
@@ -552,7 +589,14 @@ class CrvApi19MediaSink(
             val start = System.nanoTime()
             decoder?.releaseOutputBuffer(index, render)
             maxReleaseNs = maxOf(maxReleaseNs, System.nanoTime() - start)
-            if (render) renderedFrames++
+            if (render) {
+                renderedFrames++
+                val now = System.nanoTime()
+                if (!firstRendered || now - lastRenderNotificationNs >= 1_000_000_000L) {
+                    lastRenderNotificationNs = now
+                    onRendered()
+                }
+            }
             if (render && !firstRendered) {
                 firstRendered = true
                 diagnostic("first frame rendered")
@@ -608,7 +652,7 @@ class CrvApi19MediaSink(
                         "outputAgeMaxMs=${maxOutputAgeUs / 1000L} " +
                         "renderedAgeMaxMs=${maxRenderedAgeUs / 1000L} releaseMaxUs=${maxReleaseNs / 1000L} " +
                         "inputWaitMaxUs=${maxInputWaitNs / 1000L} inputCopyMaxUs=${maxInputCopyNs / 1000L} " +
-                        "inputSubmitMaxUs=${maxInputSubmitNs / 1000L}")
+                        "inputSubmitMaxUs=${maxInputSubmitNs / 1000L} duplicateConfigsTotal=$duplicateConfigs")
                     maxQueueAgeNs = 0L
                     maxFeedNs = 0L
                     maxInputWaitNs = 0L
@@ -694,7 +738,14 @@ class CrvApi19MediaSink(
         private val gain: () -> Float,
         private val voicePcm: (ByteArray, Int, Int, Long) -> Unit,
     ) : Closeable {
-        private val queue = CrvAudioPacketQueue(AUDIO_QUEUE_CAPACITY)
+        private val queue = CrvAudioPacketQueue(
+            AUDIO_QUEUE_CAPACITY,
+            maxAgeNs = if (isMusic) 200_000_000L else 100_000_000L,
+            maxPayloadBytes = if (format.codec == AudioCodecKind.LPCM) {
+                format.sampleRate.toLong() * format.channels.coerceAtLeast(1) * 2 *
+                    (if (isMusic) 200 else 100) / 1000
+            } else Long.MAX_VALUE,
+        )
         private val packetHolder = CrvAudioPacketQueue.MutablePacket()
         private val drainSchedule = CrvCodecDrainSchedule()
         private val running = AtomicBoolean(true)
@@ -820,7 +871,7 @@ class CrvApi19MediaSink(
             val primeMillis = if (isMedia) MEDIA_AUDIO_PRIME_MILLIS else LOW_LATENCY_AUDIO_PRIME_MILLIS
             val preferredBufferBytes = if (isMedia) {
                 maxOf(
-                    minimum * 4,
+                    minimum,
                     MIN_AUDIO_TRACK_BUFFER_BYTES,
                     bytesPerSecond * (MEDIA_AUDIO_PRIME_MILLIS + MEDIA_AUDIO_HEADROOM_MILLIS) / 1000,
                 )
@@ -1198,7 +1249,7 @@ class CrvApi19MediaSink(
             } else -1L
             val trackBytes = track?.let { bufferProgress.queuedBytes(it.playbackHeadPosition) } ?: 0L
             runCatching { report("Audio playback type=${format.audioType} queueDepth=${stats.depth} " +
-                "queueHighWater=${stats.highWater} droppedTotal=${stats.dropped} " +
+                "queueHighWater=${stats.highWater} droppedTotal=${stats.dropped} expiredTotal=${stats.expired} " +
                 "queuePayloadBytes=${stats.payloadBytes} queuePcmMs=$pcmQueueMs " +
                 "oldestPacketMs=${stats.oldestAgeNs / 1_000_000L} trackQueuedBytes=$trackBytes " +
                 "trackQueuedMs=${trackBytes * 1000L / (format.sampleRate.toLong() * frameBytes)} " +
@@ -1323,8 +1374,8 @@ class CrvApi19MediaSink(
         const val VIDEO_QUEUE_MAX_BYTES = 8 * 1024 * 1024
         const val AUDIO_QUEUE_CAPACITY = 96
         const val LOW_LATENCY_AUDIO_PRIME_MILLIS = 30
-        const val MEDIA_AUDIO_PRIME_MILLIS = 300
-        const val MEDIA_AUDIO_HEADROOM_MILLIS = 200
+        const val MEDIA_AUDIO_PRIME_MILLIS = 120
+        const val MEDIA_AUDIO_HEADROOM_MILLIS = 100
         const val MEDIA_REBUFFER_GAP_NS = 80_000_000L
         const val MIN_AUDIO_TRACK_BUFFER_BYTES = 16 * 1024
         const val MAX_VIDEO_INPUT = 8 * 1024 * 1024

@@ -18,7 +18,7 @@ internal fun classifyCrvReconnectFailure(error: Throwable): CrvReconnectFailure 
             "userdeniedpairing" in text || "denied lockdown pairing" in text || "lockdown pairing timed out" in text ->
                 return CrvReconnectFailure.TRUST_REQUIRED
             "usb detached" in text -> return CrvReconnectFailure.USB_MISSING
-            "permission" in text || "vpn revoked" in text ->
+            "permission" in text || "vpn revoked" in text || "vpnservice.establish returned null" in text ->
                 return CrvReconnectFailure.PERMISSION_REQUIRED
         }
         current = cause.cause.takeIf { it !== cause }
@@ -114,4 +114,15 @@ internal class CrvCleanupGate {
         if (pending != 0) return null
         return deferred.also { deferred = null }
     }
+}
+
+/** Counts actual starts across every automatic entry point, including USB reenumeration. */
+internal class CrvConnectionAttemptBudget(private val limit: Int = 5) {
+    var attempts = 0; private set
+    fun tryStart(): Boolean {
+        if (attempts >= limit) return false
+        attempts++
+        return true
+    }
+    fun reset() { attempts = 0 }
 }

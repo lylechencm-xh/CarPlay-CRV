@@ -53,8 +53,9 @@ internal class CrvApi19WirelessHotspot(
             parcel.writeParcelable(original, 0)
             parcel.setDataPosition(0)
             val copy = checkNotNull(parcel.readParcelable<WifiConfiguration>(WifiConfiguration::class.java.classLoader))
-            check(configurationSnapshot(copy) == configurationSnapshot(original)) {
-                "Honda hotspot backup did not preserve its configuration"
+            val differences = configurationSnapshot(original).differences(configurationSnapshot(copy))
+            check(differences.isEmpty()) {
+                "Honda hotspot backup did not preserve fields=${differences.joinToString(",")}"
             }
             copy
         } finally {

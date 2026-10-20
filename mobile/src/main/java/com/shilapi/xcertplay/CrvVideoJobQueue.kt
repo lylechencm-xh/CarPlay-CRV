@@ -55,6 +55,13 @@ internal class CrvVideoJobQueue(
     }
 
     fun offerConfig(codec: VideoCodec, config: ByteArray) = synchronized(lock) {
+        // A duplicate pending config must not evict the intervening reference frames.
+        for (offset in size - 1 downTo 0) {
+            val index = index(offset)
+            if (types[index] != TYPE_CONFIG) continue
+            if (codecs[index] == codec && data[index]?.contentEquals(config) == true) return@synchronized
+            break
+        }
         if (size == capacity) clearLocked()
         addLocked(TYPE_CONFIG, codec, config, 0L, null)
         lock.notify()

@@ -15,6 +15,8 @@ data class AirPlayDisplayConfig(
     val widthPhysicalMm: Int? = null,
     val heightPhysicalMm: Int? = null,
     val fps: Int = 60,
+    /** Optional receiver throughput ceiling, independent of the user's stepped FPS setting. */
+    val streamFpsLimit: Int? = null,
     val primaryInputDevice: Int = 1,
     val viewArea: AirPlayInsets? = null,
     val safeArea: AirPlayInsets? = null,

@@ -53,6 +53,8 @@ class AudioStream(
     private var dataSocket: DatagramSocket? = null
     private var controlSocket: DatagramSocket? = null
     private var dataThread: Thread? = null
+    private var decodeThread: Thread? = null
+    private val receiveQueue = AudioReceiveQueue()
     private var controlThread: Thread? = null
     private var diagnosticsThread: Thread? = null
     private var started = false
@@ -86,7 +88,11 @@ class AudioStream(
             isDaemon = true
             start()
         }
-        dataThread = Thread({ runData(data, listener) }, "airplay-audio-rx").apply {
+        decodeThread = Thread({ runDecode(listener) }, "airplay-audio-decode").apply {
+            isDaemon = true
+            start()
+        }
+        dataThread = Thread({ runData(data) }, "airplay-audio-rx").apply {
             isDaemon = true
             start()
         }
@@ -101,39 +107,72 @@ class AudioStream(
         if (!closed.compareAndSet(false, true)) return
         dataSocket?.close()
         controlSocket?.close()
+        receiveQueue.close()
         dataThread?.interrupt()
+        decodeThread?.interrupt()
         controlThread?.interrupt()
         diagnosticsThread?.interrupt()
     }
 
-    private fun runData(socket: DatagramSocket, listener: Listener) {
-        // RTP arrives every few milliseconds. A delayed receiver loses packets before the
-        // renderer's queue can help, especially while video decoding or navigation is busy.
+    private fun runData(socket: DatagramSocket) {
         runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) }
         val stats = StreamReceiveStats("audio type=$streamType", onDiagnostic)
         val buffer = ByteArray(DATAGRAM_BYTES)
         val packet = DatagramPacket(buffer, buffer.size)
-        val aad = ByteArray(RTP_HEADER_LEN - 4)
-        val nonce = ByteArray(12)
-        val keepWire = listener.wantsPacketData()
         try {
             while (!closed.get()) {
                 packet.setLength(buffer.size)
-                try {
-                    stats.reading()
-                    socket.receive(packet)
-                } catch (_: Exception) {
-                    if (closed.get()) return else continue
-                }
-                val packetLength = packet.length
-                stats.received(
-                    size = packetLength,
-                    sequence = if (packetLength >= RTP_HEADER_LEN) {
-                        ((buffer[2].toInt() and 0xff) shl 8) or (buffer[3].toInt() and 0xff)
-                    } else null,
-                    timestamp = if (packetLength >= RTP_HEADER_LEN) readU32Be(buffer, 4) else null,
-                )
-                val packetNumber = receivedPackets.incrementAndGet()
+                stats.reading()
+                try { socket.receive(packet) }
+                catch (_: Exception) { if (closed.get()) return else continue }
+                val length = packet.length
+                stats.received(length,
+                    if (length >= RTP_HEADER_LEN) ((buffer[2].toInt() and 0xff) shl 8) or
+                        (buffer[3].toInt() and 0xff) else null,
+                    if (length >= RTP_HEADER_LEN) readU32Be(buffer, 4) else null)
+                receivedPackets.incrementAndGet()
+                receiveQueue.offer(buffer.copyOf(length))
+                stats.processed()
+            }
+        } finally {
+            stats.flush(ended = true)
+            receiveQueue.close()
+        }
+    }
+
+    private fun runDecode(listener: Listener) {
+        runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO) }
+        val packet = AudioReceiveQueue.Packet()
+        val aad = ByteArray(RTP_HEADER_LEN - 4)
+        val nonce = ByteArray(12)
+        val keepWire = listener.wantsPacketData()
+        var processedPackets = 0
+        var maxDecryptNs = 0L
+        var maxDecryptCpuNs = 0L
+        var maxCallbackNs = 0L
+        var maxQueueAgeNs = 0L
+        var statsAtNs = System.nanoTime()
+        fun reportDecode(ended: Boolean = false) {
+            val now = System.nanoTime()
+            if (!ended && now - statsAtNs < 5_000_000_000L) return
+            val queue = receiveQueue.stats()
+            diagnostic("Audio processing type=$streamType queueDepth=${queue.depth} " +
+                "highWater=${queue.highWater} overflowTotal=${queue.overflow} expiredTotal=${queue.expired} " +
+                "queueAgeMaxUs=${maxQueueAgeNs / 1000} decryptMaxUs=${maxDecryptNs / 1000} " +
+                "decryptCpuMaxUs=${maxDecryptCpuNs / 1000} callbackMaxUs=${maxCallbackNs / 1000} ended=$ended")
+            maxDecryptNs = 0L
+            maxDecryptCpuNs = 0L
+            maxCallbackNs = 0L
+            maxQueueAgeNs = 0L
+            statsAtNs = now
+        }
+        try {
+            while (!closed.get() && receiveQueue.poll(packet)) {
+                val buffer = packet.bytes ?: continue
+                packet.bytes = null
+                val packetLength = buffer.size
+                maxQueueAgeNs = maxOf(maxQueueAgeNs, System.nanoTime() - packet.receivedNs)
+                val packetNumber = ++processedPackets
                 if (packetLength < RTP_HEADER_LEN + TAIL_LEN) {
                     if (packetNumber == 1) {
                         android.util.Log.w(
@@ -149,7 +188,6 @@ class AudioStream(
                             IOException("audio packet shorter than RTP header plus tail"),
                         )
                     }
-                    stats.processed()
                     continue
                 }
 
@@ -158,6 +196,8 @@ class AudioStream(
                 buffer.copyInto(nonce, 4, sealedEnd, packetLength)
                 val sample = readU32Be(buffer, 4)
 
+                val decryptStartNs = System.nanoTime()
+                val decryptCpuStartNs = android.os.Debug.threadCpuTimeNanos()
                 val rtp = try {
                     opener.openWithPrefix(
                         nonce = nonce,
@@ -183,9 +223,12 @@ class AudioStream(
                     if (keepWire) {
                         listener.onPacket(buffer.copyOf(packetLength), null, sample, error)
                     }
-                    stats.processed()
                     continue
                 }
+                val decryptedNs = System.nanoTime()
+                maxDecryptNs = maxOf(maxDecryptNs, decryptedNs - decryptStartNs)
+                maxDecryptCpuNs = maxOf(maxDecryptCpuNs,
+                    android.os.Debug.threadCpuTimeNanos() - decryptCpuStartNs)
                 val payloadBytes = rtp.size - RTP_HEADER_LEN
                 val decryptedNumber = decryptedPackets.incrementAndGet()
                 if (decryptedNumber <= FIRST_PACKET_LOG_COUNT) {
@@ -205,18 +248,27 @@ class AudioStream(
                             "authFailures=${authenticationFailures.get()}",
                     )
                 }
+                if (closed.get()) break
+                val callbackStartNs = System.nanoTime()
                 if (keepWire) {
-                    listener.onPacket(buffer.copyOf(packetLength), rtp, sample, null)
+                    listener.onPacket(buffer, rtp, sample, null)
                 }
                 if (!started) {
                     started = true
                     listener.onStarted(sample)
                 }
                 listener.onRtp(rtp, sample)
-                stats.processed()
+
+                maxCallbackNs = maxOf(maxCallbackNs, System.nanoTime() - callbackStartNs)
+                reportDecode()
             }
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        } catch (error: Exception) {
+            diagnostic("Audio processing stopped type=$streamType error=${error.javaClass.simpleName}")
+            close()
         } finally {
-            stats.flush(ended = true)
+            reportDecode(ended = true)
             diagnostic("Audio receive ended type=$streamType received=${receivedPackets.get()} " +
                 "decrypted=${decryptedPackets.get()} decryptFailures=${authenticationFailures.get()}")
         }

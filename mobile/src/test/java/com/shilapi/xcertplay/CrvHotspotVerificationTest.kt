@@ -20,6 +20,16 @@ class CrvHotspotVerificationTest {
         assertTrue(config(secret = null, secured = false).matches(config(secret = null, secured = false)))
     }
 
+    @Test fun copiedSnapshotUsesContentAndMismatchDiagnosticsContainOnlyFieldNames() {
+        val saved = config()
+        val copied = config()
+        assertNotSame(saved, copied)
+        assertTrue(saved.matches(copied))
+        assertTrue(saved.differences(copied).isEmpty())
+        assertEquals(listOf("ssid", "secret"), saved.differences(config(ssid = "other", secret = "another-password")))
+        assertFalse(saved.differences(config(secret = "another-password")).toString().contains("password"))
+    }
+
     @Test fun slowFrameworkStopCanCompleteAfterFiveSeconds() {
         var time = 0L
         assertTrue(awaitCrvCondition(8_000, { time }, { time += it }) { time >= 5_500 })

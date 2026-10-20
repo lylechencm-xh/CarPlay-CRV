@@ -76,7 +76,13 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     @Volatile private var openCarPlayAfterPermission = false
     private val usbTransitionGeneration = AtomicInteger(0)
     private var reconnectGeneration = 0
-    private var reconnectAttempts = 0
+    private val reconnectBudget = automaticAttemptBudget
+    private var automaticConnectBlocked = false
+    private var vpnConsentPending = false
+    private var usbOpenInFlight = false
+    private var reconnectOnSurfaceReady = false
+    private var firstFrameCheckGeneration = 0
+    private val presentation = CrvConnectionPresentation()
     private var reconnectBlockedForMfi = false
     @Volatile private var destroyed = false
     private val connectionEpoch = CrvConnectionEpoch()
@@ -158,7 +164,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 }
                 diagnostics.log("Connection mode changed to $connectionMode; closing previous controller")
                 retireConnection(CrvRecoveryTrigger.MODE_CHANGE)
-                reconnectAttempts = 0
+                reconnectBudget.reset()
+                automaticConnectBlocked = false
                 reconnectBlockedForMfi = false
                 reconnectGeneration++
                 manualDisconnect = false
@@ -364,7 +371,6 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 runOnUiThread {
                     retireConnection(CrvRecoveryTrigger.USB_REATTACHED)
                     manualDisconnect = false
-                    reconnectAttempts = 0
                     reconnectGeneration++
                     beginConnectionStatus("USB reattached; restoring wired CarPlay")
                     requestPermission(device)
@@ -375,8 +381,14 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 reportStatus("USB attached; continuing Wi-Fi CarPlay")
                 return@registerAttachReceiver
             }
-            manualDisconnect = false
-            if (!awaitingCarPlayReattach) reconnectAttempts = 0
+            if (automaticConnectBlocked && lastReconnectFailure == CrvReconnectFailure.USB_MISSING) {
+                automaticConnectBlocked = false
+            }
+            if (manualDisconnect || automaticConnectBlocked) return@registerAttachReceiver
+            if (controller != null || usbOpenInFlight || pendingUsbSession != null) {
+                diagnostics.log("USB attach ignored: connection already owned or opening")
+                return@registerAttachReceiver
+            }
             reconnectBlockedForMfi = false
             reconnectGeneration++
             beginConnectionStatus("iPhone attached")
@@ -417,8 +429,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                         }
                         retireConnection(CrvRecoveryTrigger.USB_DETACHED)
                         openCarPlayAfterPermission = false
-                        reconnectAttempts = 0
                         reconnectGeneration++
+                        presentation.clear()
                         connectionError("iPhone disconnected")
                     }, 300L)
                 }
@@ -442,10 +454,12 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         CrvUsbIdentity(device.deviceName, device.deviceId, device.vendorId, device.productId)
 
     private fun prepareVpn() {
+        if (vpnConsentPending) return
         val consent = CarPlayVpnService.prepare(this)
         if (consent == null) {
             connectionStatus("CarPlay network permission ready")
         } else {
+            vpnConsentPending = true
             connectionStatus("Requesting CarPlay network permission")
             startActivityForResult(consent, REQUEST_VPN)
         }
@@ -455,10 +469,15 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != REQUEST_VPN) return
-        if (resultCode == RESULT_OK) {
+        vpnConsentPending = false
+        diagnostics.log("VPN consent result=$resultCode ready=${CarPlayVpnService.prepare(this) == null}")
+        if (resultCode == RESULT_OK && CarPlayVpnService.prepare(this) == null) {
+            automaticConnectBlocked = false
             connectionStatus("CarPlay network permission granted")
             maybeStartCarPlay()
         } else {
+            automaticConnectBlocked = true
+            reconnectGeneration++
             connectionError("CarPlay network permission required")
         }
     }
@@ -481,6 +500,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     private fun requestPermission(device: UsbDevice) {
         if (deferUntilCleanup { requestPermission(device) }) return
+        if (automaticConnectBlocked || controller != null || usbOpenInFlight || pendingUsbSession != null) return
         openCarPlayAfterPermission = false
         when (usbHost.requestPermission(device)) {
             is IphoneUsbHost.PermissionRequest.AlreadyGranted -> routeGrantedDevice(device)
@@ -491,6 +511,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     private fun routeGrantedDevice(device: UsbDevice) {
         if (deferUntilCleanup { routeGrantedDevice(device) }) return
+        if (automaticConnectBlocked || controller != null || usbOpenInFlight || pendingUsbSession != null) return
         if (hasActiveCarPlayLayout(device)) {
             awaitingCarPlayReattach = false
             usbTransitionGeneration.incrementAndGet()
@@ -503,6 +524,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     private fun requestPermissionForCarPlay(device: UsbDevice) {
         if (deferUntilCleanup { requestPermissionForCarPlay(device) }) return
+        if (automaticConnectBlocked || controller != null || usbOpenInFlight || pendingUsbSession != null) return
         openCarPlayAfterPermission = true
         when (usbHost.requestPermission(device)) {
             is IphoneUsbHost.PermissionRequest.AlreadyGranted -> {
@@ -578,6 +600,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     private fun openCarPlayUsb(device: UsbDevice) {
         if (deferUntilCleanup { openCarPlayUsb(device) }) return
+        if (automaticConnectBlocked || controller != null || pendingUsbSession != null || usbOpenInFlight) return
+        usbOpenInFlight = true
         val generation = usbTransitionGeneration.incrementAndGet()
         connectionStatus("Opening CarPlay USB data paths")
         usbHost.openIap2UsbSessionAsync(device, io) { result ->
@@ -590,6 +614,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                     }
                     return@runOnUiThread
                 }
+                usbOpenInFlight = false
                 when (result) {
                     is IphoneUsbHost.Iap2SessionResult.Connected -> {
                         openCarPlayAfterPermission = false
@@ -618,7 +643,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     @Synchronized
     private fun maybeStartCarPlay() {
-        if (destroyed || manualDisconnect || cleanupGate.pending > 0 || controller != null) return
+        if (destroyed || manualDisconnect || automaticConnectBlocked || cleanupGate.pending > 0 || controller != null) return
         if (deferUntilCleanup { maybeStartCarPlay() }) return
         val device = pendingDevice
         val usb = pendingUsbSession
@@ -637,8 +662,20 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             return
         }
 
+        if (CarPlayVpnService.prepare(this) != null) {
+            lastReconnectFailure = CrvReconnectFailure.PERMISSION_REQUIRED
+            connectionStatus("Waiting for CarPlay network permission")
+            return
+        }
+        if (!reconnectBudget.tryStart()) {
+            automaticConnectBlocked = true
+            retireConnection(CrvRecoveryTrigger.ACTIVE_DISCONNECT)
+            connectionError("CarPlay stopped; tap Connect to retry")
+            return
+        }
         pendingDevice = null
         pendingUsbSession = null
+        presentation.clear()
 
         val epoch = connectionEpoch.advance()
         synchronized(snapshotReasons) { snapshotReasons.clear() }
@@ -662,6 +699,13 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 }
             },
             mode = connectionMode,
+            onConnectionEvent = { event, message ->
+                runOnUiThread {
+                    if (!destroyed && connectionEpoch.isCurrent(epoch)) {
+                        handleConnectionEvent(event, message, epoch)
+                    }
+                }
+            },
             onStopped = {
                 runOnUiThread {
                     if (!destroyed && controller === next && connectionEpoch.isCurrent(epoch)) {
@@ -672,6 +716,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                         }
                         connectionEpoch.advance()
                         sessionStability.clear()
+                        presentation.clear()
                         controller = null
                         scheduleReconnect()
                     }
@@ -712,7 +757,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         maybeCaptureRuntimeSnapshot(message, epoch)
         val stage = stageFor(message)
         val displayStage = monotonicConnectionStage(displayedConnectionStage, stage)
-        displayedConnectionStage = displayStage
+        if (!presentation.active) displayedConnectionStage = displayStage
         val normalized = message.lowercase(java.util.Locale.US)
         if (message == "CarPlay session ended") sessionStability.clear()
         if (
@@ -724,29 +769,10 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         ) {
             reconnectBlockedForMfi = true
         }
-        if (message == "CarPlay active") {
-            diagnostics.log(CrvConnectionStage.CARPLAY_ACTIVE, message)
-            connectionStatus(message)
-            reconnectGeneration++
-            if (epoch != null) {
-                sessionStability.active(epoch, android.os.SystemClock.elapsedRealtime())
-                mainHandler.postDelayed({
-                    if (!destroyed && controller != null && connectionEpoch.isCurrent(epoch) &&
-                        sessionStability.isStable(epoch, android.os.SystemClock.elapsedRealtime())) {
-                        reconnectAttempts = 0
-                        diagnostics.log("attempt=$epoch stable for 60 seconds; retry budget reset")
-                    }
-                }, CrvSessionStability.STABLE_MILLIS)
-            }
-            displayedConnectionStage = CrvConnectionStage.CARPLAY_ACTIVE
-            renderHome(displayedConnectionStage, message)
-            mainHandler.postDelayed(
-                {
-                    if (!destroyed && controller != null && epoch != null &&
-                        connectionEpoch.isCurrent(epoch) && sessionStability.isActive(epoch)) showVideo()
-                },
-                STATUS_HIDE_AFTER_ACTIVE_MILLIS,
-            )
+        // A controller's diagnostic wording must never drive visibility or disconnects.
+        if (epoch != null) {
+            diagnostics.log(stage, message)
+            if (!presentation.active && homeVisible) renderHome(displayStage, message)
             return
         }
 
@@ -758,6 +784,64 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             connectionStatus(message)
             renderHome(displayStage, message)
         }
+    }
+
+    private fun handleConnectionEvent(event: CrvConnectionEvent, message: String, epoch: Long) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        presentation.accept(event, now)
+        when (event) {
+            CrvConnectionEvent.ACTIVE -> {
+                reconnectGeneration++
+                sessionStability.active(epoch, now)
+                displayedConnectionStage = CrvConnectionStage.CARPLAY_ACTIVE
+                diagnostics.log("attempt=$epoch session active; waiting for rendered video")
+                connectionStatus("CarPlay connected; waiting for video")
+                scheduleFirstFrameCheck(epoch, 0)
+            }
+            CrvConnectionEvent.VIDEO_RESET -> {
+                if (presentation.active) scheduleFirstFrameCheck(epoch, 0)
+            }
+            CrvConnectionEvent.VIDEO_RENDERED -> {
+                firstFrameCheckGeneration++
+                if (presentation.stable(now) && reconnectBudget.attempts != 0) {
+                    reconnectBudget.reset()
+                    automaticConnectBlocked = false
+                    diagnostics.log("attempt=$epoch rendered playback stable; retry budget reset")
+                }
+            }
+            CrvConnectionEvent.SESSION_ENDED -> {
+                sessionStability.clear()
+                connectionError(message)
+            }
+            CrvConnectionEvent.FAILED -> {
+                sessionStability.clear()
+                connectionError(message)
+            }
+        }
+        if (presentation.shouldShowVideo()) {
+            if (homeVisible) diagnostics.log("attempt=$epoch UI video visible reason=rendered-frame")
+            showVideo()
+        }
+    }
+
+    private fun scheduleFirstFrameCheck(epoch: Long, recoveries: Int) {
+        val generation = ++firstFrameCheckGeneration
+        mainHandler.postDelayed({
+            if (generation != firstFrameCheckGeneration || destroyed || !connectionEpoch.isCurrent(epoch) || controller == null ||
+                !presentation.active || presentation.rendered) return@postDelayed
+            if (!activityResumed || videoSurface == null) {
+                scheduleFirstFrameCheck(epoch, recoveries)
+                return@postDelayed
+            }
+            diagnostics.log("attempt=$epoch first-frame timeout localRecoveries=$recoveries")
+            if (recoveries < 2) {
+                controller?.recoverVideo()
+                scheduleFirstFrameCheck(epoch, recoveries + 1)
+            } else {
+                // Preserve the transport: repeated full reconnects cannot repair a decoder.
+                connectionStatus("CarPlay connected; video unavailable. Tap Connect to retry")
+            }
+        }, 10_000L)
     }
 
     private fun maybeCaptureRuntimeSnapshot(message: String, epoch: Long? = null) {
@@ -788,7 +872,12 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         }
     }
     private fun scheduleReconnect() {
-        if (destroyed || videoSurface == null) return
+        if (destroyed || automaticConnectBlocked) return
+        if (videoSurface == null) {
+            reconnectOnSurfaceReady = true
+            return
+        }
+        reconnectOnSurfaceReady = false
         if (manualDisconnect) {
             showHome()
             return
@@ -806,17 +895,18 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         if (usbHost.discover().isEmpty()) {
             lastReconnectFailure = CrvReconnectFailure.USB_MISSING
         }
-        val decision = crvReconnectDecision(lastReconnectFailure, reconnectAttempts)
+        val decision = crvReconnectDecision(lastReconnectFailure, (reconnectBudget.attempts - 1).coerceAtLeast(0))
         val delayMillis = decision.delayMillis
         if (delayMillis == null) {
+            automaticConnectBlocked = true
             beginConnectionStatus(decision.message)
             return
         }
         val generation = ++reconnectGeneration
-        if (decision.consumesAttempt) reconnectAttempts++
+        // Every real controller start, including USB/Surface entry points, consumes the budget.
         diagnostics.log(
             CrvConnectionStage.RETRYING,
-            "retry=$reconnectAttempts failure=$lastReconnectFailure delayMs=$delayMillis",
+            "retry=${reconnectBudget.attempts} failure=$lastReconnectFailure delayMs=$delayMillis",
         )
         beginConnectionStatus(decision.message)
         displayedConnectionStage = CrvConnectionStage.RETRYING
@@ -858,10 +948,13 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         val active = controller
         val usb = pendingUsbSession
         controller = null
+        usbOpenInFlight = false
+        firstFrameCheckGeneration++
         pendingUsbSession = null
         pendingDevice = null
         connectionEpoch.advance()
         sessionStability.clear()
+        presentation.clear()
         usbTransitionGeneration.incrementAndGet()
         awaitingCarPlayReattach = false
         openCarPlayAfterPermission = false
@@ -966,6 +1059,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     private fun showHome() {
         if (destroyed || !::home.isInitialized) return
+        if (!homeVisible) diagnostics.log("UI connection page visible stage=$displayedConnectionStage")
         homeVisible = true
         runOnUiThread { if (!destroyed) home.visibility = View.VISIBLE }
     }
@@ -1157,9 +1251,11 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     private fun beginManualConnect() {
         if (destroyed) return
+        automaticConnectBlocked = false
+        if (controller != null) retireConnection(CrvRecoveryTrigger.ACTIVE_DISCONNECT)
         prepareVpn()
         manualDisconnect = false
-        reconnectAttempts = 0
+        reconnectBudget.reset()
         reconnectBlockedForMfi = false
         lastReconnectFailure = CrvReconnectFailure.TRANSIENT
         reconnectGeneration++
@@ -1180,7 +1276,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         usbTransitionGeneration.incrementAndGet()
         awaitingCarPlayReattach = false
         openCarPlayAfterPermission = false
-        reconnectAttempts = 0
+        reconnectBudget.reset()
         diagnostics.log("Manual CarPlay disconnect requested")
         retireConnection(CrvRecoveryTrigger.MANUAL_DISCONNECT)
         showHome()
@@ -1299,15 +1395,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         surfaceHeight = Crv2021Config.CARPLAY_HEIGHT
         controller?.updateSurface(videoSurface)
         maybeStartCarPlay()
-        if (!manualDisconnect && controller == null && pendingUsbSession == null) {
-            reconnectGeneration++
-            val device = usbHost.discover().firstOrNull()
-            if (device != null) {
-                beginConnectionStatus("Display ready; reconnecting CarPlay")
-                awaitingCarPlayReattach = false
-                requestPermission(device)
-            }
-        }
+        if (reconnectOnSurfaceReady && controller == null && pendingUsbSession == null) scheduleReconnect()
     }
 
     override fun onSurfaceTextureSizeChanged(
@@ -1393,7 +1481,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             Thread(task, "crv-connection-cleanup").apply { isDaemon = true }
         }
         private const val REQUEST_VPN = 1001
-        private const val STATUS_HIDE_AFTER_ACTIVE_MILLIS = 2_000L
+        private val automaticAttemptBudget = CrvConnectionAttemptBudget()
         private const val USB_REENUMERATION_TIMEOUT_MILLIS = 15_000L
         private const val USB_REENUMERATION_POLL_MILLIS = 500L
         private val HOME_BACKGROUND_COLOR = 0xFF0B1016.toInt()
