@@ -100,7 +100,7 @@ internal class StreamReceiveStats(
             "windowMs=${(now - windowStart).coerceAtLeast(0) / 1_000_000} " +
             "readsOver250Ms=$readsOver250Ms seqGapAfterReadOver250Ms=$seqGapAfterReadOver250Ms " +
             "seqMissingAfterReadOver250Ms=$seqMissingAfterReadOver250Ms" +
-            if (label == "video") " decryptMaxUs=${maxDecryptNs / 1000} " +
+            if (label == "video" || label == "video-processing") " decryptMaxUs=${maxDecryptNs / 1000} " +
                 "convertMaxUs=${maxConvertNs / 1000} submitMaxUs=${maxSubmitNs / 1000} " +
                 "frameMaxBytes=$maxFrameBytes videoFrames=$videoFrames " +
                 "decryptTotalUs=${decryptTotalNs / 1000} decryptCpuTotalUs=${decryptCpuTotalNs / 1000} " +

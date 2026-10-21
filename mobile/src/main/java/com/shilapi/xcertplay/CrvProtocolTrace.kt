@@ -28,6 +28,7 @@ internal enum class CrvProtocolDirection {
  */
 internal class CrvProtocolTraceRecorder(
     private val emit: (String) -> Unit,
+    private val detailed: () -> Boolean = { true },
     private val clockMillis: () -> Long = { System.nanoTime() / 1_000_000L },
 ) {
     private val startedAtMillis = clockMillis()
@@ -61,6 +62,7 @@ internal class CrvProtocolTraceRecorder(
         detail: String = "",
     ) {
         require(byteCount >= 0) { "byteCount must be non-negative" }
+        if (!detailed() && direction != CrvProtocolDirection.SIGNAL && direction != CrvProtocolDirection.FAULT) return
         val offset = (clockMillis() - startedAtMillis).coerceAtLeast(0L)
         val line = listOf(
             PREFIX,

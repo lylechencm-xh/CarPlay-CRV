@@ -21,6 +21,8 @@ interface MediaSink {
     fun onVideoCodec(type: Int, codec: VideoCodec) {}
     fun onVideoConfig(type: Int, codecData: ByteArray) {}
     fun onVideoFrame(type: Int, naluBytes: ByteArray) {}
+    fun onVideoFrame(type: Int, naluBytes: ByteArray, arrivalNs: Long) = onVideoFrame(type, naluBytes)
+    fun onVideoDiscontinuity(type: Int) {}
     fun setVideoRecoveryHandler(type: Int, handler: () -> Unit) {}
     fun setVideoVisibilityHandler(type: Int, handler: () -> Unit) {}
     fun setVideoDiagnosticHandler(type: Int, handler: (String) -> Unit) {}
@@ -61,6 +63,12 @@ internal fun currentScreenListener(type: Int, sink: MediaSink, isCurrent: () -> 
 
         override fun onFrame(naluBytes: ByteArray) {
             if (isCurrent()) sink.onVideoFrame(type, naluBytes)
+        }
+        override fun onFrame(naluBytes: ByteArray, arrivalNs: Long) {
+            if (isCurrent()) sink.onVideoFrame(type, naluBytes, arrivalNs)
+        }
+        override fun onDiscontinuity() {
+            if (isCurrent()) sink.onVideoDiscontinuity(type)
         }
     }
 

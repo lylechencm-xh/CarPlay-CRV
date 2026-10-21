@@ -6,6 +6,7 @@ enum class CrvConnectionEvent { ACTIVE, VIDEO_RESET, VIDEO_RENDERED, SESSION_END
 internal class CrvConnectionPresentation {
     var active = false; private set
     var rendered = false; private set
+    private var everRendered = false
     private var firstRenderedMs: Long? = null
     private var lastRenderedMs: Long? = null
 
@@ -19,6 +20,7 @@ internal class CrvConnectionPresentation {
             }
             CrvConnectionEvent.VIDEO_RENDERED -> {
                 rendered = true
+                everRendered = true
                 if (firstRenderedMs == null) firstRenderedMs = nowMs
                 lastRenderedMs = nowMs
             }
@@ -27,6 +29,8 @@ internal class CrvConnectionPresentation {
     }
 
     fun shouldShowVideo() = active && rendered
+    /** Local decoder/Surface recovery must never reopen connection controls for a live session. */
+    fun retainsVideoPage() = active && everRendered
     fun stable(nowMs: Long): Boolean = active && firstRenderedMs?.let {
         nowMs - it >= 60_000L && nowMs - (lastRenderedMs ?: it) <= 5_000L
     } == true
@@ -34,6 +38,7 @@ internal class CrvConnectionPresentation {
     fun clear() {
         active = false
         rendered = false
+        everRendered = false
         firstRenderedMs = null
         lastRenderedMs = null
     }

@@ -8,11 +8,13 @@ enum class CrvLogCategory(val directoryName: String) {
 
     companion object {
         private val STAGE_PREFIX = Regex("^\\[[A-Z0-9_]+]\\s*")
+        private val ATTEMPT_PREFIX = Regex("^attempt=\\d+\\s*")
+        private fun content(message: String): String = message.replace(STAGE_PREFIX, "").replace(ATTEMPT_PREFIX, "")
         private val FAILURE_WORD = Regex("\\b(failed|failure)\\b")
         private val ENDED_EVENT = Regex("\\bended\\b(?!\\s*=false)")
         fun classify(message: String): CrvLogCategory {
             // Stage prefixes describe current UI state, not the message's subsystem.
-            val text = message.replace(STAGE_PREFIX, "").lowercase(Locale.US)
+            val text = content(message).lowercase(Locale.US)
             return when {
                 text.startsWith("crvtrace\t") || text.startsWith("iap2 rx=") ||
                     text.startsWith("iap2 tx=") || text.startsWith("airplay rx ") ||
@@ -44,7 +46,7 @@ enum class CrvLogCategory(val directoryName: String) {
         fun includeInOverview(category: CrvLogCategory, message: String, failure: Boolean): Boolean {
             if (failure) return true
             if (category == CONNECTION) return true
-            val text = message.replace(STAGE_PREFIX, "").lowercase(Locale.US)
+            val text = content(message).lowercase(Locale.US)
             return " ready" in text || ENDED_EVENT.containsMatchIn(text) || " detached" in text ||
                 " active" in text || " restored" in text || "first frame" in text ||
                 text.startsWith("app started") || text.startsWith("app stopped")

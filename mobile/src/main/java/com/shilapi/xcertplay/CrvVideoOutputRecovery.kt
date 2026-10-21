@@ -9,6 +9,7 @@ internal class CrvVideoOutputRecovery {
     private var episodeStartNs: Long? = null
     private var lastRecoveryNs: Long? = null
     var reason: String = ""; private set
+    var triggerSnapshot: String = ""; private set
 
     fun submitted(presentationTimeUs: Long, submittedNs: Long = presentationTimeUs * 1000L) {
         if (firstSubmittedNs == null) firstSubmittedNs = submittedNs
@@ -68,6 +69,9 @@ internal class CrvVideoOutputRecovery {
         }
         if (nowNs - start < 750_000_000L) return false
         lastRecoveryNs = nowNs
+        triggerSnapshot = "inputPtsUs=$latestSubmittedUs outputPtsUs=$latestOutputUs " +
+            "pendingSpanUs=${(latestSubmittedUs - latestOutputUs).coerceAtLeast(0L)} " +
+            "lastOutputAgoMs=${lastOutput?.let { (nowNs - it) / 1_000_000L } ?: -1L}"
         reason = if (startupStalled) "startup output timeout"
             else if (outputStalled || tailStalled) "output stalled" else "output lag persisted"
         reset()

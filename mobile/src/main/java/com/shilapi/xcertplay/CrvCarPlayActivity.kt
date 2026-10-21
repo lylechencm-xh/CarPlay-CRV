@@ -93,12 +93,14 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private var pendingUsbSession: Iap2UsbSession? = null
 
     private var videoSurface: Surface? = null
+    private var videoSurfaceOwner: CrvWiredCarPlayController? = null
     private var surfaceWidth = Crv2021Config.CARPLAY_WIDTH
     private var surfaceHeight = Crv2021Config.CARPLAY_HEIGHT
 
     private var controller: CrvWiredCarPlayController? = null
     private var activityResumed = false
     private var mediaCoreMonitor: CrvHondaMediaCoreMonitor? = null
+    private var callRouteMonitor: CrvCallRouteMonitor? = null
     private lateinit var runtimeSnapshotProbe: CrvRuntimeSnapshotProbe
     private val snapshotReasons = HashSet<String>()
 
@@ -106,6 +108,10 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         super.onResume()
         activityResumed = true
         controller?.setVideoVisible(true)
+        if (presentation.retainsVideoPage()) showVideo()
+        callRouteMonitor?.let { monitor ->
+            if (!diagnosticIo.isShutdown) diagnosticIo.execute { monitor.foreground("resume") }
+        }
         if (::diagnostics.isInitialized) {
             diagnostics.log("CarPlay activity resumed stage=$displayedConnectionStage")
         }
@@ -114,6 +120,11 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     override fun onPause() {
         activityResumed = false
         controller?.setVideoVisible(false)
+        mainHandler.postDelayed({
+            if (!destroyed && !activityResumed && !diagnosticIo.isShutdown) {
+                diagnosticIo.execute { callRouteMonitor?.foreground("pause") }
+            }
+        }, 400L)
         if (::diagnostics.isInitialized) {
             diagnostics.log("CarPlay activity paused stage=$displayedConnectionStage")
         }
@@ -130,6 +141,10 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
+        val profile = CrvVideoProfile.fromStored(getSharedPreferences("crv_video", Context.MODE_PRIVATE)
+            .getString("profile", null))
+        surfaceWidth = profile.width
+        surfaceHeight = profile.height
 
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -285,6 +300,28 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
                 addView(modeButton, LinearLayout.LayoutParams(-2, -2))
             }
             addView(navigationVolume, LinearLayout.LayoutParams(-2, -2))
+            addView(TextView(this@CrvCarPlayActivity).apply {
+                text = "诊断日志"
+                setTextColor(Color.WHITE)
+                setPadding(dp(12), dp(12), dp(12), dp(12))
+                setOnClickListener {
+                    AlertDialog.Builder(this@CrvCarPlayActivity).setTitle("诊断日志")
+                        .setSingleChoiceItems(arrayOf("普通（保留关键事件和性能摘要）", "详细（故障排查）"),
+                            if (diagnostics.detailed) 1 else 0) { dialog, index ->
+                            diagnostics.setDetailed(this@CrvCarPlayActivity, index == 1)
+                            dialog.dismiss()
+                        }.setNeutralButton("画面性能") { _, _ ->
+                            val settings = getSharedPreferences("crv_video", Context.MODE_PRIVATE)
+                            val selected = CrvVideoProfile.fromStored(settings.getString("profile", null))
+                            AlertDialog.Builder(this@CrvCarPlayActivity).setTitle("画面性能")
+                                .setMessage("下次启动应用生效。低负载模式降低清晰度；默认保持标准模式。")
+                                .setPositiveButton("标准模式") { _, _ -> settings.edit().putString("profile", CrvVideoProfile.STANDARD.name).apply() }
+                                .setNeutralButton("低负载模式") { _, _ -> settings.edit().putString("profile", CrvVideoProfile.LOW_LOAD.name).apply() }
+                                .setNegativeButton("取消", null).show()
+                            diagnostics.log("Video profile settings current=${selected.name}; changes apply on next Activity")
+                        }.setNegativeButton("取消", null).show()
+                }
+            }, LinearLayout.LayoutParams(-2, -2))
         }
 
         stageCard = LinearLayout(this).apply {
@@ -332,6 +369,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         })
 
         diagnostics = CrvDiagnostics(this)
+        callRouteMonitor = CrvCallRouteMonitor(this, diagnostics::log).also { it.start() }
         mediaCoreMonitor = CrvHondaMediaCoreMonitor(applicationContext, diagnostics::log).also {
             it.start()
         }
@@ -690,6 +728,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             displayHeight = surfaceHeight,
             report = { message -> reportStatus(message, epoch) },
             recordProtocolTrace = { message -> diagnostics.log("attempt=$epoch $message") },
+            detailedProtocol = { diagnostics.detailed },
             reportFailure = { label, error ->
                 diagnostics.logFailure("attempt=$epoch $label", error)
                 runOnUiThread {
@@ -724,6 +763,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
             },
         )
         controller = next
+        videoSurfaceOwner = next
         next.setVideoVisible(activityResumed)
         connectionStatus(
             if (connectionMode == CrvConnectionMode.WIFI_HANDOFF) {
@@ -999,6 +1039,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     }
 
     private fun beginConnectionStatus(message: String) {
+        if (presentation.retainsVideoPage()) return
         displayedConnectionStage = CrvConnectionStage.IDLE
         lastProgressStep = 0
         showHome()
@@ -1017,12 +1058,14 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     private fun connectionError(message: String) {
         diagnostics.log(CrvConnectionStage.ERROR, message)
+        if (presentation.retainsVideoPage()) return
         showHome()
         displayedConnectionStage = CrvConnectionStage.ERROR
         renderHome(displayedConnectionStage, message)
     }
 
     private fun hideConnectionStatus() {
+        if (presentation.retainsVideoPage()) return
         showHome()
         displayedConnectionStage = CrvConnectionStage.IDLE
         lastProgressStep = 0
@@ -1059,6 +1102,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
 
     private fun showHome() {
         if (destroyed || !::home.isInitialized) return
+        if (presentation.retainsVideoPage()) return
         if (!homeVisible) diagnostics.log("UI connection page visible stage=$displayedConnectionStage")
         homeVisible = true
         runOnUiThread { if (!destroyed) home.visibility = View.VISIBLE }
@@ -1381,19 +1425,22 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
 
     override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
-        videoSurface?.release()
+        val oldSurface = videoSurface
+        if (oldSurface != null) {
+            val owner = videoSurfaceOwner
+            if (owner != null) owner.retireSurface { oldSurface.release() } else oldSurface.release()
+        }
         // Keep the decoder/native buffer at the CarPlay protocol size. TextureView can scale the
         // composed image to the physical Honda panel without making MediaCodec renegotiate buffers.
         runCatching {
             texture.setDefaultBufferSize(
-                Crv2021Config.CARPLAY_WIDTH,
-                Crv2021Config.CARPLAY_HEIGHT,
+                surfaceWidth,
+                surfaceHeight,
             )
         }
         videoSurface = Surface(texture)
-        surfaceWidth = Crv2021Config.CARPLAY_WIDTH
-        surfaceHeight = Crv2021Config.CARPLAY_HEIGHT
         controller?.updateSurface(videoSurface)
+        videoSurfaceOwner = controller
         maybeStartCarPlay()
         if (reconnectOnSurfaceReady && controller == null && pendingUsbSession == null) scheduleReconnect()
     }
@@ -1407,12 +1454,10 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         // layout resize cannot trigger a different encoded stream or decoder buffer geometry.
         runCatching {
             texture.setDefaultBufferSize(
-                Crv2021Config.CARPLAY_WIDTH,
-                Crv2021Config.CARPLAY_HEIGHT,
+                surfaceWidth,
+                surfaceHeight,
             )
         }
-        surfaceWidth = Crv2021Config.CARPLAY_WIDTH
-        surfaceHeight = Crv2021Config.CARPLAY_HEIGHT
     }
 
     override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
@@ -1421,10 +1466,16 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         // API17 cannot retarget an existing MediaCodec, so detach/recreate only the decoder.
         // Keep USB/NCM/Lockdown/iAP2/AirPlay alive across ordinary TextureView recreation.
         val oldSurface = videoSurface
+        val owner = videoSurfaceOwner
         videoSurface = null
-        controller?.updateSurface(null)
-        oldSurface?.release()
-        return true
+        videoSurfaceOwner = null
+        val release = {
+            oldSurface?.release()
+            texture.release()
+        }
+        if (owner != null) owner.retireSurface(release) else release()
+        // We own SurfaceTexture retirement until the codec has actually released it.
+        return false
     }
 
     override fun onDestroy() {
@@ -1445,10 +1496,16 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         retireConnection(CrvRecoveryTrigger.ACTIVITY_DESTROYED)
 
         val retiredSurface = videoSurface
+        val retiredOwner = videoSurfaceOwner
         videoSurface = null
-        cleanupIo.execute { retiredSurface?.release() }
+        if (retiredSurface != null) {
+            if (retiredOwner != null) retiredOwner.retireSurface { retiredSurface.release() }
+            else retiredSurface.release()
+        }
 
         mediaCoreMonitor?.close()
+        callRouteMonitor?.close()
+        callRouteMonitor = null
         mediaCoreMonitor = null
 
         var diagnosticsCloseQueued = false

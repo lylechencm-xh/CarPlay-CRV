@@ -140,6 +140,7 @@ internal class CrvApi19MicrophoneUplink(
     }
 
     private fun capture(record: AudioRecord, udp: DatagramSocket) {
+        runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO) }
         val frame = ByteArray(config.frameBytes)
         val readBuffer = ByteArray(maxOf(config.frameBytes, MIN_READ_BYTES))
         val counters = MicrophoneCounters()

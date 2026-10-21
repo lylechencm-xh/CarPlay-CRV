@@ -2,6 +2,20 @@
 
 Add future CR-V changes after 0.2.27 here.
 
+- Keep an already-rendered active CarPlay page through local video/Surface recovery; retain
+  explicit session/epoch fencing and real disconnect handling. Retire TextureView resources
+  only after the old codec worker releases them, without blocking the Activity callback.
+- Separate screen TCP reads from authenticated processing through an ordered bounded queue;
+  preserve nonce/config ordering, request a fresh reference chain after obsolete interframes,
+  and carry arrival timestamps through codec output diagnostics.
+- Move CR-V file diagnostics to a bounded background writer, gate detailed protocol formatting,
+  report stage latency distributions, and offer an optional next-launch 960x540 video profile.
+- Handle audio-focus attenuation/recovery, own and restore CarPlay communication mode carefully,
+  reduce prompt buffer targets with a legacy fallback, and record passive OEM call/SCO events.
+- In AUTO mode, borrow only an already-active vehicle hotspot so ordinary wired startup cannot
+  mutate vehicle Wi-Fi or wait through hotspot creation/restoration. See docs/CRV-20261021-OPTIMIZATION.md
+  for automated validation and outstanding OEM/vehicle acceptance limits. No APK was generated.
+
 - Clone hotspot backups through the API17 Parcelable surface instead of the API30 public
   WifiConfiguration copy constructor; verify the copied settings before changing vehicle Wi-Fi.
 

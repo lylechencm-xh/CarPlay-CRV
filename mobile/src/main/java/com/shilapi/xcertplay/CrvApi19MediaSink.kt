@@ -53,12 +53,15 @@ class CrvApi19MediaSink(
     override fun isVideoVisible(type: Int): Boolean = videoVisible && outputSurface != null && !closed.get()
 
     fun setVideoVisible(visible: Boolean) {
+        if (visible && !closed.get() && audioRenderers.isNotEmpty() &&
+            audioManager.mode != AudioManager.MODE_IN_CALL && !audioManager.isBluetoothScoOn) ensureAudioFocus()
         synchronized(videoLock) {
             if (closed.get() || videoVisible == visible) return
             videoVisible = visible
         }
         visibilityHandlers.values.toList().forEach { runCatching(it) }
         report("Video visibility=$visible; audio and transport retained")
+        report("Audio visibility=$visible ${audioRouteSnapshot()}")
         updateSurface(outputSurface)
     }
 
@@ -67,16 +70,26 @@ class CrvApi19MediaSink(
     private val audioManager =
         context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val audioFocusHeld = AtomicBoolean(false)
+    @Volatile private var focusGain = 1f
+    private val communicationMode = CrvCommunicationModeLease(
+        { audioManager.mode }, { audioManager.mode = it }, { audioManager.isBluetoothScoOn })
     private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { change ->
         when (change) {
-            AudioManager.AUDIOFOCUS_GAIN -> report("Audio focus gained ${audioRouteSnapshot()}")
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                audioFocusHeld.set(true)
+                focusGain = 1f
+                report("Audio focus gained ${audioRouteSnapshot()}")
+            }
             AudioManager.AUDIOFOCUS_LOSS -> {
                 audioFocusHeld.set(false)
+                focusGain = 0f
                 report("Audio focus lost ${audioRouteSnapshot()}")
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK ->
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                focusGain = if (change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) 0.2f else 0f
                 report("Audio focus transient change=$change ${audioRouteSnapshot()}")
+            }
         }
     }
 
@@ -129,10 +142,27 @@ class CrvApi19MediaSink(
         decoder(type)?.submit(naluBytes)
     }
 
-    fun updateSurface(surface: Surface?) {
+    override fun onVideoFrame(type: Int, naluBytes: ByteArray, arrivalNs: Long) {
+        if (!closed.get()) decoder(type)?.submit(naluBytes, arrivalNs)
+    }
+
+    override fun onVideoDiscontinuity(type: Int) {
+        synchronized(videoLock) { videoDecoders[type]?.requestRecovery("video receive age limit") }
+    }
+
+    fun updateSurface(surface: Surface?, retired: () -> Unit = {}) {
         // No joins or codec operations on the Activity/Surface callback thread.
         synchronized(videoLock) {
-            if (closed.get()) return
+            if (closed.get()) {
+                // A late TextureView destruction can follow controller teardown. Wait off the UI
+                // thread for already-submitted cleanup before releasing its producer/consumer.
+                Thread({
+                    try { while (!videoCleanup.awaitTermination(1L, java.util.concurrent.TimeUnit.SECONDS)) { } }
+                    catch (_: InterruptedException) { Thread.currentThread().interrupt(); return@Thread }
+                    retired()
+                }, "crv-surface-retire").apply { isDaemon = true; start() }
+                return
+            }
             outputSurface = surface
             onVideoReset()
             videoReady = false
@@ -146,6 +176,7 @@ class CrvApi19MediaSink(
                     // A timed close may leave a vendor codec call in progress. Do not create a
                     // replacement on the same surface until the old worker actually releases it.
                     if (!oldDecoders.all { it.awaitStopped() }) return@execute
+                    runCatching(retired)
                     val restore = synchronized(videoLock) {
                         if (closed.get() || generation != surfaceGeneration ||
                             !videoVisible || outputSurface == null) false
@@ -179,6 +210,7 @@ class CrvApi19MediaSink(
     override fun onAudioStarted(id: AudioStreamId, format: AudioFormat, firstSample: Int) {
         if (closed.get()) return
         ensureAudioFocus()
+        if (id.audioType == "telephony") runCatching { communicationMode.acquire("output:$id") }
         audioRenderers.remove(id)?.close()
         val isMusic = CrvAudioDucking.isMusic(id.type, id.audioType)
         val isPrompt = CrvAudioDucking.isPrompt(id.type, id.audioType)
@@ -189,7 +221,7 @@ class CrvApi19MediaSink(
             navigationGain = if (isNavigation) {
                 { navigationSettings.getInt("navigation_gain_percent", 150).coerceIn(100, 300) / 100f }
             } else null,
-            gain = { if (isMusic) audioDucking.mediaGain() else 1f },
+            gain = { focusGain * if (isMusic) audioDucking.mediaGain() else 1f },
             voicePcm = { bytes, offset, count, playoutMs ->
                 if (isPrompt) audioDucking.voicePcm(bytes, offset, count, playoutMs)
             },
@@ -205,6 +237,7 @@ class CrvApi19MediaSink(
 
     override fun onAudioStopped(id: AudioStreamId) {
         audioRenderers.remove(id)?.close()
+        if (id.audioType == "telephony") runCatching { communicationMode.release("output:$id") }
         if (audioRenderers.isEmpty()) abandonAudioFocus()
     }
 
@@ -217,13 +250,20 @@ class CrvApi19MediaSink(
     override fun onMicrophoneStarted(id: AudioStreamId, config: MicrophoneConfig) {
         if (closed.get()) return
         microphones.remove(id)?.close()
+        if (config.audioType == "telephony") runCatching { communicationMode.acquire("input:$id") }
+        report("Audio microphone starting type=${config.audioType} ${audioRouteSnapshot()}")
         CrvApi19MicrophoneUplink(config, report).also { uplink ->
-            if (uplink.start()) microphones[id] = uplink else uplink.close()
+            if (uplink.start()) microphones[id] = uplink else {
+                uplink.close()
+                runCatching { communicationMode.release("input:$id") }
+            }
         }
     }
 
     override fun onMicrophoneStopped(id: AudioStreamId) {
         microphones.remove(id)?.close()
+        runCatching { communicationMode.release("input:$id") }
+        report("Audio microphone stopped type=${id.audioType} ${audioRouteSnapshot()}")
     }
 
     override fun close() {
@@ -234,13 +274,14 @@ class CrvApi19MediaSink(
             videoDecoders.values.toList().also { videoDecoders.clear() }
         }
         decoders.forEach { it.stop() }
-        videoCleanup.execute { decoders.forEach { it.close() } }
+        videoCleanup.execute { decoders.forEach { it.close() }; decoders.forEach { it.awaitStopped() } }
         videoCleanup.shutdown()
         audioRenderers.values.toList().forEach { it.close() }
         audioRenderers.clear()
         abandonAudioFocus()
         microphones.values.toList().forEach { it.close() }
         microphones.clear()
+        runCatching { communicationMode.close() }
         recoveryHandlers.clear()
         visibilityHandlers.clear()
         diagnosticHandlers.clear()
@@ -257,7 +298,7 @@ class CrvApi19MediaSink(
         if (result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
             audioFocusHeld.set(false)
             report("Audio focus not granted")
-        }
+        } else focusGain = 1f
     }
 
     @Suppress("DEPRECATION")
@@ -334,16 +375,15 @@ class CrvApi19MediaSink(
         private var decoderGeneration = 0L
         private var duplicateConfigs = 0L
 
-        fun requestRecovery() {
-            queue.recover(null, 0L, "video first output watchdog")
+        fun requestRecovery(reason: String = "video first output watchdog") {
+            queue.recover(null, 0L, reason)
         }
 
         fun configure(codec: VideoCodec, data: ByteArray) {
             queue.offerConfig(codec, data.copyOf())
         }
 
-        fun submit(data: ByteArray) {
-            val receivedNs = System.nanoTime()
+        fun submit(data: ByteArray, receivedNs: Long = System.nanoTime()) {
             when (queue.offerFrame(data, receivedNs)) {
                 CrvVideoJobQueue.FrameOffer.ADDED -> Unit
                 CrvVideoJobQueue.FrameOffer.FRAME_LIMIT ->
@@ -577,6 +617,9 @@ class CrvApi19MediaSink(
 
         private var fedFrames = 0L
         private var renderedFrames = 0L
+        private var previousFedFrames = 0L
+        private var previousRenderedFrames = 0L
+        private var recoveryCount = 0L
         private var maxQueueAgeNs = 0L
         private var maxFeedNs = 0L
         private var maxInputWaitNs = 0L
@@ -585,6 +628,7 @@ class CrvApi19MediaSink(
         private var maxOutputAgeUs = 0L
         private var maxRenderedAgeUs = 0L
         private var maxReleaseNs = 0L
+        private val outputAges = com.shilapi.xcertplay.airplay.LatencyHistogram()
         private val decodedVideoOutput = CrvDecodedVideoOutput { index, render ->
             val start = System.nanoTime()
             decoder?.releaseOutputBuffer(index, render)
@@ -627,6 +671,7 @@ class CrvApi19MediaSink(
                             val ageUs = System.nanoTime() / 1000L - outputInfo.presentationTimeUs
                             if (outputInfo.presentationTimeUs != 0L && ageUs >= 0L) {
                                 maxOutputAgeUs = maxOf(maxOutputAgeUs, ageUs)
+                                outputAges.record(ageUs * 1000L)
                             }
                             decodedVideoOutput.offer(index)
                         }
@@ -643,13 +688,18 @@ class CrvApi19MediaSink(
                     outputRecovery.observe(now, newestOutputUs)) {
                     discardCurrentFrameChain()
                     backlogRecovery.reset()
-                    recover("video codec ${outputRecovery.reason}; requesting fresh frame chain", preferFlush = true)
+                    recover("video codec ${outputRecovery.reason}; ${outputRecovery.triggerSnapshot}; requesting fresh frame chain", preferFlush = true)
                 }
                 if (now - videoOutputStatsAtNs >= 5_000_000_000L) {
+                    val windowMs = (now - videoOutputStatsAtNs) / 1_000_000L
                     diagnostic("decoded output generation=$decoderGeneration fedTotal=$fedFrames renderedTotal=$renderedFrames " +
+                        "windowMs=$windowMs fedFrames=${fedFrames - previousFedFrames} " +
+                        "displayedFrames=${renderedFrames - previousRenderedFrames} recoveriesTotal=$recoveryCount " +
                         "staleSkippedTotal=${decodedVideoOutput.discardedTotal} " +
                         "queueMaxMs=${maxQueueAgeNs / 1_000_000L} feedMaxUs=${maxFeedNs / 1000L} " +
                         "outputAgeMaxMs=${maxOutputAgeUs / 1000L} " +
+                        "arrivalAgeP50Ms=${outputAges.percentileMs(50)} arrivalAgeP90Ms=${outputAges.percentileMs(90)} " +
+                        "arrivalAgeP99Ms=${outputAges.percentileMs(99)} " +
                         "renderedAgeMaxMs=${maxRenderedAgeUs / 1000L} releaseMaxUs=${maxReleaseNs / 1000L} " +
                         "inputWaitMaxUs=${maxInputWaitNs / 1000L} inputCopyMaxUs=${maxInputCopyNs / 1000L} " +
                         "inputSubmitMaxUs=${maxInputSubmitNs / 1000L} duplicateConfigsTotal=$duplicateConfigs")
@@ -661,6 +711,9 @@ class CrvApi19MediaSink(
                     maxOutputAgeUs = 0L
                     maxRenderedAgeUs = 0L
                     maxReleaseNs = 0L
+                    outputAges.reset()
+                    previousFedFrames = fedFrames
+                    previousRenderedFrames = renderedFrames
                     videoOutputStatsAtNs = now
                 }
             } catch (error: Exception) {
@@ -676,6 +729,7 @@ class CrvApi19MediaSink(
         }
 
         private fun recover(reason: String, preferFlush: Boolean = false) {
+            recoveryCount++
             diagnostic(reason)
             val active = decoder
             if (preferFlush && active != null && firstRendered) {
@@ -869,15 +923,7 @@ class CrvApi19MediaSink(
             val bytesPerSecond = format.sampleRate * frameBytes
             val isMedia = isMusic
             val primeMillis = if (isMedia) MEDIA_AUDIO_PRIME_MILLIS else LOW_LATENCY_AUDIO_PRIME_MILLIS
-            val preferredBufferBytes = if (isMedia) {
-                maxOf(
-                    minimum,
-                    MIN_AUDIO_TRACK_BUFFER_BYTES,
-                    bytesPerSecond * (MEDIA_AUDIO_PRIME_MILLIS + MEDIA_AUDIO_HEADROOM_MILLIS) / 1000,
-                )
-            } else {
-                maxOf(minimum * 4, MIN_AUDIO_TRACK_BUFFER_BYTES)
-            }
+            val preferredBufferBytes = CrvAudioBufferPolicy.preferred(minimum, bytesPerSecond, isMedia)
             val fallbackBufferBytes = maxOf(minimum * 4, MIN_AUDIO_TRACK_BUFFER_BYTES)
 
             fun buildTrack(bufferBytes: Int): AudioTrack? {

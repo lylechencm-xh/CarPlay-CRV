@@ -13,7 +13,6 @@ import java.util.Locale
  * Sensitive diagnostics are redacted before any destination is written.
  */
 class CrvDiagnostics(context: Context) : Closeable {
-    private val lock = Any()
     private val directory = context.getExternalFilesDir(null) ?: context.filesDir
     private val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
     private val storage = CrvCategorizedLogStorage(directory, File(directory, uniqueSessionFileName(context)))
@@ -21,6 +20,29 @@ class CrvDiagnostics(context: Context) : Closeable {
     private var lastLineAtMillis: Long = 0L
     private val startedAtMillis = android.os.SystemClock.elapsedRealtime()
     private var sequence = 0L
+    private val queue = CrvDiagnosticQueue()
+    @Volatile var detailed = context.getSharedPreferences("crv_diagnostics", Context.MODE_PRIVATE)
+        .getBoolean("detailed", false)
+        private set
+    private val worker = Thread({
+        try {
+            while (true) {
+                val entry = queue.take() ?: break
+                write(entry)
+            }
+            val dropped = queue.dropped()
+            if (dropped > 0L) write(CrvDiagnosticQueue.Entry("Diagnostics queue droppedTotal=$dropped",
+                System.currentTimeMillis(), android.os.SystemClock.elapsedRealtime(), true))
+        } finally { storage.close() }
+    }, "crv-diagnostic-writer").apply { isDaemon = true; start() }
+
+    fun setDetailed(context: Context, enabled: Boolean) {
+        detailed = enabled
+        context.getSharedPreferences("crv_diagnostics", Context.MODE_PRIVATE).edit().putBoolean("detailed", enabled).apply()
+        log("Diagnostics detailed=$enabled")
+    }
+
+    fun detail(message: () -> String) { if (detailed) log(message()) }
 
     fun path(): String = storage.file.absolutePath
 
@@ -31,11 +53,24 @@ class CrvDiagnostics(context: Context) : Closeable {
     }
 
     fun log(message: String) {
+        val failure = CrvLogCategory.isFailure(message)
+        val important = failure || CrvLogCategory.includeInOverview(CrvLogCategory.classify(message), message, failure)
+        // Keep periodic summaries; omit raw protocol traffic in normal driving mode.
+        if (!detailed && !failure && (("CRVTRACE\t" in message &&
+                "\tSIGNAL\t" !in message && "\tFAULT\t" !in message) ||
+                "iap2 rx=" in message || "iap2 tx=" in message ||
+                "airplay rx " in message || "airplay tx " in message)) return
+        queue.offer(CrvDiagnosticQueue.Entry(message.take(MAX_LINE), System.currentTimeMillis(),
+            android.os.SystemClock.elapsedRealtime(), important))
+    }
+
+    private fun write(entry: CrvDiagnosticQueue.Entry) {
+        val message = entry.message
         val safe = sanitize(message)
         val category = CrvLogCategory.classify(message)
         val failure = CrvLogCategory.isFailure(message)
-        synchronized(lock) {
-            val now = android.os.SystemClock.elapsedRealtime()
+        run {
+            val now = entry.elapsedMs
             if (safe == lastLine && now - lastLineAtMillis < DEDUPE_WINDOW_MILLIS) return
             lastLine = safe
             lastLineAtMillis = now
@@ -43,7 +78,7 @@ class CrvDiagnostics(context: Context) : Closeable {
             try {
                 val elapsed = now - startedAtMillis
                 storage.append(
-                    formatter.format(Date()) +
+                    formatter.format(Date(entry.wallMs)) +
                         "  #" + sequence +
                         " +" + elapsed + "ms  " +
                         safe,
@@ -58,7 +93,8 @@ class CrvDiagnostics(context: Context) : Closeable {
     }
 
     override fun close() {
-        storage.close()
+        // Drain before closing storage; never wait for filesystem IO on the Activity thread.
+        queue.close()
     }
 
     fun logFailure(label: String, error: Throwable) {

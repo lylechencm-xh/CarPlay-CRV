@@ -52,6 +52,8 @@ class MediaSinkOwnership(private val sink: MediaSink) {
         override fun onVideoCodec(type: Int, codec: VideoCodec) = screen(type, owner) { it.onVideoCodec(type, codec) }
         override fun onVideoConfig(type: Int, codecData: ByteArray) = screen(type, owner) { it.onVideoConfig(type, codecData) }
         override fun onVideoFrame(type: Int, naluBytes: ByteArray) = screen(type, owner) { it.onVideoFrame(type, naluBytes) }
+        override fun onVideoFrame(type: Int, naluBytes: ByteArray, arrivalNs: Long) = screen(type, owner) { it.onVideoFrame(type, naluBytes, arrivalNs) }
+        override fun onVideoDiscontinuity(type: Int) = screen(type, owner) { it.onVideoDiscontinuity(type) }
         override fun setVideoRecoveryHandler(type: Int, handler: () -> Unit) = screen(type, owner) { it.setVideoRecoveryHandler(type, handler) }
         override fun setVideoVisibilityHandler(type: Int, handler: () -> Unit) = screen(type, owner) { it.setVideoVisibilityHandler(type, handler) }
         override fun setVideoDiagnosticHandler(type: Int, handler: (String) -> Unit) = screen(type, owner) { it.setVideoDiagnosticHandler(type, handler) }

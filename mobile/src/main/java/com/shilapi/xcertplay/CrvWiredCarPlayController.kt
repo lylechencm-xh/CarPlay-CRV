@@ -67,6 +67,7 @@ class CrvWiredCarPlayController(
     private val mode: CrvConnectionMode = CrvConnectionMode.WIRED,
     private val onStopped: () -> Unit = {},
     private val onConnectionEvent: (CrvConnectionEvent, String) -> Unit = { _, _ -> },
+    detailedProtocol: () -> Boolean = { true },
 ) : Closeable {
     private val appContext = context.applicationContext
     private val executor: ExecutorService =
@@ -89,7 +90,7 @@ class CrvWiredCarPlayController(
         )
     }
     private val resources = CrvCarPlayResources()
-    private val protocolTrace = CrvProtocolTraceRecorder(recordProtocolTrace)
+    private val protocolTrace = CrvProtocolTraceRecorder(recordProtocolTrace, detailed = detailedProtocol)
     private val recovery = CrvControllerRecovery(
         closeControl = { resources.csm?.close() },
         releaseTransport = {
@@ -371,6 +372,8 @@ class CrvWiredCarPlayController(
         sink.updateSurface(surface)
     }
 
+    fun retireSurface(retired: () -> Unit) = sink.updateSurface(null, retired)
+
     fun setVideoVisible(visible: Boolean) = sink.setVideoVisible(visible)
 
     /** Keep the AirPlay listener alive once the phone has received Wi-Fi credentials. */
@@ -472,7 +475,7 @@ class CrvWiredCarPlayController(
             runCatching {
                 CrvApi19WirelessHotspot(appContext, report).also {
                     resources.wifiHotspot = it
-                }.start(existingStartupTimeoutMillis = 1_000L)
+                }.start(existingStartupTimeoutMillis = 1_000L, allowStart = false)
             }.onFailure {
                 report("Auto Wi-Fi unavailable; wired CarPlay continues: ${it.javaClass.simpleName} message=${it.message.orEmpty().take(200)}")
                 runCatching { resources.wifiHotspot?.close() }
