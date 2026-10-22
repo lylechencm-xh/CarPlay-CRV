@@ -2,12 +2,21 @@
 
 Add future CR-V changes after 0.2.27 here.
 
+- Preserve authenticated video reference frames across receive-age spikes; coalesce soft
+  recovery while waiting for a keyframe and retain immediate handling of newly broken chains.
+- Carry the UDP receive timestamp through audio authentication and sink ownership delivery.
+  API17 music uses a 160 ms receive allowance within one 200 ms combined queue budget;
+  interactive audio uses 80/100 ms. AudioTrack inventory is separate from those queue limits.
+- Sample bounded media CPU/frequency/scheduler/thermal/heap diagnostics off the media workers;
+  keep unavailable OEM readings explicit. Use configHash for non-secret configuration logs
+  and unknown for startup output spans without an output timestamp. Vehicle validation remains pending.
+
 - Keep an already-rendered active CarPlay page through local video/Surface recovery; retain
   explicit session/epoch fencing and real disconnect handling. Retire TextureView resources
   only after the old codec worker releases them, without blocking the Activity callback.
 - Separate screen TCP reads from authenticated processing through an ordered bounded queue;
-  preserve nonce/config ordering, request a fresh reference chain after obsolete interframes,
-  and carry arrival timestamps through codec output diagnostics.
+  preserve nonce/config ordering and compressed references, and carry arrival timestamps
+  through codec output diagnostics.
 - Move CR-V file diagnostics to a bounded background writer, gate detailed protocol formatting,
   report stage latency distributions, and offer an optional next-launch 960x540 video profile.
 - Handle audio-focus attenuation/recovery, own and restore CarPlay communication mode carefully,

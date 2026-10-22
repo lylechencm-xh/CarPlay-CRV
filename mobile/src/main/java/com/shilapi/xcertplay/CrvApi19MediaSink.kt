@@ -232,7 +232,14 @@ class CrvApi19MediaSink(
     }
 
     override fun onAudioRtp(id: AudioStreamId, format: AudioFormat, rtp: ByteArray, sample: Int) {
-        if (!closed.get()) audioRenderers[id]?.submit(rtp, sample)
+        onAudioRtp(id, format, rtp, sample, System.nanoTime())
+    }
+
+    override fun audioReceiveMaxAgeNs(id: AudioStreamId, format: AudioFormat): Long =
+        CrvAudioLatencyBudget.receiveNs(CrvAudioDucking.isMusic(id.type, id.audioType))
+
+    override fun onAudioRtp(id: AudioStreamId, format: AudioFormat, rtp: ByteArray, sample: Int, receivedNs: Long) {
+        if (!closed.get()) audioRenderers[id]?.submit(rtp, sample, receivedNs)
     }
 
     override fun onAudioStopped(id: AudioStreamId) {
@@ -372,6 +379,7 @@ class CrvApi19MediaSink(
         private var lastKeyFrameRequestNs = 0L
         private val backlogRecovery = CrvVideoBacklogRecovery()
         private val outputRecovery = CrvVideoOutputRecovery()
+        private val recoveryGate = CrvVideoRecoveryGate()
         private var decoderGeneration = 0L
         private var duplicateConfigs = 0L
 
@@ -469,7 +477,7 @@ class CrvApi19MediaSink(
                 return
             }
             backlogRecovery.reset()
-            diagnostic("config apply codec=$videoCodec bytes=${data.size} signature=${data.contentHashCode()} " +
+            diagnostic("config apply codec=$videoCodec bytes=${data.size} configHash=${data.contentHashCode()} " +
                 "reason=${if (decoder == null) "create-or-recover" else "changed"}")
             lastCodec = videoCodec
             lastConfig = data.copyOf()
@@ -702,7 +710,8 @@ class CrvApi19MediaSink(
                         "arrivalAgeP99Ms=${outputAges.percentileMs(99)} " +
                         "renderedAgeMaxMs=${maxRenderedAgeUs / 1000L} releaseMaxUs=${maxReleaseNs / 1000L} " +
                         "inputWaitMaxUs=${maxInputWaitNs / 1000L} inputCopyMaxUs=${maxInputCopyNs / 1000L} " +
-                        "inputSubmitMaxUs=${maxInputSubmitNs / 1000L} duplicateConfigsTotal=$duplicateConfigs")
+                        "inputSubmitMaxUs=${maxInputSubmitNs / 1000L} duplicateConfigsTotal=$duplicateConfigs " +
+                        "recoverySuppressedTotal=${recoveryGate.suppressedTotal}")
                     maxQueueAgeNs = 0L
                     maxFeedNs = 0L
                     maxInputWaitNs = 0L
@@ -729,6 +738,13 @@ class CrvApi19MediaSink(
         }
 
         private fun recover(reason: String, preferFlush: Boolean = false) {
+            // Queue limits and watchdogs are soft requests. Do not destroy a fresh decoder
+            // repeatedly while its requested keyframe is still in the receive/decrypt FIFO.
+            // Hard codec errors bypass this gate so a broken codec can be replaced at once.
+            if (preferFlush && !recoveryGate.allow(System.nanoTime(), waitingForKeyFrame)) {
+                requestKeyFrameIfDue()
+                return
+            }
             recoveryCount++
             diagnostic(reason)
             val active = decoder
@@ -794,7 +810,7 @@ class CrvApi19MediaSink(
     ) : Closeable {
         private val queue = CrvAudioPacketQueue(
             AUDIO_QUEUE_CAPACITY,
-            maxAgeNs = if (isMusic) 200_000_000L else 100_000_000L,
+            maxAgeNs = CrvAudioLatencyBudget.totalQueueNs(isMusic),
             maxPayloadBytes = if (format.codec == AudioCodecKind.LPCM) {
                 format.sampleRate.toLong() * format.channels.coerceAtLeast(1) * 2 *
                     (if (isMusic) 200 else 100) / 1000
@@ -849,10 +865,10 @@ class CrvApi19MediaSink(
             thread.start()
         }
 
-        fun submit(rtp: ByteArray, sample: Int) {
+        fun submit(rtp: ByteArray, sample: Int, receivedNs: Long) {
             if (!running.get()) return
             lastPacketNs = System.nanoTime()
-            queue.offer(rtp, sample)
+            queue.offer(rtp, sample, receivedAtNs = receivedNs)
         }
 
         override fun close() {
@@ -1296,7 +1312,7 @@ class CrvApi19MediaSink(
             val trackBytes = track?.let { bufferProgress.queuedBytes(it.playbackHeadPosition) } ?: 0L
             runCatching { report("Audio playback type=${format.audioType} queueDepth=${stats.depth} " +
                 "queueHighWater=${stats.highWater} droppedTotal=${stats.dropped} expiredTotal=${stats.expired} " +
-                "queuePayloadBytes=${stats.payloadBytes} queuePcmMs=$pcmQueueMs " +
+                "queuePayloadBytes=${stats.payloadBytes} queuePcmMs=$pcmQueueMs queueClock=udp-receive " +
                 "oldestPacketMs=${stats.oldestAgeNs / 1_000_000L} trackQueuedBytes=$trackBytes " +
                 "trackQueuedMs=${trackBytes * 1000L / (format.sampleRate.toLong() * frameBytes)} " +
                 "playbackRateHz=$appliedPlaybackRate writeCallsTotal=$writeCalls batchedPacketsTotal=$batchedPackets " +

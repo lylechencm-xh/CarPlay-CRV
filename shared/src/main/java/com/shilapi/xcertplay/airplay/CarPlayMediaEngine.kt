@@ -29,6 +29,9 @@ interface MediaSink {
     fun onScreenStreamActive(type: Int, active: Boolean) {}
     fun onAudioStarted(id: AudioStreamId, format: AudioFormat, firstSample: Int) {}
     fun onAudioRtp(id: AudioStreamId, format: AudioFormat, rtp: ByteArray, sample: Int) {}
+    fun onAudioRtp(id: AudioStreamId, format: AudioFormat, rtp: ByteArray, sample: Int, receivedNs: Long) =
+        onAudioRtp(id, format, rtp, sample)
+    fun audioReceiveMaxAgeNs(id: AudioStreamId, format: AudioFormat): Long = 80_000_000L
     fun onAudioStopped(id: AudioStreamId) {}
     fun onAudioDuckingChanged(duck: Boolean) {}
     fun onMicrophoneStarted(id: AudioStreamId, config: MicrophoneConfig) {}
@@ -200,7 +203,8 @@ class CarPlayMediaEngine(
 
         val capture = audioCaptureDirectory?.let { AudioPacketCapture(it, type) }
         if (capture != null) audioCaptures[streamKey] = capture
-        val audio = AudioStream(key, type, session::logDebug)
+        val audio = AudioStream(key, type, session::logDebug,
+            receiveMaxAgeNs = sink.audioReceiveMaxAgeNs(streamId, format))
         streams[streamKey] = audio
         audioMeta[streamKey] = meta
         ownership.claimAudio(streamId, audio)
@@ -220,6 +224,8 @@ class CarPlayMediaEngine(
 
                 override fun onRtp(rtp: ByteArray, sample: Int) =
                     ownership.audioRtp(streamId, audio, format, rtp, sample)
+                override fun onRtp(rtp: ByteArray, sample: Int, receivedNs: Long) =
+                    ownership.audioRtp(streamId, audio, format, rtp, sample, receivedNs)
 
                 override fun onPacket(
                     wire: ByteArray,

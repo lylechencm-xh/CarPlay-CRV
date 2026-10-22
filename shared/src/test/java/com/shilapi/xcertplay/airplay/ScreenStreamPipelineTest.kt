@@ -58,8 +58,56 @@ class ScreenStreamPipelineTest {
         }
     }
 
-    private fun writeFrame(socket: Socket, nonce: Long, value: Int) {
-        val payload = byteArrayOf(0, 0, 0, 2, 0x65, value.toByte())
+    @Test fun authenticationBacklogPreservesInterframesInsteadOfRepeatedDiscontinuities() {
+        val firstCallback = CountDownLatch(1)
+        val resume = CountDownLatch(1)
+        val ended = CountDownLatch(1)
+        val frames = Collections.synchronizedList(mutableListOf<Int>())
+        var discontinuities = 0
+        var failure: Throwable? = null
+        val stream = ScreenStream(key)
+        val port = stream.listen(address, object : ScreenStream.Listener {
+            override fun wantsLengthPrefixedFrames() = true
+            override fun onFrame(naluBytes: ByteArray, arrivalNs: Long) {
+                frames.add(naluBytes.last().toInt())
+                if (frames.size == 1) {
+                    firstCallback.countDown()
+                    check(resume.await(5, TimeUnit.SECONDS))
+                }
+            }
+            override fun onDiscontinuity() { discontinuities++ }
+            override fun onClosed(cause: Throwable?) { failure = cause; ended.countDown() }
+        })
+        try {
+            Socket(address, port).use { socket ->
+                writeFrame(socket, 0L, 1)
+                assertTrue(firstCallback.await(5, TimeUnit.SECONDS))
+                writeFrame(socket, 1L, 2, 0x41)
+                writeFrame(socket, 2L, 3)
+                writeFrame(socket, 3L, 4, 0x41)
+                val queue = ScreenStream::class.java.getDeclaredField("receiveQueue").apply {
+                    isAccessible = true
+                }.get(stream) as ScreenReceiveQueue
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                while (!queue.hasNewer(0L) && System.nanoTime() < deadline) Thread.sleep(5)
+                assertTrue(queue.hasNewer(0L))
+                // Simulate a processing pause after TCP receive, beyond the old 250ms limit.
+                Thread.sleep(350)
+                resume.countDown()
+                socket.shutdownOutput()
+                assertTrue(ended.await(5, TimeUnit.SECONDS))
+            }
+            assertNull(failure)
+            assertEquals(listOf(1, 2, 3, 4), frames)
+            assertEquals(0, discontinuities)
+        } finally {
+            resume.countDown()
+            stream.close()
+        }
+    }
+
+    private fun writeFrame(socket: Socket, nonce: Long, value: Int, nalType: Int = 0x65) {
+        val payload = byteArrayOf(0, 0, 0, 2, nalType.toByte(), value.toByte())
         val header = header(payload.size + 16, 0)
         val encrypted = AirPlayCrypto.chachaSeal(key, AirPlayCrypto.nonce64(nonce), payload, header)
         socket.getOutputStream().write(header)

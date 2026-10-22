@@ -40,12 +40,19 @@ internal class CrvAudioPacketQueue(
         require(capacity > 0)
     }
 
-    fun offer(rtp: ByteArray, sample: Int, nowNs: Long = System.nanoTime()) {
+    fun offer(rtp: ByteArray, sample: Int, nowNs: Long = System.nanoTime(), receivedAtNs: Long = nowNs) {
         val start = CrvLegacyRtp.payloadStart(rtp)
         val end = CrvLegacyRtp.payloadEnd(rtp, start)
         val payloadSize = if (start >= 0 && end > start) end - start else 0
         synchronized(lock) {
             discardExpiredLocked(nowNs)
+            // Keep the original UDP clock across authentication and handoff. A delayed
+            // callback must not restart this packet's entire renderer queue allowance.
+            if (nowNs - receivedAtNs > maxAgeNs) {
+                dropped++
+                expired++
+                return
+            }
             if (payloadSize > maxPayloadBytes) {
                 dropped++
                 return
@@ -57,7 +64,7 @@ internal class CrvAudioPacketQueue(
             packets[tail] = rtp
             samples[tail] = sample
             payloadSizes[tail] = payloadSize
-            receivedNs[tail] = nowNs
+            receivedNs[tail] = receivedAtNs
             payloadBytes += payloadSize
             size++
             highWater = maxOf(highWater, size)

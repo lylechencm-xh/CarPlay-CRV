@@ -38,6 +38,7 @@ class CrvVideoOutputRecoveryTest {
         assertFalse(recovery.observe(7_000_000_000L, 0L))
         assertTrue(recovery.observe(7_750_000_000L, 0L))
         assertEquals("startup output timeout", recovery.reason)
+        assertTrue(recovery.triggerSnapshot.contains("outputPtsUs=0 pendingSpanUs=unknown"))
     }
 
     @Test fun onePendingInterframeGetsALongerTimeoutButEventuallyRecovers() {

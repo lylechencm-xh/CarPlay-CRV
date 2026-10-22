@@ -19,6 +19,9 @@ class MediaSinkOwnership(private val sink: MediaSink) {
     fun audioRtp(id: AudioStreamId, owner: Any, format: AudioFormat, rtp: ByteArray, sample: Int) = synchronized(lock) {
         if (audio[id] === owner) sink.onAudioRtp(id, format, rtp, sample)
     }
+    fun audioRtp(id: AudioStreamId, owner: Any, format: AudioFormat, rtp: ByteArray, sample: Int, receivedNs: Long) = synchronized(lock) {
+        if (audio[id] === owner) sink.onAudioRtp(id, format, rtp, sample, receivedNs)
+    }
     fun releaseAudio(id: AudioStreamId, owner: Any): Boolean = synchronized(lock) {
         if (audio[id] !== owner) return false
         audio.remove(id)

@@ -70,7 +70,7 @@ internal class CrvVideoOutputRecovery {
         if (nowNs - start < 750_000_000L) return false
         lastRecoveryNs = nowNs
         triggerSnapshot = "inputPtsUs=$latestSubmittedUs outputPtsUs=$latestOutputUs " +
-            "pendingSpanUs=${(latestSubmittedUs - latestOutputUs).coerceAtLeast(0L)} " +
+            "pendingSpanUs=${if (latestOutputUs > 0L) (latestSubmittedUs - latestOutputUs).coerceAtLeast(0L).toString() else "unknown"} " +
             "lastOutputAgoMs=${lastOutput?.let { (nowNs - it) / 1_000_000L } ?: -1L}"
         reason = if (startupStalled) "startup output timeout"
             else if (outputStalled || tailStalled) "output stalled" else "output lag persisted"

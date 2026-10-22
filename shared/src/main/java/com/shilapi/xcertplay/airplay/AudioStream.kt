@@ -32,11 +32,13 @@ class AudioStream(
     private val key: ByteArray,
     private val streamType: Int = -1,
     private val onDiagnostic: (String) -> Unit = {},
+    private val receiveMaxAgeNs: Long = 80_000_000L,
 ) : Closeable {
     interface Listener {
         fun wantsPacketData(): Boolean = true
         fun onStarted(firstSample: Int) {}
         fun onRtp(rtp: ByteArray, sample: Int) {}
+        fun onRtp(rtp: ByteArray, sample: Int, receivedNs: Long) = onRtp(rtp, sample)
         fun onPacket(
             wire: ByteArray,
             rtp: ByteArray?,
@@ -54,7 +56,7 @@ class AudioStream(
     private var controlSocket: DatagramSocket? = null
     private var dataThread: Thread? = null
     private var decodeThread: Thread? = null
-    private val receiveQueue = AudioReceiveQueue()
+    private val receiveQueue = AudioReceiveQueue(maxAgeNs = receiveMaxAgeNs)
     private var controlThread: Thread? = null
     private var diagnosticsThread: Thread? = null
     private var started = false
@@ -125,13 +127,14 @@ class AudioStream(
                 stats.reading()
                 try { socket.receive(packet) }
                 catch (_: Exception) { if (closed.get()) return else continue }
+                val receivedNs = System.nanoTime()
                 val length = packet.length
                 stats.received(length,
                     if (length >= RTP_HEADER_LEN) ((buffer[2].toInt() and 0xff) shl 8) or
                         (buffer[3].toInt() and 0xff) else null,
                     if (length >= RTP_HEADER_LEN) readU32Be(buffer, 4) else null)
                 receivedPackets.incrementAndGet()
-                receiveQueue.offer(buffer.copyOf(length))
+                receiveQueue.offer(buffer.copyOf(length), receivedNs)
                 stats.processed()
             }
         } finally {
@@ -158,6 +161,7 @@ class AudioStream(
             val queue = receiveQueue.stats()
             diagnostic("Audio processing type=$streamType queueDepth=${queue.depth} " +
                 "highWater=${queue.highWater} overflowTotal=${queue.overflow} expiredTotal=${queue.expired} " +
+                "receiveMaxAgeMs=${receiveMaxAgeNs / 1_000_000L} " +
                 "queueAgeMaxUs=${maxQueueAgeNs / 1000} decryptMaxUs=${maxDecryptNs / 1000} " +
                 "decryptCpuMaxUs=${maxDecryptCpuNs / 1000} callbackMaxUs=${maxCallbackNs / 1000} ended=$ended")
             maxDecryptNs = 0L
@@ -257,7 +261,7 @@ class AudioStream(
                     started = true
                     listener.onStarted(sample)
                 }
-                listener.onRtp(rtp, sample)
+                listener.onRtp(rtp, sample, packet.receivedNs)
 
                 maxCallbackNs = maxOf(maxCallbackNs, System.nanoTime() - callbackStartNs)
                 reportDecode()

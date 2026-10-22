@@ -17,6 +17,46 @@ stored in the source repository. Prefer the fixed-signed artifact when it is ava
 debug-signed artifact is suitable for compile/install diagnostics but may not satisfy the Honda
 native installer.
 
+## Follow-up for the 2026-10-22 vehicle observations
+
+The user reports severe display delay/freezes and delayed, interrupted audio on `.9`.
+The screen receiver now observes receive age instead of dropping compressed interframes
+and requesting decoder recovery whenever processing exceeds 250 ms. This removes one
+source of repeated flush/recreation while retaining ordered authentication, bounded queues,
+and the decoder's backlog/output-stall recovery. `agedFrames` counts observations, including
+hidden frames; it is not the old `expiredFrames` discard counter. The pipeline logs
+`receiveAgePolicy=observe-only`. Non-secret configuration diagnostics use `configHash`.
+
+Soft video recovery requests while already waiting for a keyframe now share a four-second
+cooldown. A newly broken established reference chain and hard codec errors still recover
+immediately. `recoverySuppressedTotal` reports coalesced requests; startup snapshots report
+an unavailable input/output span as `unknown`.
+
+API17 music now allows 160 ms in the pre-authentication receive queue, with a single
+200 ms UDP-receive-to-renderer-queue deadline. The original receive timestamp follows the
+packet through authentication and ownership checks; handoff cannot restart its age allowance.
+Interactive audio keeps an 80 ms receive deadline and a 100 ms combined queue deadline.
+These limits exclude PCM already in AudioTrack and do not establish end-to-end sound latency.
+`receiveMaxAgeMs` and `queueClock=udp-receive` identify the actual policy in logs.
+
+`Runtime media` samples the decrypt thread's current CPU, frequency, nice value, cumulative
+scheduler run/wait time, raw thermal-zone 0–3 values and heap usage every ten seconds from a
+separate worker. Missing OEM permissions/files are `unknown`; thermal units and the physical
+meaning of each zone must be checked on the vehicle. Samples are snapshots, not continuous
+traces or proof of thermal throttling. Sampling stops when the stream ends.
+
+Repeat the same content/resolution for at least 90 minutes, including OEM page takeover
+and return. Compare visible response/freezes, output throughput and recovery frequency,
+decrypt CPU per MiB, audio receive expiry, rebuffering and listening results. The cause of
+the observed decrypt CPU cost increase remains unresolved. Exclude deliberate disconnect
+cleanup from connected-session rebuffer counts. Neither issue is vehicle-verified as fixed
+by this source change.
+
+Validation on 2026-10-22: all 845 shared and 192 CR-V mobile unit tests passed, including
+real TCP/UDP authenticated delivery, timestamp ownership fencing, receive jitter and
+combined queue expiry. CR-V legacy/mobile lint, API17 baseline and Java surface checks
+passed. No new APK was assembled or installed in this validation run.
+
 ## Follow-up for the 2026-10-10 logs
 
 Transport tuning now uses 1, 2, 4, 8, 16, then at most 20 ms pauses after a NOT_READY USB write,

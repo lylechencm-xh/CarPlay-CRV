@@ -149,6 +149,8 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         decryptTid = Process.myTid()
         refreshVideoPriority()
         val stats = StreamReceiveStats("video-processing", onDiagnostic)
+        val runtimeDiagnostics = MediaWorkerDiagnostics({ decryptTid }, { listener.isVideoVisible() }, onDiagnostic)
+        runtimeDiagnostics.start()
         var failure: Throwable? = null
         try {
             while (!closed.get()) {
@@ -165,6 +167,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         } catch (error: Exception) {
             failure = error
         } finally {
+            runtimeDiagnostics.close()
             decryptTid = 0
             receiveQueue.close()
             closeSocket(socket)
@@ -178,9 +181,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
     private val decryptTimes = LatencyHistogram()
     private val queueTimes = LatencyHistogram()
     private var timingAtNs = System.nanoTime()
-    private var expiredFrames = 0L
-    private var referenceLost = false
-    private var lastDiscontinuityNs = Long.MIN_VALUE
+    private var agedFrames = 0L
 
     private fun onMessage(header: ByteArray, body: ByteArray, bodySize: Int, stats: StreamReceiveStats,
                           arrivalNs: Long, nonce: Long) {
@@ -203,10 +204,12 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
                 val decryptCpuNs = (Debug.threadCpuTimeNanos() - decryptCpuStartNs).coerceAtLeast(0L)
                 decryptTimes.record(decryptedNs - decryptStartNs)
                 queueTimes.record(decryptStartNs - arrivalNs)
+                if (decryptedNs - arrivalNs > FRAME_AGE_WARNING_NS) agedFrames++
                 if (decryptedNs - timingAtNs >= 5_000_000_000L) {
                     onDiagnostic("video pipeline decryptP50Ms=${decryptTimes.percentileMs(50)} " +
                         "decryptP90Ms=${decryptTimes.percentileMs(90)} decryptP99Ms=${decryptTimes.percentileMs(99)} " +
-                        "queueP90Ms=${queueTimes.percentileMs(90)} expiredFrames=$expiredFrames")
+                        "queueP90Ms=${queueTimes.percentileMs(90)} agedFrames=$agedFrames " +
+                        "receiveAgePolicy=observe-only")
                     decryptTimes.reset(); queueTimes.reset(); timingAtNs = decryptedNs
                 }
                 if (firstFrameLogged.compareAndSet(false, true)) {
@@ -220,21 +223,11 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
                     stats.videoStages(decryptedNs - decryptStartNs, 0L, 0L, payload.size, decryptCpuNs)
                     return
                 }
-                // Authenticate every packet, even when hidden or obsolete. Never silently resume
-                // dependent H.264 pictures after intentionally dropping a stale compressed frame.
-                if (decryptedNs - arrivalNs > MAX_FRAME_AGE_NS && receiveQueue.hasNewer(arrivalNs) &&
-                    !com.shilapi.xcertplay.media.MediaCodecSupport.isRandomAccessPacket(payload, currentCodec)) {
-                    expiredFrames++
-                    if (!referenceLost && (lastDiscontinuityNs == Long.MIN_VALUE ||
-                            decryptedNs - lastDiscontinuityNs >= 1_000_000_000L)) {
-                        lastDiscontinuityNs = decryptedNs
-                        listener.onDiscontinuity()
-                    }
-                    referenceLost = true
-                    stats.videoStages(decryptedNs - decryptStartNs, 0L, 0L, payload.size, decryptCpuNs)
-                    return
-                }
-                referenceLost = false
+                // Receive age includes authentication time and FIFO backpressure, not just
+                // decoder backlog. A steady slow stream can exceed 250ms on every frame.
+                // Preserve its reference chain instead of repeatedly flushing on each IDR's
+                // successor. The sink owns bounded input queues and output-stall recovery;
+                // it can discard decoded output without losing compressed references.
                 val convertStartNs = System.nanoTime()
                 val frame = ScreenCodec.prepareFrame(payload, listener.wantsLengthPrefixedFrames())
                 val convertedNs = System.nanoTime()
@@ -245,15 +238,12 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
             OP_VIDEO_CONFIG -> {
                 val configBody = body.copyOf(bodySize)
                 val (codec, codecData) = ScreenCodec.detectConfig(configBody)
-                currentCodec = codec
                 Log.i(TAG, "video codec config codec=$codec body=$bodySize data=${codecData.size}")
                 listener.onCodec(codec)
                 listener.onConfig(codecData)
             }
         }
     }
-
-    private var currentCodec = VideoCodec.H264
 
     private fun closeSocket(value: Socket?) {
         try { value?.close() } catch (_: Exception) { }
@@ -295,7 +285,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         const val INITIAL_BODY_BUFFER_BYTES = 256 * 1024
         const val MAX_BODY = 8 * 1024 * 1024
         const val VIDEO_RECEIVE_BUFFER_BYTES = 512 * 1024
-        const val MAX_FRAME_AGE_NS = 250_000_000L
+        const val FRAME_AGE_WARNING_NS = 250_000_000L
     }
 }
 
