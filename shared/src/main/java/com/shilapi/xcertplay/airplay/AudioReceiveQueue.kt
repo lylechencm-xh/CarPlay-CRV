@@ -9,7 +9,8 @@ class AudioReceiveQueue(
         var bytes: ByteArray? = null
         var receivedNs = 0L
     }
-    data class Stats(val depth: Int, val highWater: Int, val overflow: Long, val expired: Long)
+    data class Stats(val depth: Int, val highWater: Int, val overflow: Long, val expired: Long,
+                     val cleanup: Long = 0L)
     private val lock = Object()
     private val packets = arrayOfNulls<ByteArray>(capacity)
     private val received = LongArray(capacity)
@@ -19,6 +20,7 @@ class AudioReceiveQueue(
     private var highWater = 0
     private var overflow = 0L
     private var expired = 0L
+    private var cleanup = 0L
 
     init { require(capacity > 0 && maxAgeNs > 0) }
 
@@ -51,9 +53,10 @@ class AudioReceiveQueue(
         false
     }
 
-    fun stats(): Stats = synchronized(lock) { Stats(size, highWater, overflow, expired) }
+    fun stats(): Stats = synchronized(lock) { Stats(size, highWater, overflow, expired, cleanup) }
     fun close() = synchronized(lock) {
         stopped = true
+        cleanup += size
         while (size > 0) remove()
         lock.notifyAll()
     }

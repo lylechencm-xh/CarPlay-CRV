@@ -1,6 +1,6 @@
 package com.shilapi.xcertplay.airplay
 
-/** Ordered, byte-bounded handoff. Never discard ciphertext or let config overtake frames. */
+/** Ordered, byte-bounded handoff. Config must not overtake frames in the same visibility epoch. */
 internal class ScreenReceiveQueue(
     private val capacity: Int = 3,
     private val maxBytes: Int = 2 * 1024 * 1024,
@@ -11,6 +11,7 @@ internal class ScreenReceiveQueue(
         var length = 0
         var arrivalNs = 0L
         var nonce = 0L
+        var visibilityEpoch = 0L
     }
     private val lock = Object()
     private val pending = java.util.ArrayDeque<Packet>()
@@ -22,7 +23,8 @@ internal class ScreenReceiveQueue(
     init { require(capacity > 0 && maxBytes > 0) }
 
     @Throws(InterruptedException::class)
-    fun offer(header: ByteArray, body: ByteArray, length: Int, arrivalNs: Long, nonce: Long): Boolean = synchronized(lock) {
+    fun offer(header: ByteArray, body: ByteArray, length: Int, arrivalNs: Long, nonce: Long,
+              visibilityEpoch: Long = 0L): Boolean = synchronized(lock) {
         require(length in 0..body.size)
         // One oversized protocol-valid packet may progress on its own; it cannot grow the backlog.
         while (!closed && !finished && (pending.size >= capacity ||
@@ -35,6 +37,7 @@ internal class ScreenReceiveQueue(
         packet.length = length
         packet.arrivalNs = arrivalNs
         packet.nonce = nonce
+        packet.visibilityEpoch = visibilityEpoch
         pending.addLast(packet)
         bytes += length
         lock.notifyAll()

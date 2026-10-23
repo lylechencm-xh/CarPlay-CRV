@@ -56,7 +56,7 @@ class CrvConnectionRegressionTest {
         }
         val normal = AirPlayDisplayConfig(1280, 720, fps = 30)
         assertEquals(30, maximum(normal))
-        assertEquals(20, maximum(normal.copy(streamFpsLimit = Crv2021Config.CARPLAY_MAX_FPS)))
+        assertEquals(15, maximum(normal.copy(streamFpsLimit = Crv2021Config.CARPLAY_MAX_FPS)))
         assertEquals(30, maximum(normal.copy(streamFpsLimit = 60)))
     }
 

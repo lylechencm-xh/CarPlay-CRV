@@ -53,8 +53,10 @@ class CrvApi19MediaSink(
     override fun isVideoVisible(type: Int): Boolean = videoVisible && outputSurface != null && !closed.get()
 
     fun setVideoVisible(visible: Boolean) {
-        if (visible && !closed.get() && audioRenderers.isNotEmpty() &&
-            audioManager.mode != AudioManager.MODE_IN_CALL && !audioManager.isBluetoothScoOn) ensureAudioFocus()
+        synchronized(audioRenderers) {
+            if (visible && !closed.get() && audioRenderers.isNotEmpty() &&
+                audioManager.mode != AudioManager.MODE_IN_CALL && !audioManager.isBluetoothScoOn) ensureAudioFocus()
+        }
         synchronized(videoLock) {
             if (closed.get() || videoVisible == visible) return
             videoVisible = visible
@@ -131,10 +133,13 @@ class CrvApi19MediaSink(
     }
 
     fun recoverVideo() {
-        synchronized(videoLock) {
+        val handlers = synchronized(videoLock) {
             videoDecoders.values.forEach { it.requestRecovery() }
-            recoveryHandlers.values.forEach { runCatching(it) }
+            recoveryHandlers.values.toList()
         }
+        // Call into session/ownership locks only after releasing videoLock. Frame delivery
+        // takes those locks in the opposite order before entering decoder().
+        handlers.forEach { runCatching(it) }
     }
 
     override fun onVideoFrame(type: Int, naluBytes: ByteArray) {
@@ -209,7 +214,6 @@ class CrvApi19MediaSink(
 
     override fun onAudioStarted(id: AudioStreamId, format: AudioFormat, firstSample: Int) {
         if (closed.get()) return
-        ensureAudioFocus()
         if (id.audioType == "telephony") runCatching { communicationMode.acquire("output:$id") }
         audioRenderers.remove(id)?.close()
         val isMusic = CrvAudioDucking.isMusic(id.type, id.audioType)
@@ -226,7 +230,13 @@ class CrvApi19MediaSink(
                 if (isPrompt) audioDucking.voicePcm(bytes, offset, count, playoutMs)
             },
         ).also {
-            audioRenderers[id] = it
+            // Different audio streams may now enter concurrently. Serialize the short map/focus
+            // transition, not AudioTrack creation, stopping or worker joins.
+            synchronized(audioRenderers) {
+                if (closed.get()) { it.close(); return@also }
+                audioRenderers[id] = it
+                ensureAudioFocus()
+            }
             it.start()
         }
     }
@@ -243,9 +253,11 @@ class CrvApi19MediaSink(
     }
 
     override fun onAudioStopped(id: AudioStreamId) {
-        audioRenderers.remove(id)?.close()
+        val retired = synchronized(audioRenderers) {
+            audioRenderers.remove(id).also { if (audioRenderers.isEmpty()) abandonAudioFocus() }
+        }
+        retired?.close()
         if (id.audioType == "telephony") runCatching { communicationMode.release("output:$id") }
-        if (audioRenderers.isEmpty()) abandonAudioFocus()
     }
 
     override fun onAudioDuckingChanged(duck: Boolean) {
@@ -268,9 +280,10 @@ class CrvApi19MediaSink(
     }
 
     override fun onMicrophoneStopped(id: AudioStreamId) {
-        microphones.remove(id)?.close()
+        val retired = microphones.remove(id)
+        retired?.close()
         runCatching { communicationMode.release("input:$id") }
-        report("Audio microphone stopped type=${id.audioType} ${audioRouteSnapshot()}")
+        if (retired != null) report("Audio microphone stopped type=${id.audioType} ${audioRouteSnapshot()}")
     }
 
     override fun close() {
@@ -283,9 +296,13 @@ class CrvApi19MediaSink(
         decoders.forEach { it.stop() }
         videoCleanup.execute { decoders.forEach { it.close() }; decoders.forEach { it.awaitStopped() } }
         videoCleanup.shutdown()
-        audioRenderers.values.toList().forEach { it.close() }
-        audioRenderers.clear()
-        abandonAudioFocus()
+        val retiredAudio = synchronized(audioRenderers) {
+            audioRenderers.values.toList().also {
+                audioRenderers.clear()
+                abandonAudioFocus()
+            }
+        }
+        retiredAudio.forEach { it.close() }
         microphones.values.toList().forEach { it.close() }
         microphones.clear()
         runCatching { communicationMode.close() }

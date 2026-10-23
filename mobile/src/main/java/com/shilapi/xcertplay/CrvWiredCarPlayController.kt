@@ -285,6 +285,7 @@ class CrvWiredCarPlayController(
                     )
             }
             if (
+                message.startsWith("Runtime media ") ||
                 message.startsWith("Audio ") ||
                 message.startsWith("UDP6 receive ") ||
                 message.startsWith("Receive: audio ") ||
@@ -1254,6 +1255,7 @@ class CrvWiredCarPlayController(
 
     private fun airPlayConfig(id: String): AirPlayConfig {
         val bluetoothId = bluetoothTransportIdentifier()
+        report("Video profile ${displayWidth}x$displayHeight maxFps=${Crv2021Config.CARPLAY_MAX_FPS} hiddenPolicy=drain-without-decrypt")
         report("CarPlay Bluetooth association source=${if (bluetoothId == deviceId) "derived-fallback" else "adapter"}; OEM HFP coordination requires vehicle validation")
         return AirPlayConfig(
             deviceName = "Honda CR-V",

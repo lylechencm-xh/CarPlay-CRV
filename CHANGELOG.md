@@ -2,6 +2,17 @@
 
 Add future CR-V changes after 0.2.27 here.
 
+- CR-V 0.2.28.11: drain hidden video images without AEAD/codec work, preserving per-message
+  nonce advancement and ordered configuration. Fence queued and in-flight pictures across
+  camera hide/show epochs, and keep the TCP reader at display priority while hidden.
+- Serialize sink ownership per stream so slow audio cleanup cannot stall video or another
+  audio stream. Keep retired-owner fencing and synchronize short audio-map/focus transitions.
+- Advertise a 15 fps CR-V stream limit (previously 20) with unchanged display/touch geometry.
+  This requests lower sender load; actual throughput and vehicle responsiveness need validation.
+- Pass Runtime media through the controller log filter, classify it as system diagnostics,
+  report sampler lifecycle/errors, and sample audio decrypt workers as well as video.
+  Add window audio decrypt totals and a separate receive-queue shutdown-cleanup counter.
+
 - Preserve authenticated video reference frames across receive-age spikes; coalesce soft
   recovery while waiting for a keyframe and retain immediate handling of newly broken chains.
 - Carry the UDP receive timestamp through audio authentication and sink ownership delivery.

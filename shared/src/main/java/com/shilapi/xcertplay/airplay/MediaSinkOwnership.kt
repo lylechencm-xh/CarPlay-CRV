@@ -1,52 +1,58 @@
 package com.shilapi.xcertplay.airplay
 
-/** Serializes ownership changes with delivery; retired streams cannot stop their successors. */
-class MediaSinkOwnership(private val sink: MediaSink) {
-    private val lock = Any()
-    private val audio = HashMap<AudioStreamId, Any>()
-    private val screens = HashMap<Int, Any>()
+import java.util.concurrent.ConcurrentHashMap
 
-    fun claimAudio(id: AudioStreamId, owner: Any) = synchronized(lock) {
+/** Per-stream serialization fences retired owners without blocking unrelated media on HAL cleanup. */
+class MediaSinkOwnership(private val sink: MediaSink) {
+    // Locks remain stable for the lifetime of the engine, including across stream replacement.
+    private val audioLocks = ConcurrentHashMap<AudioStreamId, Any>()
+    private val screenLocks = ConcurrentHashMap<Int, Any>()
+    private val audio = ConcurrentHashMap<AudioStreamId, Any>()
+    private val screens = ConcurrentHashMap<Int, Any>()
+    private fun audioLock(id: AudioStreamId) = audioLocks.getOrPut(id) { Any() }
+    private fun screenLock(type: Int) = screenLocks.getOrPut(type) { Any() }
+
+    fun claimAudio(id: AudioStreamId, owner: Any) = synchronized(audioLock(id)) {
         if (audio[id] !== owner) {
             if (audio.containsKey(id)) sink.onMicrophoneStopped(id)
             sink.onAudioStopped(id)
-            audio[id] = owner
+            synchronized(audio) { audio[id] = owner }
         }
     }
-    fun deliverAudio(id: AudioStreamId, owner: Any, action: (MediaSink) -> Unit) = synchronized(lock) {
+    fun deliverAudio(id: AudioStreamId, owner: Any, action: (MediaSink) -> Unit) = synchronized(audioLock(id)) {
         if (audio[id] === owner) action(sink)
     }
-    fun audioRtp(id: AudioStreamId, owner: Any, format: AudioFormat, rtp: ByteArray, sample: Int) = synchronized(lock) {
+    fun audioRtp(id: AudioStreamId, owner: Any, format: AudioFormat, rtp: ByteArray, sample: Int) = synchronized(audioLock(id)) {
         if (audio[id] === owner) sink.onAudioRtp(id, format, rtp, sample)
     }
-    fun audioRtp(id: AudioStreamId, owner: Any, format: AudioFormat, rtp: ByteArray, sample: Int, receivedNs: Long) = synchronized(lock) {
+    fun audioRtp(id: AudioStreamId, owner: Any, format: AudioFormat, rtp: ByteArray, sample: Int, receivedNs: Long) = synchronized(audioLock(id)) {
         if (audio[id] === owner) sink.onAudioRtp(id, format, rtp, sample, receivedNs)
     }
-    fun releaseAudio(id: AudioStreamId, owner: Any): Boolean = synchronized(lock) {
+    fun releaseAudio(id: AudioStreamId, owner: Any): Boolean = synchronized(audioLock(id)) {
         if (audio[id] !== owner) return false
-        audio.remove(id)
+        synchronized(audio) { audio.remove(id) }
         sink.onMicrophoneStopped(id)
         sink.onAudioStopped(id)
         true
     }
-    fun claimScreen(type: Int, owner: Any) = synchronized(lock) {
+    fun claimScreen(type: Int, owner: Any) = synchronized(screenLock(type)) {
         if (screens[type] !== owner) {
             if (screens.containsKey(type)) sink.onScreenStreamActive(type, false)
             screens[type] = owner
             sink.onScreenStreamActive(type, true)
         }
     }
-    fun ownsScreen(type: Int, owner: Any): Boolean = synchronized(lock) { screens[type] === owner }
-    fun releaseScreen(type: Int, owner: Any): Boolean = synchronized(lock) {
+    fun ownsScreen(type: Int, owner: Any): Boolean = synchronized(screenLock(type)) { screens[type] === owner }
+    fun releaseScreen(type: Int, owner: Any): Boolean = synchronized(screenLock(type)) {
         if (screens[type] !== owner) return false
         screens.remove(type)
         sink.onScreenStreamActive(type, false)
         true
     }
-    fun resetDuckingIfIdle() = synchronized(lock) {
+    fun resetDuckingIfIdle() = synchronized(audio) {
         if (audio.isEmpty()) sink.onAudioDuckingChanged(false)
     }
-    private inline fun screen(type: Int, owner: Any, action: (MediaSink) -> Unit) = synchronized(lock) {
+    private inline fun screen(type: Int, owner: Any, action: (MediaSink) -> Unit) = synchronized(screenLock(type)) {
         if (screens[type] === owner) action(sink)
     }
     fun screenSink(type: Int, owner: Any): MediaSink = object : MediaSink {

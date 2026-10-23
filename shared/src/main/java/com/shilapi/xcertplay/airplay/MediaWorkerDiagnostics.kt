@@ -9,21 +9,30 @@ internal class MediaWorkerDiagnostics(
     private val tid: () -> Int,
     private val visible: () -> Boolean,
     private val report: (String) -> Unit,
+    private val label: String = "video-decrypt",
 ) : Closeable {
     @Volatile private var closed = false
     private val worker = Thread({
         runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND) }
+        var failures = 0L
+        fun emit(message: String) { runCatching { report(message) } }
+        emit("Runtime media sampler started worker=$label")
         try {
             while (!closed) {
                 val currentTid = tid()
                 if (currentTid > 0) runCatching {
                     val runtime = Runtime.getRuntime()
                     report(MediaWorkerSnapshot.collect(currentTid, visible(), ::readOne) +
-                        " heapUsedKiB=${(runtime.totalMemory() - runtime.freeMemory()) / 1024L}")
+                        " worker=$label heapUsedKiB=${(runtime.totalMemory() - runtime.freeMemory()) / 1024L}")
+                }.onFailure {
+                    failures++
+                    if (failures == 1L || failures % 6L == 0L)
+                        emit("Runtime media sampler failed worker=$label count=$failures error=${it.javaClass.simpleName}")
                 }
                 Thread.sleep(10_000L)
             }
         } catch (_: InterruptedException) { /* Stream retired. */ }
+        finally { emit("Runtime media sampler stopped worker=$label failures=$failures") }
     }, "airplay-media-stats").apply { isDaemon = true }
 
     fun start() = worker.start()

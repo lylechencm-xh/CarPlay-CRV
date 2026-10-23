@@ -20,7 +20,7 @@ enum class CrvLogCategory(val directoryName: String) {
                     text.startsWith("iap2 tx=") || text.startsWith("airplay rx ") ||
                     text.startsWith("airplay tx ") || text.startsWith("airplay setup") ||
                     text.startsWith("airplay teardown") || text.startsWith("trace airplay") -> PROTOCOL
-                text.startsWith("snapshot ") || text.startsWith("system ") ||
+                text.startsWith("runtime media ") || text.startsWith("snapshot ") || text.startsWith("system ") ||
                     text.startsWith("honda platform") || text.startsWith("honda mediacore") ||
                     text.startsWith("app ") -> SYSTEM
                 "touch" in text || "hid report" in text || "hid reports" in text -> TOUCH

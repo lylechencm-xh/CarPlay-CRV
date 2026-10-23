@@ -145,6 +145,10 @@ class AudioStream(
 
     private fun runDecode(listener: Listener) {
         runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO) }
+        val decodeTid = Process.myTid()
+        val runtimeDiagnostics = MediaWorkerDiagnostics({ decodeTid }, { true }, onDiagnostic,
+            "audio-decrypt:$streamType")
+        runtimeDiagnostics.start()
         val packet = AudioReceiveQueue.Packet()
         val aad = ByteArray(RTP_HEADER_LEN - 4)
         val nonce = ByteArray(12)
@@ -154,6 +158,10 @@ class AudioStream(
         var maxDecryptCpuNs = 0L
         var maxCallbackNs = 0L
         var maxQueueAgeNs = 0L
+        var decryptTotalNs = 0L
+        var decryptCpuTotalNs = 0L
+        var decryptedBytes = 0L
+        var windowPackets = 0L
         var statsAtNs = System.nanoTime()
         fun reportDecode(ended: Boolean = false) {
             val now = System.nanoTime()
@@ -163,11 +171,18 @@ class AudioStream(
                 "highWater=${queue.highWater} overflowTotal=${queue.overflow} expiredTotal=${queue.expired} " +
                 "receiveMaxAgeMs=${receiveMaxAgeNs / 1_000_000L} " +
                 "queueAgeMaxUs=${maxQueueAgeNs / 1000} decryptMaxUs=${maxDecryptNs / 1000} " +
-                "decryptCpuMaxUs=${maxDecryptCpuNs / 1000} callbackMaxUs=${maxCallbackNs / 1000} ended=$ended")
+                "decryptCpuMaxUs=${maxDecryptCpuNs / 1000} callbackMaxUs=${maxCallbackNs / 1000} " +
+                "windowMs=${(now - statsAtNs) / 1_000_000L} decryptedPackets=$windowPackets " +
+                "decryptedBytes=$decryptedBytes decryptTotalUs=${decryptTotalNs / 1000} " +
+                "decryptCpuTotalUs=${decryptCpuTotalNs / 1000} cleanupTotal=${queue.cleanup} ended=$ended")
             maxDecryptNs = 0L
             maxDecryptCpuNs = 0L
             maxCallbackNs = 0L
             maxQueueAgeNs = 0L
+            decryptTotalNs = 0L
+            decryptCpuTotalNs = 0L
+            decryptedBytes = 0L
+            windowPackets = 0L
             statsAtNs = now
         }
         try {
@@ -230,9 +245,13 @@ class AudioStream(
                     continue
                 }
                 val decryptedNs = System.nanoTime()
+                val decryptCpuNs = (android.os.Debug.threadCpuTimeNanos() - decryptCpuStartNs).coerceAtLeast(0L)
                 maxDecryptNs = maxOf(maxDecryptNs, decryptedNs - decryptStartNs)
-                maxDecryptCpuNs = maxOf(maxDecryptCpuNs,
-                    android.os.Debug.threadCpuTimeNanos() - decryptCpuStartNs)
+                maxDecryptCpuNs = maxOf(maxDecryptCpuNs, decryptCpuNs)
+                decryptTotalNs += decryptedNs - decryptStartNs
+                decryptCpuTotalNs += decryptCpuNs
+                decryptedBytes += (sealedEnd - RTP_HEADER_LEN - 16).coerceAtLeast(0)
+                windowPackets++
                 val payloadBytes = rtp.size - RTP_HEADER_LEN
                 val decryptedNumber = decryptedPackets.incrementAndGet()
                 if (decryptedNumber <= FIRST_PACKET_LOG_COUNT) {
@@ -272,6 +291,7 @@ class AudioStream(
             diagnostic("Audio processing stopped type=$streamType error=${error.javaClass.simpleName}")
             close()
         } finally {
+            runtimeDiagnostics.close()
             reportDecode(ended = true)
             diagnostic("Audio receive ended type=$streamType received=${receivedPackets.get()} " +
                 "decrypted=${decryptedPackets.get()} decryptFailures=${authenticationFailures.get()}")

@@ -48,13 +48,18 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
     @Volatile private var decryptTid = 0
     @Volatile private var receiveTid = 0
     @Volatile private var listener: Listener = object : Listener {}
+    private val visibility = ScreenVisibilityEpoch()
+    private val hiddenFrames = AtomicLong()
 
     /** May be called from a visibility callback while a large frame is still decrypting. */
     fun refreshVideoPriority() {
+        val visible = visibility.refresh { listener.isVideoVisible() }
         for (tid in intArrayOf(receiveTid, decryptTid)) {
             if (tid == 0) continue
             runCatching {
-                Process.setThreadPriority(tid, if (listener.isVideoVisible())
+                // Keep draining TCP during the OEM camera overlay. Only expensive processing
+                // becomes background work; otherwise old frames accumulate outside our queue.
+                Process.setThreadPriority(tid, if (tid == receiveTid || visible)
                     Process.THREAD_PRIORITY_DISPLAY else Process.THREAD_PRIORITY_BACKGROUND)
             }
         }
@@ -130,13 +135,19 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
                 val arrivalNs = System.nanoTime()
                 val encrypted = header[OPCODE_OFFSET].toInt() and 0xff == OP_VIDEO_FRAME && bodySize >= ScreenCodec.TAG_SIZE
                 val nonce = if (encrypted) frameCounter.getAndIncrement() else 0L
-                if (!receiveQueue.offer(header, bodyBuffer, bodySize, arrivalNs, nonce)) break
+                // Each image has an independent AEAD nonce, assigned BEFORE optional discard.
+                // Hidden ciphertext is never parsed or rendered. Config remains ordered.
+                if (header[OPCODE_OFFSET].toInt() and 0xff == OP_VIDEO_FRAME && !listener.isVideoVisible()) {
+                    hiddenFrames.incrementAndGet()
+                } else if (!receiveQueue.offer(header, bodyBuffer, bodySize, arrivalNs, nonce,
+                        visibility.epoch)) break
                 stats.processed()
             }
         } catch (error: Exception) {
             failure = error
         } finally {
             receiveTid = 0
+            onDiagnostic("video receive hiddenSkippedTotal=${hiddenFrames.get()} ended=true")
             stats.flush(ended = true)
             if (socket === sock) socket = null
             closeSocket(sock)
@@ -158,7 +169,8 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
                 try {
                     stats.reading()
                     stats.received(packet.length + HEADER_LEN)
-                    onMessage(packet.header, packet.body, packet.length, stats, packet.arrivalNs, packet.nonce)
+                    onMessage(packet.header, packet.body, packet.length, stats, packet.arrivalNs,
+                        packet.nonce, packet.visibilityEpoch)
                     stats.processed()
                 } finally { receiveQueue.recycle(packet) }
             }
@@ -184,9 +196,13 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
     private var agedFrames = 0L
 
     private fun onMessage(header: ByteArray, body: ByteArray, bodySize: Int, stats: StreamReceiveStats,
-                          arrivalNs: Long, nonce: Long) {
+                          arrivalNs: Long, nonce: Long, epoch: Long) {
         when (header[OPCODE_OFFSET].toInt() and 0xff) {
             OP_VIDEO_FRAME -> {
+                if (!visibility.accepts(epoch) || !listener.isVideoVisible()) {
+                    hiddenFrames.incrementAndGet()
+                    return
+                }
                 val decryptStartNs = System.nanoTime()
                 val decryptCpuStartNs = Debug.threadCpuTimeNanos()
                 val payload = if (bodySize >= ScreenCodec.TAG_SIZE) {
@@ -209,7 +225,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
                     onDiagnostic("video pipeline decryptP50Ms=${decryptTimes.percentileMs(50)} " +
                         "decryptP90Ms=${decryptTimes.percentileMs(90)} decryptP99Ms=${decryptTimes.percentileMs(99)} " +
                         "queueP90Ms=${queueTimes.percentileMs(90)} agedFrames=$agedFrames " +
-                        "receiveAgePolicy=observe-only")
+                        "hiddenSkippedTotal=${hiddenFrames.get()} receiveAgePolicy=observe-only")
                     decryptTimes.reset(); queueTimes.reset(); timingAtNs = decryptedNs
                 }
                 if (firstFrameLogged.compareAndSet(false, true)) {
@@ -219,7 +235,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
                             "head=${payload.hexPrefix(16)}",
                     )
                 }
-                if (!listener.isVideoVisible()) {
+                if (!visibility.accepts(epoch) || !listener.isVideoVisible()) {
                     stats.videoStages(decryptedNs - decryptStartNs, 0L, 0L, payload.size, decryptCpuNs)
                     return
                 }
@@ -287,6 +303,21 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         const val VIDEO_RECEIVE_BUFFER_BYTES = 512 * 1024
         const val FRAME_AGE_WARNING_NS = 250_000_000L
     }
+}
+
+/** A hide/show round trip invalidates queued pictures even if processing was blocked throughout. */
+internal class ScreenVisibilityEpoch {
+    @Volatile var epoch = 0L
+        private set
+    @Volatile private var visible = true
+    @Synchronized fun refresh(readVisible: () -> Boolean): Boolean {
+        // Read under this lock so a delayed receiver cannot overwrite a newer UI transition
+        // with a visibility snapshot it took before the camera callback.
+        val next = readVisible()
+        if (visible != next) { epoch++; visible = next }
+        return next
+    }
+    fun accepts(value: Long): Boolean = visible && value == epoch
 }
 
 private fun ByteArray.hexPrefix(length: Int): String =

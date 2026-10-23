@@ -17,6 +17,51 @@ stored in the source repository. Prefer the fixed-signed artifact when it is ava
 debug-signed artifact is suitable for compile/install diagnostics but may not satisfy the Honda
 native installer.
 
+## Follow-up for the 2026-10-23 LaneWatch and phone voice-message observations
+
+The `.11` source drains hidden image messages without decrypting or decoding them. Nonces
+are still allocated at receive time for every encrypted image, including discarded images;
+configuration messages remain ordered. Hidden ciphertext is not passed to a content parser
+or sink. Visible images still require valid authentication. A visibility epoch fences queued
+and in-flight pictures from before a hide/show round trip. The existing Surface retirement
+and fresh-keyframe recovery are retained; this does not keep a codec competing with LaneWatch.
+The TCP reader no longer becomes a background-priority thread when the page is hidden.
+`hiddenSkippedTotal` is a separate discard count; `agedFrames` now observes processed images
+and must not be compared as if it included the same hidden work as `.10`.
+
+Ownership locks are per audio stream and per screen. Slow cleanup on one stream must not
+block another audio stream or video delivery; replacements of the SAME stream remain serialized,
+and a retired owner cannot stop its successor. Renderer map/focus changes are short synchronized
+transitions. Microphone-stop logs are emitted only when an actual uplink instance was retired.
+
+The CR-V negotiated maxFPS is now 15 instead of 20. Resolution and touch coordinates are
+unchanged. This is a sender request, not receiver-side interframe dropping, and must be verified
+against received frame/byte rates. Native crypto acceleration is not part of this change.
+
+Runtime media samples were previously omitted by the controller's debug-log allowlist.
+The allowlist now forwards them to system logs, with sampler lifecycle/error events and
+separate video/audio decrypt worker labels. Audio processing adds per-window packet/byte counts,
+wall/CPU totals and `cleanupTotal` for queue shutdown; cleanup is not deadline expiry.
+Totals cover successful decryptions; authentication failures remain a separate counter.
+
+Vehicle acceptance: run 20 LaneWatch entry/return cycles, 10 phone WeChat voice-message cycles,
+and fixed map dragging/zooming before and after 30 minutes. Repeat the combined sequence after
+voice recording. Distinguish sender TEARDOWN silence from unexpected starvation after SETUP.
+Record focus/route, audio sequence gaps, expiry increments, hardware inventory and rebuffering,
+Runtime media CPU/scheduler data, hidden discards, return-to-first-frame, and external-video
+touch-to-visible-response. A local HID write is not phone acknowledgement or screen latency.
+Source tests cannot establish that vehicle audio, thermal behavior or display latency is fixed.
+
+Automated validation on 2026-10-23: all 850 shared and 192 mobile unit tests passed,
+including five new regression cases for hidden-image nonce/config continuity, visible-image
+authentication failure, camera-round-trip queued-frame fencing, independent stream delivery
+during blocked cleanup, and distinct/idempotent receive-queue cleanup accounting. Legacy/mobile
+lint and the API17 source baseline/Java surface checks passed. The final `.11` source build
+uses versionCode 58. No vehicle installation or live media performance measurement was made.
+The ordinary debug APK is a source-validation artifact without standalone MFi authentication
+assets; a vehicle package requires the explicitly provisioned standalone build described in
+docs/BUILD.md.
+
 ## Follow-up for the 2026-10-22 vehicle observations
 
 The user reports severe display delay/freezes and delayed, interrupted audio on `.9`.
