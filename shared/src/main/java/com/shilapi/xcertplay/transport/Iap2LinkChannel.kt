@@ -38,6 +38,9 @@ class Iap2LinkChannel private constructor(
     private var terminated = false
     private var terminalFailure: Throwable? = null
     private var streamCloseStarted = false
+    // Pump-thread metadata only; no control payloads or authentication material.
+    private var lastReadMillis = -1L
+    private var lastWriteMillis = -1L
 
     private val worker = Thread(::runPump, "xcertplay-iap2-link").apply {
         isDaemon = true
@@ -164,7 +167,10 @@ class Iap2LinkChannel private constructor(
                 when {
                     received == null -> Unit
                     received.isEmpty() -> engine.feedEof()
-                    else -> engine.feed(received, nowMillis())
+                    else -> {
+                        lastReadMillis = nowMillis()
+                        engine.feed(received, lastReadMillis)
+                    }
                 }
             }
             finish(null)
@@ -196,7 +202,10 @@ class Iap2LinkChannel private constructor(
 
     private fun flush(engine: Iap2LinkEngine) {
         val bytes = engine.takeOutput()
-        if (bytes.isNotEmpty()) underlying.send(bytes)
+        if (bytes.isNotEmpty()) {
+            underlying.send(bytes)
+            lastWriteMillis = nowMillis()
+        }
     }
 
     /** Returns false when a link terminal event has been observed. */
@@ -247,7 +256,8 @@ class Iap2LinkChannel private constructor(
                 }
 
                 is Iap2LinkEngine.Event.Dead -> {
-                    finish(IOException(event.reason ?: "iAP2 link ended"))
+                    finish(IOException("${event.reason ?: "iAP2 link ended"}; ${event.snapshot} " +
+                        "terminalMs=${nowMillis()} lastReadMs=$lastReadMillis lastWriteMs=$lastWriteMillis"))
                     return false
                 }
             }

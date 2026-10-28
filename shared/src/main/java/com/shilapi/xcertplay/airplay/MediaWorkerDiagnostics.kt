@@ -15,6 +15,7 @@ internal class MediaWorkerDiagnostics(
     private val worker = Thread({
         runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND) }
         var failures = 0L
+        var samples = 0L
         fun emit(message: String) { runCatching { report(message) } }
         emit("Runtime media sampler started worker=$label")
         try {
@@ -22,8 +23,11 @@ internal class MediaWorkerDiagnostics(
                 val currentTid = tid()
                 if (currentTid > 0) runCatching {
                     val runtime = Runtime.getRuntime()
+                    val checkpoint = samples++ % 6L == 0L
                     report(MediaWorkerSnapshot.collect(currentTid, visible(), ::readOne) +
-                        " worker=$label heapUsedKiB=${(runtime.totalMemory() - runtime.freeMemory()) / 1024L}")
+                        " worker=$label checkpoint=$checkpoint " +
+                        "heapUsedKiB=${(runtime.totalMemory() - runtime.freeMemory()) / 1024L} " +
+                        MediaRuntimeSnapshot.collect())
                 }.onFailure {
                     failures++
                     if (failures == 1L || failures % 6L == 0L)
@@ -41,6 +45,18 @@ internal class MediaWorkerDiagnostics(
     private fun readOne(path: String): String? = runCatching {
         File(path).bufferedReader().use { it.readLine()?.take(512) }
     }.getOrNull()
+}
+
+/** Public runtime counters are optional on API17; never infer zero from an unavailable API. */
+internal object MediaRuntimeSnapshot {
+    private val statsMethod = runCatching { android.os.Debug::class.java.getMethod("getRuntimeStats") }.getOrNull()
+    fun collect(): String {
+        val stats = runCatching { statsMethod?.invoke(null) as? Map<*, *> }.getOrNull()
+        fun counter(name: String) = stats?.get("art.gc.$name")?.toString()?.toLongOrNull()?.toString() ?: "unknown"
+        return "vm=${(System.getProperty("java.vm.name") ?: "unknown").replace(' ', '_')} " +
+            "gcCount=${counter("gc-count")} gcTimeMs=${counter("gc-time")} " +
+            "allocatedBytes=${counter("bytes-allocated")} gcBlockingCount=${counter("blocking-gc-count")}"
+    }
 }
 
 internal object MediaWorkerSnapshot {

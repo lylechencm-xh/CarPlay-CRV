@@ -49,6 +49,9 @@ class CrvVideoOutputRecoveryTest {
         assertFalse(recovery.observe(5_099_000_000L, 0L))
         assertFalse(recovery.observe(5_100_000_000L, 0L))
         assertTrue(recovery.observe(5_850_000_000L, 0L))
+        assertEquals("tail stalled", recovery.reason)
+        assertTrue(recovery.triggerSnapshot.contains("submittedFrames=2 outputFrames=1"))
+        assertTrue(recovery.triggerSnapshot.contains("lastSubmittedAgoMs=4750"))
         assertFalse(recovery.observe(30_000_000_000L, 0L))
     }
 
@@ -60,6 +63,34 @@ class CrvVideoOutputRecoveryTest {
         assertFalse(recovery.observe(11_000_000_000L, 0L))
         recovery.reset()
         assertFalse(recovery.observe(20_000_000_000L, 0L))
+    }
+
+    @Test fun delayedArrivalTimestampCannotPretendThatFreshCodecInputHasBeenIdleForFourSeconds() {
+        val recovery = CrvVideoOutputRecovery()
+        recovery.submitted(1_000_000L, 1_000_000_000L)
+        assertFalse(recovery.observe(1_000_000_000L, 1_000_000L))
+        // PTS retains message arrival time; actual codec submission occurs two seconds later.
+        recovery.submitted(1_100_000L, 3_000_000_000L)
+        assertFalse(recovery.observe(5_100_000_000L, 0L))
+        assertFalse(recovery.observe(5_850_000_000L, 0L))
+        assertFalse(recovery.observe(7_000_000_000L, 0L))
+        assertTrue(recovery.observe(7_750_000_000L, 0L))
+        assertEquals("tail stalled", recovery.reason)
+    }
+
+    @Test fun countsEveryDrainedOutputIncludingCoalescedBuffersAndResetsPerChain() {
+        val recovery = CrvVideoOutputRecovery()
+        repeat(4) { recovery.submitted(1_000_000L + it * 100_000L) }
+        assertFalse(recovery.observe(1_300_000_000L, 1_300_000L, outputs = 4))
+        recovery.submitted(1_400_000L)
+        assertFalse(recovery.observe(5_400_000_000L, 0L))
+        assertTrue(recovery.observe(6_150_000_000L, 0L))
+        assertTrue(recovery.triggerSnapshot.contains("submittedFrames=5 outputFrames=4"))
+        recovery.reset()
+        recovery.submitted(10_000_000L)
+        assertFalse(recovery.observe(14_000_000_000L, 0L))
+        assertTrue(recovery.observe(14_750_000_000L, 0L))
+        assertTrue(recovery.triggerSnapshot.contains("submittedFrames=1 outputFrames=0"))
     }
 
     @Test fun severeBacklogRecoversEvenWhenOutputContinues() {

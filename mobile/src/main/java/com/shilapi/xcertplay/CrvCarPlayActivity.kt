@@ -86,6 +86,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private var reconnectBlockedForMfi = false
     @Volatile private var destroyed = false
     private val connectionEpoch = CrvConnectionEpoch()
+    private var controllerStarts = 0L
     private val sessionStability = CrvSessionStability()
     private var lastReconnectFailure = CrvReconnectFailure.TRANSIENT
     private val cleanupGate = CrvCleanupGate()
@@ -103,6 +104,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
     private var callRouteMonitor: CrvCallRouteMonitor? = null
     private lateinit var runtimeSnapshotProbe: CrvRuntimeSnapshotProbe
     private val snapshotReasons = HashSet<String>()
+    // Only accessed on diagnosticIo; connection events themselves are always retained.
+    private var lastRoutineSnapshotNs = 0L
 
     override fun onResume() {
         super.onResume()
@@ -369,6 +372,8 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         })
 
         diagnostics = CrvDiagnostics(this)
+        com.shilapi.xcertplay.airplay.MediaCryptoDiagnostics.configure(intent.getStringExtra("crypto_sampling"))
+        diagnostics.log("Runtime media sampling mode=${com.shilapi.xcertplay.airplay.MediaCryptoDiagnostics.sampling}")
         callRouteMonitor = CrvCallRouteMonitor(this, diagnostics::log).also { it.start() }
         mediaCoreMonitor = CrvHondaMediaCoreMonitor(applicationContext, diagnostics::log).also {
             it.start()
@@ -716,6 +721,7 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         presentation.clear()
 
         val epoch = connectionEpoch.advance()
+        diagnostics.log("attempt=$epoch controller startIndex=${++controllerStarts}")
         synchronized(snapshotReasons) { snapshotReasons.clear() }
         lastReconnectFailure = CrvReconnectFailure.TRANSIENT
         sessionStability.clear()
@@ -906,6 +912,13 @@ class CrvCarPlayActivity : Activity(), TextureView.SurfaceTextureListener {
         }
         diagnosticIo.execute {
             if (epoch != null && !connectionEpoch.isCurrent(epoch)) return@execute
+            val now = System.nanoTime()
+            val failure = reason.endsWith("failure") || reason == "handshake-timeout"
+            if (!failure && lastRoutineSnapshotNs != 0L && now - lastRoutineSnapshotNs < 2_000_000_000L) {
+                diagnostics.log("Snapshot coalesced reason=$reason attempt=$epoch")
+                return@execute
+            }
+            if (!failure) lastRoutineSnapshotNs = now
             runtimeSnapshotProbe.collect(reason).forEach { line ->
                 diagnostics.log(if (epoch == null) line else "attempt=$epoch $line")
             }

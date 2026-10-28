@@ -10,6 +10,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 enum class AudioCodecKind { AAC_LC, OPUS, LPCM }
 
@@ -47,11 +48,17 @@ class AudioStream(
         ) {}
     }
 
-    private val opener = AirPlayChaChaOpener(key)
+    private val streamId = nextStreamId.incrementAndGet()
+    private val opener = AirPlayChaChaOpener(key,
+        MediaDecryptProfiler("audio-decrypt:$streamType:$streamId", ::diagnostic))
     private val closed = AtomicBoolean(false)
     private val receivedPackets = AtomicInteger()
     private val decryptedPackets = AtomicInteger()
     private val authenticationFailures = AtomicInteger()
+    private val malformedPackets = AtomicInteger()
+    private val receiverDone = AtomicBoolean()
+    private val decoderDone = AtomicBoolean()
+    private val summaryWritten = AtomicBoolean()
     private var dataSocket: DatagramSocket? = null
     private var controlSocket: DatagramSocket? = null
     private var dataThread: Thread? = null
@@ -118,7 +125,7 @@ class AudioStream(
 
     private fun runData(socket: DatagramSocket) {
         runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) }
-        val stats = StreamReceiveStats("audio type=$streamType", onDiagnostic)
+        val stats = StreamReceiveStats("audio type=$streamType streamId=$streamId", ::diagnostic)
         val buffer = ByteArray(DATAGRAM_BYTES)
         val packet = DatagramPacket(buffer, buffer.size)
         try {
@@ -134,20 +141,21 @@ class AudioStream(
                         (buffer[3].toInt() and 0xff) else null,
                     if (length >= RTP_HEADER_LEN) readU32Be(buffer, 4) else null)
                 receivedPackets.incrementAndGet()
-                receiveQueue.offer(buffer.copyOf(length), receivedNs)
+                receiveQueue.offerCopy(buffer, length, receivedNs)
                 stats.processed()
             }
         } finally {
-            stats.flush(ended = true)
             receiveQueue.close()
+            try { stats.flush(ended = true) }
+            finally { receiverDone.set(true); reportFinalAccounting() }
         }
     }
 
     private fun runDecode(listener: Listener) {
         runCatching { Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO) }
         val decodeTid = Process.myTid()
-        val runtimeDiagnostics = MediaWorkerDiagnostics({ decodeTid }, { true }, onDiagnostic,
-            "audio-decrypt:$streamType")
+        val runtimeDiagnostics = MediaWorkerDiagnostics({ decodeTid }, { true }, ::diagnostic,
+            "audio-decrypt:$streamType:$streamId")
         runtimeDiagnostics.start()
         val packet = AudioReceiveQueue.Packet()
         val aad = ByteArray(RTP_HEADER_LEN - 4)
@@ -163,18 +171,24 @@ class AudioStream(
         var decryptedBytes = 0L
         var windowPackets = 0L
         var statsAtNs = System.nanoTime()
+        var reportedWindows = 0
+        val costHistory = MediaCostHistory("audio-decrypt:$streamType:$streamId", ::diagnostic)
         fun reportDecode(ended: Boolean = false) {
             val now = System.nanoTime()
             if (!ended && now - statsAtNs < 5_000_000_000L) return
             val queue = receiveQueue.stats()
-            diagnostic("Audio processing type=$streamType queueDepth=${queue.depth} " +
+            val summary = "Audio processing type=$streamType streamId=$streamId tid=$decodeTid " +
+                "fromNs=$statsAtNs toNs=$now queueDepth=${queue.depth} " +
                 "highWater=${queue.highWater} overflowTotal=${queue.overflow} expiredTotal=${queue.expired} " +
                 "receiveMaxAgeMs=${receiveMaxAgeNs / 1_000_000L} " +
                 "queueAgeMaxUs=${maxQueueAgeNs / 1000} decryptMaxUs=${maxDecryptNs / 1000} " +
                 "decryptCpuMaxUs=${maxDecryptCpuNs / 1000} callbackMaxUs=${maxCallbackNs / 1000} " +
                 "windowMs=${(now - statsAtNs) / 1_000_000L} decryptedPackets=$windowPackets " +
                 "decryptedBytes=$decryptedBytes decryptTotalUs=${decryptTotalNs / 1000} " +
-                "decryptCpuTotalUs=${decryptCpuTotalNs / 1000} cleanupTotal=${queue.cleanup} ended=$ended")
+                "decryptCpuTotalUs=${decryptCpuTotalNs / 1000} cleanupTotal=${queue.cleanup} " +
+                "capture=${if (reportedWindows++ < 3) "startup" else "periodic"} ended=$ended"
+            diagnostic(summary)
+            costHistory.record(summary, decryptCpuTotalNs, decryptedBytes, windowPackets, ended)
             maxDecryptNs = 0L
             maxDecryptCpuNs = 0L
             maxCallbackNs = 0L
@@ -188,102 +202,102 @@ class AudioStream(
         try {
             while (!closed.get() && receiveQueue.poll(packet)) {
                 val buffer = packet.bytes ?: continue
-                packet.bytes = null
-                val packetLength = buffer.size
-                maxQueueAgeNs = maxOf(maxQueueAgeNs, System.nanoTime() - packet.receivedNs)
-                val packetNumber = ++processedPackets
-                if (packetLength < RTP_HEADER_LEN + TAIL_LEN) {
-                    if (packetNumber == 1) {
-                        android.util.Log.w(
+                try {
+                    val packetLength = buffer.size
+                    maxQueueAgeNs = maxOf(maxQueueAgeNs, System.nanoTime() - packet.receivedNs)
+                    val packetNumber = ++processedPackets
+                    if (packetLength < RTP_HEADER_LEN + TAIL_LEN) {
+                        malformedPackets.incrementAndGet()
+                        if (packetNumber == 1) {
+                            android.util.Log.w(
+                                TAG,
+                                "audio stream type=$streamType short packet bytes=$packetLength",
+                            )
+                        }
+                        if (keepWire) {
+                            listener.onPacket(
+                                buffer,
+                                null,
+                                null,
+                                IOException("audio packet shorter than RTP header plus tail"),
+                            )
+                        }
+                        continue
+                    }
+
+                    buffer.copyInto(aad, 0, 4, RTP_HEADER_LEN)
+                    val sealedEnd = packetLength - NONCE_LEN
+                    buffer.copyInto(nonce, 4, sealedEnd, packetLength)
+                    val sample = readU32Be(buffer, 4)
+
+                    val decryptStartNs = System.nanoTime()
+                    val decryptCpuStartNs = android.os.Debug.threadCpuTimeNanos()
+                    val rtp = try {
+                        opener.openWithPrefix(
+                            nonce = nonce,
+                            source = buffer,
+                            offset = RTP_HEADER_LEN,
+                            length = sealedEnd - RTP_HEADER_LEN,
+                            aad = aad,
+                            prefixSource = buffer,
+                            prefixLength = RTP_HEADER_LEN,
+                        )
+                    } catch (error: Exception) {
+                        val failureNumber = authenticationFailures.incrementAndGet()
+                        if (failureNumber == 1) {
+                            diagnostic("Audio decrypt failed type=$streamType count=$failureNumber error=${error.javaClass.simpleName}")
+                            android.util.Log.w(
+                                TAG,
+                                "audio stream type=$streamType first decrypt failure bytes=$packetLength",
+                                error,
+                            )
+                        } else if (failureNumber % 128 == 0) {
+                            diagnostic("Audio decrypt failed type=$streamType count=$failureNumber")
+                        }
+                        if (keepWire) {
+                            listener.onPacket(buffer, null, sample, error)
+                        }
+                        continue
+                    }
+                    val decryptedNs = System.nanoTime()
+                    val decryptCpuNs = (android.os.Debug.threadCpuTimeNanos() - decryptCpuStartNs).coerceAtLeast(0L)
+                    maxDecryptNs = maxOf(maxDecryptNs, decryptedNs - decryptStartNs)
+                    maxDecryptCpuNs = maxOf(maxDecryptCpuNs, decryptCpuNs)
+                    decryptTotalNs += decryptedNs - decryptStartNs
+                    decryptCpuTotalNs += decryptCpuNs
+                    decryptedBytes += (sealedEnd - RTP_HEADER_LEN - 16).coerceAtLeast(0)
+                    windowPackets++
+                    val payloadBytes = rtp.size - RTP_HEADER_LEN
+                    val decryptedNumber = decryptedPackets.incrementAndGet()
+                    if (decryptedNumber <= FIRST_PACKET_LOG_COUNT) {
+                        android.util.Log.i(
                             TAG,
-                            "audio stream type=$streamType short packet bytes=$packetLength",
+                            "audio stream type=$streamType packet=$decryptedNumber sample=$sample " +
+                                "wireBytes=$packetLength payloadBytes=$payloadBytes " +
+                                "payloadHead=${rtp.copyOfRange(
+                                    RTP_HEADER_LEN,
+                                    minOf(rtp.size, RTP_HEADER_LEN + 16),
+                                ).toHexString()}",
                         )
                     }
+                    if (closed.get()) break
+                    val callbackStartNs = System.nanoTime()
                     if (keepWire) {
-                        listener.onPacket(
-                            buffer.copyOf(packetLength),
-                            null,
-                            null,
-                            IOException("audio packet shorter than RTP header plus tail"),
-                        )
+                        listener.onPacket(buffer, rtp, sample, null)
                     }
-                    continue
-                }
-
-                buffer.copyInto(aad, 0, 4, RTP_HEADER_LEN)
-                val sealedEnd = packetLength - NONCE_LEN
-                buffer.copyInto(nonce, 4, sealedEnd, packetLength)
-                val sample = readU32Be(buffer, 4)
-
-                val decryptStartNs = System.nanoTime()
-                val decryptCpuStartNs = android.os.Debug.threadCpuTimeNanos()
-                val rtp = try {
-                    opener.openWithPrefix(
-                        nonce = nonce,
-                        source = buffer,
-                        offset = RTP_HEADER_LEN,
-                        length = sealedEnd - RTP_HEADER_LEN,
-                        aad = aad,
-                        prefixSource = buffer,
-                        prefixLength = RTP_HEADER_LEN,
-                    )
-                } catch (error: Exception) {
-                    val failureNumber = authenticationFailures.incrementAndGet()
-                    if (failureNumber == 1) {
-                        diagnostic("Audio decrypt failed type=$streamType count=$failureNumber error=${error.javaClass.simpleName}")
-                        android.util.Log.w(
-                            TAG,
-                            "audio stream type=$streamType first decrypt failure bytes=$packetLength",
-                            error,
-                        )
-                    } else if (failureNumber % 128 == 0) {
-                        diagnostic("Audio decrypt failed type=$streamType count=$failureNumber")
+                    if (!started) {
+                        started = true
+                        listener.onStarted(sample)
                     }
-                    if (keepWire) {
-                        listener.onPacket(buffer.copyOf(packetLength), null, sample, error)
-                    }
-                    continue
-                }
-                val decryptedNs = System.nanoTime()
-                val decryptCpuNs = (android.os.Debug.threadCpuTimeNanos() - decryptCpuStartNs).coerceAtLeast(0L)
-                maxDecryptNs = maxOf(maxDecryptNs, decryptedNs - decryptStartNs)
-                maxDecryptCpuNs = maxOf(maxDecryptCpuNs, decryptCpuNs)
-                decryptTotalNs += decryptedNs - decryptStartNs
-                decryptCpuTotalNs += decryptCpuNs
-                decryptedBytes += (sealedEnd - RTP_HEADER_LEN - 16).coerceAtLeast(0)
-                windowPackets++
-                val payloadBytes = rtp.size - RTP_HEADER_LEN
-                val decryptedNumber = decryptedPackets.incrementAndGet()
-                if (decryptedNumber <= FIRST_PACKET_LOG_COUNT) {
-                    android.util.Log.i(
-                        TAG,
-                        "audio stream type=$streamType packet=$decryptedNumber sample=$sample " +
-                            "wireBytes=$packetLength payloadBytes=$payloadBytes " +
-                            "payloadHead=${rtp.copyOfRange(
-                                RTP_HEADER_LEN,
-                                minOf(rtp.size, RTP_HEADER_LEN + 16),
-                            ).toHexString()}",
-                    )
-                } else if (decryptedNumber % PACKET_LOG_INTERVAL == 0) {
-                    android.util.Log.i(
-                        TAG,
-                        "audio stream type=$streamType decrypted=$decryptedNumber " +
-                            "authFailures=${authenticationFailures.get()}",
-                    )
-                }
-                if (closed.get()) break
-                val callbackStartNs = System.nanoTime()
-                if (keepWire) {
-                    listener.onPacket(buffer, rtp, sample, null)
-                }
-                if (!started) {
-                    started = true
-                    listener.onStarted(sample)
-                }
-                listener.onRtp(rtp, sample, packet.receivedNs)
+                    listener.onRtp(rtp, sample, packet.receivedNs)
 
-                maxCallbackNs = maxOf(maxCallbackNs, System.nanoTime() - callbackStartNs)
-                reportDecode()
+                    maxCallbackNs = maxOf(maxCallbackNs, System.nanoTime() - callbackStartNs)
+                    reportDecode()
+                } finally {
+                    // Packet observers may retain wire data. Only recycle when no observer owns it.
+                    if (!keepWire) receiveQueue.recycle(packet)
+                    else packet.bytes = null
+                }
             }
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
@@ -293,9 +307,22 @@ class AudioStream(
         } finally {
             runtimeDiagnostics.close()
             reportDecode(ended = true)
-            diagnostic("Audio receive ended type=$streamType received=${receivedPackets.get()} " +
-                "decrypted=${decryptedPackets.get()} decryptFailures=${authenticationFailures.get()}")
+            decoderDone.set(true)
+            reportFinalAccounting()
         }
+    }
+
+    /** Emitted only after both workers retire, without blocking the UI or joining a worker. */
+    private fun reportFinalAccounting() {
+        if (!receiverDone.get() || !decoderDone.get() || !summaryWritten.compareAndSet(false, true)) return
+        val queue = receiveQueue.stats()
+        val accounted = decryptedPackets.get().toLong() + authenticationFailures.get() + malformedPackets.get() +
+            queue.expired + queue.overflow + queue.cleanup
+        diagnostic("Audio receive ended type=$streamType received=${receivedPackets.get()} " +
+            "decrypted=${decryptedPackets.get()} decryptFailures=${authenticationFailures.get()} " +
+            "malformedTotal=${malformedPackets.get()} expiredTotal=${queue.expired} " +
+            "overflowTotal=${queue.overflow} cleanupTotal=${queue.cleanup} " +
+            "unaccounted=${receivedPackets.get() - accounted}")
     }
 
     private fun runControl(socket: DatagramSocket) {
@@ -333,7 +360,7 @@ class AudioStream(
             (source[offset + 3].toInt() and 0xff)
 
     private fun diagnostic(message: String) {
-        runCatching { onDiagnostic(message) }
+        runCatching { onDiagnostic("$message streamId=$streamId") }
     }
 
     private fun ByteArray.toHexString(): String =
@@ -341,6 +368,7 @@ class AudioStream(
 
     private companion object {
         const val TAG = "xcertplay-usb"
+        val nextStreamId = AtomicLong()
         const val DATAGRAM_BYTES = 4_096
         const val AUDIO_RECEIVE_BUFFER_BYTES = 512 * 1024
         const val RTP_HEADER_LEN = 12
@@ -348,7 +376,6 @@ class AudioStream(
         const val NONCE_LEN = 8
         const val TAIL_LEN = TAG_LEN + NONCE_LEN
         const val FIRST_PACKET_LOG_COUNT = 3
-        const val PACKET_LOG_INTERVAL = 100
     }
 }
 

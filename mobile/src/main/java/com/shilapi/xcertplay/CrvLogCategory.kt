@@ -20,7 +20,7 @@ enum class CrvLogCategory(val directoryName: String) {
                     text.startsWith("iap2 tx=") || text.startsWith("airplay rx ") ||
                     text.startsWith("airplay tx ") || text.startsWith("airplay setup") ||
                     text.startsWith("airplay teardown") || text.startsWith("trace airplay") -> PROTOCOL
-                text.startsWith("runtime media ") || text.startsWith("snapshot ") || text.startsWith("system ") ||
+                text.startsWith("diagnostics queue ") || text.startsWith("runtime media ") || text.startsWith("snapshot ") || text.startsWith("system ") ||
                     text.startsWith("honda platform") || text.startsWith("honda mediacore") ||
                     text.startsWith("app ") -> SYSTEM
                 "touch" in text || "hid report" in text || "hid reports" in text -> TOUCH
@@ -47,9 +47,21 @@ enum class CrvLogCategory(val directoryName: String) {
             if (failure) return true
             if (category == CONNECTION) return true
             val text = content(message).lowercase(Locale.US)
+            if (isCritical(message) || (text.startsWith("runtime media ") &&
+                    ("checkpoint=true" in text || "startup=true" in text))) return true
+            if ("capture=startup" in text && (text.startsWith("receive: ") || text.startsWith("audio processing "))) return true
             return " ready" in text || ENDED_EVENT.containsMatchIn(text) || " detached" in text ||
                 " active" in text || " restored" in text || "first frame" in text ||
                 text.startsWith("app started") || text.startsWith("app stopped")
+        }
+
+        fun isCritical(message: String): Boolean {
+            val text = content(message).lowercase(Locale.US)
+            return ENDED_EVENT.containsMatchIn(text) || text.startsWith("runtime media cost-change ") ||
+                "video visibility=" in text || "video recovery-history " in text ||
+                text.startsWith("runtime media transition-window ") ||
+                text.startsWith("runtime media cost-window ") ||
+                text.startsWith("diagnostics queue ") || text.startsWith("app stopped")
         }
     }
 }

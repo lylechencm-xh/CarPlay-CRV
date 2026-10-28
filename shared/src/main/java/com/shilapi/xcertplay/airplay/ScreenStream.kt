@@ -33,7 +33,9 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
         fun onClosed(cause: Throwable?) {}
     }
 
-    private val opener = AirPlayChaChaOpener(key)
+    private val streamId = nextStreamId.incrementAndGet()
+    private val worker = "video-decrypt:$streamId"
+    private val opener = AirPlayChaChaOpener(key, MediaDecryptProfiler(worker, onDiagnostic))
     private val frameNonce = ByteArray(12)
     private val closed = AtomicBoolean(false)
     private val frameCounter = AtomicLong(0)
@@ -54,6 +56,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
     /** May be called from a visibility callback while a large frame is still decrypting. */
     fun refreshVideoPriority() {
         val visible = visibility.refresh { listener.isVideoVisible() }
+        visibility.updateQueue(receiveQueue)
         for (tid in intArrayOf(receiveTid, decryptTid)) {
             if (tid == 0) continue
             runCatching {
@@ -61,7 +64,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
                 // becomes background work; otherwise old frames accumulate outside our queue.
                 Process.setThreadPriority(tid, if (tid == receiveTid || visible)
                     Process.THREAD_PRIORITY_DISPLAY else Process.THREAD_PRIORITY_BACKGROUND)
-            }
+            }.onFailure { onDiagnostic("video priority update failed worker=$worker tid=$tid visible=$visible exception=${it.javaClass.simpleName}") }
         }
     }
 
@@ -147,7 +150,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
             failure = error
         } finally {
             receiveTid = 0
-            onDiagnostic("video receive hiddenSkippedTotal=${hiddenFrames.get()} ended=true")
+            onDiagnostic("video receive hiddenSkippedTotal=${hiddenFrames.get() + receiveQueue.discardedForVisibility()} ended=true")
             stats.flush(ended = true)
             if (socket === sock) socket = null
             closeSocket(sock)
@@ -159,8 +162,8 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
     private fun decryptLoop() {
         decryptTid = Process.myTid()
         refreshVideoPriority()
-        val stats = StreamReceiveStats("video-processing", onDiagnostic)
-        val runtimeDiagnostics = MediaWorkerDiagnostics({ decryptTid }, { listener.isVideoVisible() }, onDiagnostic)
+        val stats = StreamReceiveStats("video-processing", onDiagnostic, worker = "$worker tid=$decryptTid")
+        val runtimeDiagnostics = MediaWorkerDiagnostics({ decryptTid }, { listener.isVideoVisible() }, onDiagnostic, worker)
         runtimeDiagnostics.start()
         var failure: Throwable? = null
         try {
@@ -225,7 +228,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
                     onDiagnostic("video pipeline decryptP50Ms=${decryptTimes.percentileMs(50)} " +
                         "decryptP90Ms=${decryptTimes.percentileMs(90)} decryptP99Ms=${decryptTimes.percentileMs(99)} " +
                         "queueP90Ms=${queueTimes.percentileMs(90)} agedFrames=$agedFrames " +
-                        "hiddenSkippedTotal=${hiddenFrames.get()} receiveAgePolicy=observe-only")
+                        "hiddenSkippedTotal=${hiddenFrames.get() + receiveQueue.discardedForVisibility()} receiveAgePolicy=observe-only")
                     decryptTimes.reset(); queueTimes.reset(); timingAtNs = decryptedNs
                 }
                 if (firstFrameLogged.compareAndSet(false, true)) {
@@ -293,6 +296,7 @@ class ScreenStream(private val key: ByteArray, private val onDiagnostic: (String
     }
 
     private companion object {
+        val nextStreamId = AtomicLong()
         const val TAG = "xcertplay-usb"
         const val HEADER_LEN = 128
         const val OPCODE_OFFSET = 4
@@ -318,6 +322,11 @@ internal class ScreenVisibilityEpoch {
         return next
     }
     fun accepts(value: Long): Boolean = visible && value == epoch
+
+    @Synchronized fun updateQueue(queue: ScreenReceiveQueue) {
+        // Publish a coherent snapshot; a delayed callback cannot restore an older state.
+        queue.setVisibility(epoch, visible)
+    }
 }
 
 private fun ByteArray.hexPrefix(length: Int): String =

@@ -26,13 +26,18 @@ internal class CrvAudioPacketQueue(
     private var size = 0
     private var dropped = 0L
     private var expired = 0L
+    private var capacityDropped = 0L
+    private var byteBudgetDropped = 0L
+    private var oversized = 0L
     private var highWater = 0
 
     data class Stats(val depth: Int, val highWater: Int, val dropped: Long,
-        val payloadBytes: Long, val oldestAgeNs: Long, val expired: Long = 0L)
+        val payloadBytes: Long, val oldestAgeNs: Long, val expired: Long = 0L,
+        val capacityDropped: Long = 0L, val byteBudgetDropped: Long = 0L, val oversized: Long = 0L)
     fun stats(nowNs: Long = System.nanoTime()): Stats = synchronized(lock) {
         Stats(size, highWater, dropped, payloadBytes,
-            if (size == 0) 0L else (nowNs - receivedNs[head]).coerceAtLeast(0L), expired)
+            if (size == 0) 0L else (nowNs - receivedNs[head]).coerceAtLeast(0L), expired,
+            capacityDropped, byteBudgetDropped, oversized)
     }
     fun queuedPayloadBytes(): Long = synchronized(lock) { payloadBytes }
 
@@ -55,9 +60,12 @@ internal class CrvAudioPacketQueue(
             }
             if (payloadSize > maxPayloadBytes) {
                 dropped++
+                oversized++
                 return
             }
             while (size > 0 && (size == capacity || payloadBytes + payloadSize > maxPayloadBytes)) {
+                // Capacity wins when both limits apply; one packet has exactly one cause.
+                if (size == capacity) capacityDropped++ else byteBudgetDropped++
                 dropHeadLocked()
             }
             val tail = (head + size) % capacity

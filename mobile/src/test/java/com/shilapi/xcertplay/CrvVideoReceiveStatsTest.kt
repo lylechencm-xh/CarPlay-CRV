@@ -8,8 +8,8 @@ class CrvVideoReceiveStatsTest {
         var now = 1L
         val output = mutableListOf<String>()
         val type = Class.forName("com.shilapi.xcertplay.airplay.StreamReceiveStats")
-        val stats = type.constructors.first { it.parameterCount == 3 }.newInstance(
-            "video", { line: String -> output.add(line); Unit }, { now })
+        val stats = type.constructors.first { it.parameterCount == 4 }.newInstance(
+            "video", { line: String -> output.add(line); Unit }, "video:test", { now })
         val stage = type.getMethod("videoStages", Long::class.javaPrimitiveType,
             Long::class.javaPrimitiveType, Long::class.javaPrimitiveType,
             Int::class.javaPrimitiveType, Long::class.javaPrimitiveType)

@@ -6,6 +6,48 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class ScreenReceiveQueueTest {
+    @Test fun cameraHideUnblocksFullQueueWithoutWaitingForDecryptAndKeepsConfig() {
+        val queue = ScreenReceiveQueue(2, 128)
+        val frame = ByteArray(128)
+        val config = ByteArray(128).apply { this[4] = 1 }
+        queue.offer(config, byteArrayOf(9), 1, 1L, 0L)
+        queue.offer(frame, byteArrayOf(1), 1, 2L, 1L)
+        val entered = CountDownLatch(1)
+        val done = CountDownLatch(1)
+        val producer = Thread {
+            entered.countDown()
+            if (queue.offer(frame, byteArrayOf(2), 1, 3L, 2L)) done.countDown()
+        }.apply { isDaemon = true; start() }
+        try {
+            assertTrue(entered.await(1, TimeUnit.SECONDS))
+            assertFalse(done.await(30, TimeUnit.MILLISECONDS))
+            queue.setVisibility(1L, false)
+            assertTrue(done.await(1, TimeUnit.SECONDS))
+            assertEquals(2L, queue.discardedForVisibility())
+            queue.setVisibility(2L, true)
+            // Even after resume, an old producer may not insert an old reference chain.
+            assertTrue(queue.offer(frame, byteArrayOf(3), 1, 4L, 3L, 0L))
+            assertTrue(queue.offer(frame, byteArrayOf(4), 1, 5L, 4L, 2L))
+            queue.finish()
+            assertEquals(1, queue.take()!!.header[4].toInt())
+            val fresh = queue.take()!!
+            assertEquals(4L, fresh.nonce)
+            assertEquals(4, fresh.body[0].toInt())
+            assertNull(queue.take())
+            assertEquals(3L, queue.discardedForVisibility())
+        } finally { queue.close(); producer.join(1000L) }
+    }
+
+    @Test fun staleVisibilityCallbackCannotRehideNewEpoch() {
+        val queue = ScreenReceiveQueue()
+        queue.setVisibility(2L, true)
+        queue.setVisibility(1L, false)
+        assertTrue(queue.offer(ByteArray(128), byteArrayOf(1), 1, 1L, 0L, 2L))
+        queue.finish()
+        assertNotNull(queue.take())
+        assertEquals(0L, queue.discardedForVisibility())
+    }
+
     @Test fun orderedOwnedBuffersAndNonceSurviveProducerReuse() {
         val queue = ScreenReceiveQueue(3, 128)
         val header = ByteArray(128); val body = byteArrayOf(1, 2, 3)

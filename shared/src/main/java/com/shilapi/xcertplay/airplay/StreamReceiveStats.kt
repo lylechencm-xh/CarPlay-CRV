@@ -4,6 +4,7 @@ package com.shilapi.xcertplay.airplay
 internal class StreamReceiveStats(
     private val label: String,
     private val report: (String) -> Unit,
+    private val worker: String = label,
     private val nowNs: () -> Long = System::nanoTime,
 ) {
     private var windowStart = nowNs()
@@ -27,6 +28,8 @@ internal class StreamReceiveStats(
     private var decryptTotalNs = 0L
     private var decryptCpuTotalNs = 0L
     private var maxDecryptCpuNs = 0L
+    private var reportedWindows = 0
+    private val costHistory = MediaCostHistory(worker, report, minimumPackets = 1L)
 
     fun videoStages(decryptNs: Long, convertNs: Long, submitNs: Long, frameBytes: Int, decryptCpuNs: Long = 0L) {
         videoFrames++
@@ -92,20 +95,28 @@ internal class StreamReceiveStats(
     fun flush(ended: Boolean = false) {
         val now = nowNs()
         if (!ended && now - windowStart < 5_000_000_000L) return
-        runCatching { report("Receive: $label packets=$packets bytes=$bytes readMaxMs=${maxReadNs / 1_000_000} " +
+        val summary = "Receive: $label packets=$packets bytes=$bytes readMaxMs=${maxReadNs / 1_000_000} " +
             "processMaxUs=${maxProcessNs / 1000} seqForwardGaps=$forwardGapPackets " +
             "lateOrDuplicate=$lateOrDuplicate interArrivalMaxMs=${maxInterArrivalNs / 1_000_000} " +
             "seqGapEvents=$sequenceGapEvents seqGapMax=$maxSequenceGap " +
             "seqGapLast=[$lastSequenceGap] seqGapAtMs=$lastSequenceGapAtMs ended=$ended " +
+            "capture=${if (reportedWindows++ < 3) "startup" else "periodic"} " +
             "windowMs=${(now - windowStart).coerceAtLeast(0) / 1_000_000} " +
             "readsOver250Ms=$readsOver250Ms seqGapAfterReadOver250Ms=$seqGapAfterReadOver250Ms " +
-            "seqMissingAfterReadOver250Ms=$seqMissingAfterReadOver250Ms" +
+            "seqMissingAfterReadOver250Ms=$seqMissingAfterReadOver250Ms " +
+            "worker=$worker fromNs=$windowStart toNs=$now" +
             if (label == "video" || label == "video-processing") " decryptMaxUs=${maxDecryptNs / 1000} " +
                 "convertMaxUs=${maxConvertNs / 1000} submitMaxUs=${maxSubmitNs / 1000} " +
                 "frameMaxBytes=$maxFrameBytes videoFrames=$videoFrames " +
                 "decryptTotalUs=${decryptTotalNs / 1000} decryptCpuTotalUs=${decryptCpuTotalNs / 1000} " +
                 "decryptCpuMaxUs=${maxDecryptCpuNs / 1000} decryptedBytes=$decryptedBytes " +
-                "decryptCpuUsPerMiB=${if (decryptedBytes > 0) decryptCpuTotalNs / 1000 * 1_048_576 / decryptedBytes else 0}" else "") }
+                "decryptCpuUsPerMiB=${if (decryptedBytes > 0) decryptCpuTotalNs / 1000 * 1_048_576 / decryptedBytes else 0}" else ""
+        runCatching {
+            report(summary)
+            if (label == "video-processing") {
+                costHistory.record(summary, decryptCpuTotalNs, decryptedBytes, videoFrames.toLong(), ended)
+            }
+        }
         windowStart = now
         packets = 0
         bytes = 0

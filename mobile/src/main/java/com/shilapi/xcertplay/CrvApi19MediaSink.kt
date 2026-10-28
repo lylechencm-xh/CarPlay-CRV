@@ -21,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Verifier-safe Android 4.2.2 / API17 media backend used by the 2021 CR-V build.
@@ -41,30 +42,37 @@ class CrvApi19MediaSink(
     override fun acceptsLengthPrefixedVideo(type: Int): Boolean = true
     @Volatile private var outputSurface: Surface? = surface
     private val videoLock = Any()
+    private val videoDecoderInstances = AtomicLong()
+    private val videoRecoveryTotal = AtomicLong()
+    private val videoRecoveryHistory = CrvVideoRecoveryHistory()
+    private val mediaSinkId = nextMediaSinkId.incrementAndGet()
     private val videoCleanup = Executors.newSingleThreadExecutor { task ->
         Thread(task, "crv-video-cleanup").apply { isDaemon = true }
     }
     @Volatile private var videoVisible = true
     @Volatile private var videoReady = true
     private var surfaceGeneration = 0L
+    private val visibilityTransitions = AtomicLong()
     private val navigationSettings = context.applicationContext
         .getSharedPreferences("crv_audio", Context.MODE_PRIVATE)
 
-    override fun isVideoVisible(type: Int): Boolean = videoVisible && outputSurface != null && !closed.get()
+    override fun isVideoVisible(type: Int): Boolean =
+        videoVisible && videoReady && outputSurface != null && !closed.get()
 
     fun setVideoVisible(visible: Boolean) {
-        synchronized(audioRenderers) {
-            if (visible && !closed.get() && audioRenderers.isNotEmpty() &&
-                audioManager.mode != AudioManager.MODE_IN_CALL && !audioManager.isBluetoothScoOn) ensureAudioFocus()
-        }
         synchronized(videoLock) {
             if (closed.get() || videoVisible == visible) return
             videoVisible = visible
         }
+        // Publish hide before any audio-service calls/locks so the receiver can drain immediately.
         visibilityHandlers.values.toList().forEach { runCatching(it) }
-        report("Video visibility=$visible; audio and transport retained")
-        report("Audio visibility=$visible ${audioRouteSnapshot()}")
+        val transition = visibilityTransitions.incrementAndGet()
+        report("Video visibility=$visible sink=$mediaSinkId transition=$transition monoNs=${System.nanoTime()}; audio and transport retained")
         updateSurface(outputSurface)
+        if (visible) synchronized(audioRenderers) {
+            if (!closed.get() && audioRenderers.isNotEmpty() &&
+                audioManager.mode != AudioManager.MODE_IN_CALL && !audioManager.isBluetoothScoOn) ensureAudioFocus()
+        }
     }
 
     private val closed = AtomicBoolean(false)
@@ -157,6 +165,7 @@ class CrvApi19MediaSink(
 
     fun updateSurface(surface: Surface?, retired: () -> Unit = {}) {
         // No joins or codec operations on the Activity/Surface callback thread.
+        val visibilityPublished = java.util.concurrent.CountDownLatch(1)
         synchronized(videoLock) {
             if (closed.get()) {
                 // A late TextureView destruction can follow controller teardown. Wait off the UI
@@ -182,12 +191,21 @@ class CrvApi19MediaSink(
                     // replacement on the same surface until the old worker actually releases it.
                     if (!oldDecoders.all { it.awaitStopped() }) return@execute
                     runCatching(retired)
+                    // Do not let a very fast cleanup publish ready before the caller's hide.
+                    try { visibilityPublished.await() }
+                    catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        return@execute
+                    }
                     val restore = synchronized(videoLock) {
                         if (closed.get() || generation != surfaceGeneration ||
                             !videoVisible || outputSurface == null) false
                         else { videoReady = true; true }
                     }
                     if (restore) {
+                        // Surface availability is part of visibility. Publish its new epoch
+                        // before requesting the IDR, even if onResume preceded Surface creation.
+                        visibilityHandlers.values.toList().forEach { runCatching(it) }
                         report("Video surface ready generation=$generation; requesting fresh frame")
                         recoveryHandlers.values.toList().forEach { runCatching(it) }
                     }
@@ -196,6 +214,9 @@ class CrvApi19MediaSink(
                 // close() has already retired the sink.
             }
         }
+        // Ownership callbacks take screen locks; never invoke them while holding videoLock.
+        try { visibilityHandlers.values.toList().forEach { runCatching(it) } }
+        finally { visibilityPublished.countDown() }
     }
 
     override fun onScreenStreamActive(type: Int, active: Boolean) {
@@ -294,7 +315,11 @@ class CrvApi19MediaSink(
             videoDecoders.values.toList().also { videoDecoders.clear() }
         }
         decoders.forEach { it.stop() }
-        videoCleanup.execute { decoders.forEach { it.close() }; decoders.forEach { it.awaitStopped() } }
+        videoCleanup.execute {
+            decoders.forEach { it.close() }
+            decoders.forEach { it.awaitStopped() }
+            videoRecoveryHistory.replay(System.nanoTime(), force = true).forEach(report)
+        }
         videoCleanup.shutdown()
         val retiredAudio = synchronized(audioRenderers) {
             audioRenderers.values.toList().also {
@@ -343,6 +368,10 @@ class CrvApi19MediaSink(
             val surface = outputSurface ?: return@synchronized null
             lateinit var next: LegacyVideoDecoder
             next = LegacyVideoDecoder(
+                sinkId = mediaSinkId,
+                instanceId = videoDecoderInstances.incrementAndGet(),
+                sessionRecoveries = videoRecoveryTotal,
+                recoveryHistory = videoRecoveryHistory,
                 surface = surface,
                 width = videoWidth,
                 height = videoHeight,
@@ -370,6 +399,10 @@ class CrvApi19MediaSink(
         }
 
     private class LegacyVideoDecoder(
+        private val sinkId: Long,
+        private val instanceId: Long,
+        private val sessionRecoveries: AtomicLong,
+        private val recoveryHistory: CrvVideoRecoveryHistory,
         private val surface: Surface,
         private val width: Int,
         private val height: Int,
@@ -680,6 +713,7 @@ class CrvApi19MediaSink(
             val codec = decoder ?: return
             try {
                 var newestOutputUs = 0L
+                var outputs = 0
                 while (running.get()) {
                     val index = codec.dequeueOutputBuffer(outputInfo, 0L)
                     when {
@@ -692,32 +726,36 @@ class CrvApi19MediaSink(
                                 continue
                             }
                             drainSchedule.outputReady()
-                            newestOutputUs = outputInfo.presentationTimeUs
+                            outputs++
+                            newestOutputUs = maxOf(newestOutputUs, outputInfo.presentationTimeUs)
                             val ageUs = System.nanoTime() / 1000L - outputInfo.presentationTimeUs
                             if (outputInfo.presentationTimeUs != 0L && ageUs >= 0L) {
                                 maxOutputAgeUs = maxOf(maxOutputAgeUs, ageUs)
                                 outputAges.record(ageUs * 1000L)
                             }
-                            decodedVideoOutput.offer(index)
+                            decodedVideoOutput.offer(index, outputInfo.presentationTimeUs)
                         }
                         else -> break
                     }
                 }
-                if (!waitingForKeyFrame && running.get() && newestOutputUs > 0L) {
-                    maxRenderedAgeUs = maxOf(maxRenderedAgeUs,
-                        (System.nanoTime() / 1000L - newestOutputUs).coerceAtLeast(0L))
+                val renderedPtsUs = decodedVideoOutput.finish(render = !waitingForKeyFrame && running.get())
+                val submittedUs = System.nanoTime() / 1000L
+                if (renderedPtsUs != null && renderedPtsUs > 0L && renderedPtsUs <= submittedUs) {
+                    maxRenderedAgeUs = maxOf(maxRenderedAgeUs, submittedUs - renderedPtsUs)
                 }
-                decodedVideoOutput.finish(render = !waitingForKeyFrame && running.get())
                 val now = System.nanoTime()
                 if (!waitingForKeyFrame && running.get() &&
-                    outputRecovery.observe(now, newestOutputUs)) {
+                    outputRecovery.observe(now, newestOutputUs, outputs)) {
                     discardCurrentFrameChain()
                     backlogRecovery.reset()
-                    recover("video codec ${outputRecovery.reason}; ${outputRecovery.triggerSnapshot}; requesting fresh frame chain", preferFlush = true)
+                    recover("video codec ${outputRecovery.reason}; instance=$instanceId generation=$decoderGeneration " +
+                        "${outputRecovery.triggerSnapshot}; requesting fresh frame chain", preferFlush = true)
                 }
                 if (now - videoOutputStatsAtNs >= 5_000_000_000L) {
+                    recoveryHistory.replay(now).forEach(diagnostic)
                     val windowMs = (now - videoOutputStatsAtNs) / 1_000_000L
-                    diagnostic("decoded output generation=$decoderGeneration fedTotal=$fedFrames renderedTotal=$renderedFrames " +
+                    diagnostic("decoded output renderAgeSchema=2 sink=$sinkId generation=$decoderGeneration instance=$instanceId " +
+                        "sessionRecoveriesTotal=${sessionRecoveries.get()} fedTotal=$fedFrames renderedTotal=$renderedFrames " +
                         "windowMs=$windowMs fedFrames=${fedFrames - previousFedFrames} " +
                         "displayedFrames=${renderedFrames - previousRenderedFrames} recoveriesTotal=$recoveryCount " +
                         "staleSkippedTotal=${decodedVideoOutput.discardedTotal} " +
@@ -763,6 +801,17 @@ class CrvApi19MediaSink(
                 return
             }
             recoveryCount++
+            val event = sessionRecoveries.incrementAndGet()
+            val now = System.nanoTime()
+            val backlog = backlogAfterCurrent()
+            val snapshot = "sink=$sinkId event=$event monoNs=$now instance=$instanceId generation=$decoderGeneration " +
+                "fedTotal=$fedFrames renderedTotal=$renderedFrames waitingForKeyFrame=$waitingForKeyFrame " +
+                "pendingFrames=${backlog.pendingFrames} reason=${reason.take(1800)}"
+            fun completed(outcome: String) {
+                val line = "$snapshot outcome=$outcome"
+                recoveryHistory.record(line)
+                diagnostic("Video recovery-history replay=false $line")
+            }
             diagnostic(reason)
             val active = decoder
             if (preferFlush && active != null && firstRendered) {
@@ -782,6 +831,7 @@ class CrvApi19MediaSink(
                     waitingForKeyFrame = true
                     diagnostic("video decoder flushed; requesting keyframe")
                     requestKeyFrameIfDue()
+                    completed("flushed")
                     return
                 }
             } else if (preferFlush && active != null) {
@@ -793,6 +843,7 @@ class CrvApi19MediaSink(
             waitingForKeyFrame = true
             firstRendered = false
             requestKeyFrameIfDue()
+            completed("decoder-retired-awaiting-keyframe")
         }
 
         private fun requestKeyFrameIfDue() {
@@ -1329,6 +1380,8 @@ class CrvApi19MediaSink(
             val trackBytes = track?.let { bufferProgress.queuedBytes(it.playbackHeadPosition) } ?: 0L
             runCatching { report("Audio playback type=${format.audioType} queueDepth=${stats.depth} " +
                 "queueHighWater=${stats.highWater} droppedTotal=${stats.dropped} expiredTotal=${stats.expired} " +
+                "capacityDroppedTotal=${stats.capacityDropped} byteBudgetDroppedTotal=${stats.byteBudgetDropped} " +
+                "oversizedTotal=${stats.oversized} " +
                 "queuePayloadBytes=${stats.payloadBytes} queuePcmMs=$pcmQueueMs queueClock=udp-receive " +
                 "oldestPacketMs=${stats.oldestAgeNs / 1_000_000L} trackQueuedBytes=$trackBytes " +
                 "trackQueuedMs=${trackBytes * 1000L / (format.sampleRate.toLong() * frameBytes)} " +
@@ -1449,6 +1502,7 @@ class CrvApi19MediaSink(
     }
 
     private companion object {
+        val nextMediaSinkId = AtomicLong()
         const val VIDEO_QUEUE_CAPACITY = 32
         const val VIDEO_QUEUE_MAX_BYTES = 8 * 1024 * 1024
         const val AUDIO_QUEUE_CAPACITY = 96

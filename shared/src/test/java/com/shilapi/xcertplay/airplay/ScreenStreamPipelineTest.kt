@@ -82,6 +82,9 @@ class ScreenStreamPipelineTest {
                 while (!queue.hasNewer(0L) && System.nanoTime() < deadline) Thread.sleep(5)
                 assertTrue(queue.hasNewer(0L))
                 visible.set(false); stream.refreshVideoPriority()
+                // Hide releases receive backpressure without needing the blocked worker.
+                assertFalse(queue.hasNewer(0L))
+                assertEquals(1L, queue.discardedForVisibility())
                 visible.set(true); stream.refreshVideoPriority()
                 resume.countDown()
                 writeFrame(socket, 2L, 3)

@@ -21,17 +21,29 @@ class CrvDiagnostics(context: Context) : Closeable {
     private val startedAtMillis = android.os.SystemClock.elapsedRealtime()
     private var sequence = 0L
     private val queue = CrvDiagnosticQueue()
+    private val transitionHistory = CrvMediaTransitionHistory()
     @Volatile var detailed = context.getSharedPreferences("crv_diagnostics", Context.MODE_PRIVATE)
         .getBoolean("detailed", false)
         private set
     private val worker = Thread({
         try {
+            var lastDropReportAt = 0L
+            var lastDropped = 0L
             while (true) {
                 val entry = queue.take() ?: break
                 write(entry)
+                transitionHistory.record(entry.elapsedMs, entry.message).forEach { archived ->
+                    write(CrvDiagnosticQueue.Entry(archived, entry.wallMs, entry.elapsedMs, true, true))
+                }
+                val dropped = queue.dropped()
+                if (dropped != lastDropped && (lastDropped == 0L || entry.elapsedMs - lastDropReportAt >= 30_000L)) {
+                    write(CrvDiagnosticQueue.Entry(queue.dropSummary(), entry.wallMs, entry.elapsedMs, true, true))
+                    lastDropped = dropped
+                    lastDropReportAt = entry.elapsedMs
+                }
             }
             val dropped = queue.dropped()
-            if (dropped > 0L) write(CrvDiagnosticQueue.Entry("Diagnostics queue droppedTotal=$dropped",
+            if (dropped > 0L) write(CrvDiagnosticQueue.Entry(queue.dropSummary(),
                 System.currentTimeMillis(), android.os.SystemClock.elapsedRealtime(), true))
         } finally { storage.close() }
     }, "crv-diagnostic-writer").apply { isDaemon = true; start() }
@@ -61,7 +73,7 @@ class CrvDiagnostics(context: Context) : Closeable {
                 "iap2 rx=" in message || "iap2 tx=" in message ||
                 "airplay rx " in message || "airplay tx " in message)) return
         queue.offer(CrvDiagnosticQueue.Entry(message.take(MAX_LINE), System.currentTimeMillis(),
-            android.os.SystemClock.elapsedRealtime(), important))
+            android.os.SystemClock.elapsedRealtime(), important, failure || CrvLogCategory.isCritical(message)))
     }
 
     private fun write(entry: CrvDiagnosticQueue.Entry) {

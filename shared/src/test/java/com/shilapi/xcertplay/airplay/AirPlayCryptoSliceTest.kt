@@ -5,6 +5,25 @@ import org.junit.Test
 
 class AirPlayCryptoSliceTest {
     @Test
+    fun reusableOpenerRejectsTamperingAndAuthenticatesSubsequentAudioAndVideoSizes() {
+        val key = ByteArray(32) { it.toByte() }
+        val aad = ByteArray(12)
+        val opener = AirPlayChaChaOpener(key)
+        val bad = AirPlayCrypto.chachaSeal(key, AirPlayCrypto.nonce64(1), byteArrayOf(1), aad)
+        bad[0] = (bad[0].toInt() xor 1).toByte()
+        try {
+            opener.open(AirPlayCrypto.nonce64(1), bad, aad = aad)
+            org.junit.Assert.fail("tampered ciphertext must not be delivered")
+        } catch (_: org.bouncycastle.crypto.InvalidCipherTextException) { }
+        for ((index, size) in listOf(1416, 262144).withIndex()) {
+            val nonce = AirPlayCrypto.nonce64(index + 2L)
+            val plain = ByteArray(size) { (it * 7).toByte() }
+            val sealed = AirPlayCrypto.chachaSeal(key, nonce, plain, aad)
+            assertArrayEquals(plain, opener.open(nonce, sealed, aad = aad))
+        }
+    }
+
+    @Test
     fun decryptsCiphertextFromOffsetWithoutCopyingTheSlice() {
         val key = ByteArray(32) { (it + 1).toByte() }
         val nonce = ByteArray(12) { (it + 3).toByte() }

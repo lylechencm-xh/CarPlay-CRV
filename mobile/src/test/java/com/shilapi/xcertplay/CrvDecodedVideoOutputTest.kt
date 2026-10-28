@@ -4,6 +4,27 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CrvDecodedVideoOutputTest {
+    @Test fun renderAgeUsesPtsOfActualReleasedBufferEvenWhenPtsGoBackwards() {
+        val released = mutableListOf<Pair<Int, Boolean>>()
+        val output = CrvDecodedVideoOutput { index, render -> released += index to render }
+        output.offer(1, 900L)
+        output.offer(2, 700L)
+        assertEquals(700L, output.finish(true))
+        assertNull(output.finish(true))
+        output.offer(3, 1000L)
+        assertNull(output.finish(false))
+        assertEquals(listOf(1 to false, 2 to true, 3 to false), released)
+    }
+
+    @Test fun releaseFailureDoesNotReportSuccessfulRenderOrReleaseTwice() {
+        var calls = 0
+        val output = CrvDecodedVideoOutput { _, _ -> calls++; throw IllegalStateException("codec retired") }
+        output.offer(1, 900L)
+        try { output.finish(true); fail("release must fail") } catch (_: IllegalStateException) { }
+        assertNull(output.finish(true))
+        assertEquals(1, calls)
+    }
+
     @Test fun backlogReleasesOldDecodedFramesAndRendersOnlyNewest() {
         val releases = mutableListOf<Pair<Int, Boolean>>()
         val output = CrvDecodedVideoOutput { index, render -> releases += index to render }

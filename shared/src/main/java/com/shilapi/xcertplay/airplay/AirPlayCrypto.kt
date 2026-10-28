@@ -159,7 +159,7 @@ object AirPlayCrypto {
  * Reinitializing the cipher for every nonce preserves AEAD semantics while avoiding a
  * ChaCha20Poly1305 and KeyParameter allocation per frame/packet on legacy Android.
  */
-internal class AirPlayChaChaOpener(key: ByteArray) {
+internal class AirPlayChaChaOpener(key: ByteArray, private val profiler: MediaDecryptProfiler? = null) {
     private val cipher = ChaCha20Poly1305()
     private val keyParameter = KeyParameter(key)
 
@@ -174,14 +174,27 @@ internal class AirPlayChaChaOpener(key: ByteArray) {
     ): ByteArray {
         require(offset >= 0 && length >= 0 && offset + length <= source.size)
         require(prefixLength >= 0 && prefixLength <= prefixSource.size)
-        cipher.init(false, AEADParameters(keyParameter, MAC_BITS, nonce, aad))
-        val plainCapacity = cipher.getOutputSize(length)
-        val output = ByteArray(prefixLength + plainCapacity)
-        if (prefixLength > 0) prefixSource.copyInto(output, 0, 0, prefixLength)
-        val processed = cipher.processBytes(source, offset, length, output, prefixLength)
-        val finalized = cipher.doFinal(output, prefixLength + processed)
-        val outputLength = prefixLength + processed + finalized
-        return if (outputLength == output.size) output else output.copyOf(outputLength)
+        val sampled = profiler?.begin() == true
+        try {
+            cipher.init(false, AEADParameters(keyParameter, MAC_BITS, nonce, aad))
+            if (sampled) profiler?.initialized()
+            val plainCapacity = cipher.getOutputSize(length)
+            val output = ByteArray(prefixLength + plainCapacity)
+            if (sampled) profiler?.allocated()
+            if (prefixLength > 0) prefixSource.copyInto(output, 0, 0, prefixLength)
+            if (sampled) profiler?.prefixed()
+            val processed = cipher.processBytes(source, offset, length, output, prefixLength)
+            if (sampled) profiler?.processed()
+            val finalized = cipher.doFinal(output, prefixLength + processed)
+            if (sampled) profiler?.authenticated()
+            val outputLength = prefixLength + processed + finalized
+            val result = if (outputLength == output.size) output else output.copyOf(outputLength)
+            if (sampled) profiler?.finished(length)
+            return result
+        } catch (failure: Throwable) {
+            if (sampled) profiler?.failed()
+            throw failure
+        }
     }
 
     fun open(
@@ -189,19 +202,12 @@ internal class AirPlayChaChaOpener(key: ByteArray) {
         source: ByteArray,
         offset: Int = 0,
         length: Int = source.size - offset,
-        aad: ByteArray = ByteArray(0),
-    ): ByteArray {
-        require(offset >= 0 && length >= 0 && offset + length <= source.size)
-        cipher.init(false, AEADParameters(keyParameter, MAC_BITS, nonce, aad))
-        val output = ByteArray(cipher.getOutputSize(length))
-        val processed = cipher.processBytes(source, offset, length, output, 0)
-        val finalized = cipher.doFinal(output, processed)
-        val outputLength = processed + finalized
-        return if (outputLength == output.size) output else output.copyOf(outputLength)
-    }
+        aad: ByteArray = EMPTY,
+    ): ByteArray = openWithPrefix(nonce, source, offset, length, aad, EMPTY, 0)
 
     private companion object {
         const val MAC_BITS = 128
+        val EMPTY = ByteArray(0)
     }
 }
 

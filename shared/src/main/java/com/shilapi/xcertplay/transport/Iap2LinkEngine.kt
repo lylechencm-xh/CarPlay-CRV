@@ -31,7 +31,7 @@ class Iap2LinkEngine(
         data class Control(val bytes: ByteArray) : Event()
         data class Session(val sessionId: Int, val bytes: ByteArray) : Event()
         data class Writable(val value: Boolean) : Event()
-        data class Dead(val reason: String?) : Event()
+        data class Dead(val reason: String?, val snapshot: String = "") : Event()
     }
 
     data class SessionDescriptor(
@@ -198,7 +198,7 @@ class Iap2LinkEngine(
 
     /** The byte stream ended. */
     fun feedEof() {
-        die(null)
+        die("iAP2 transport EOF")
     }
 
     /** Advances all due protocol timers with the caller's monotonic clock. */
@@ -541,6 +541,9 @@ class Iap2LinkEngine(
 
     private fun die(reason: String?) {
         if (state == State.DEAD) return
+        val snapshot = "state=$state unacknowledged=${unacknowledged.size} queued=${queued.size} " +
+            "outOfOrder=${outOfOrder.size} retransmissions=${unacknowledged.sumOf { it.retransmissions }} " +
+            "nextDeadlineMs=${nextDeadlineMillis() ?: -1L}"
         markerDeadlineMillis = null
         synchronizationDeadlineMillis = null
         sendAcknowledgementDeadlineMillis = null
@@ -549,7 +552,7 @@ class Iap2LinkEngine(
         writable = false
         output.reset()
         events.clear()
-        events += Event.Dead(reason)
+        events += Event.Dead(reason, snapshot)
     }
 
     private fun appendOutput(bytes: ByteArray): Boolean {

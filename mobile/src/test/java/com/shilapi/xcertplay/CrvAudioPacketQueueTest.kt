@@ -7,6 +7,24 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CrvAudioPacketQueueTest {
+    @Test fun dropReasonsAreExclusiveAndSumToTotalAcrossAllLimits() {
+        fun packet(size: Int) = ByteArray(12 + size).also { it[0] = 0x80.toByte() }
+        val queue = CrvAudioPacketQueue(2, maxAgeNs = 100, maxPayloadBytes = 10)
+        queue.offer(packet(4), 1, 1)
+        queue.offer(packet(4), 2, 2)
+        queue.offer(packet(8), 3, 3) // capacity first, then byte budget
+        queue.offer(packet(11), 4, 4) // oversized
+        queue.offer(packet(1), 5, 200, receivedAtNs = 1) // expire queued and arriving
+        val stats = queue.stats(200)
+        assertEquals(1L, stats.capacityDropped)
+        assertEquals(1L, stats.byteBudgetDropped)
+        assertEquals(1L, stats.oversized)
+        assertEquals(2L, stats.expired)
+        assertEquals(5L, stats.dropped)
+        assertEquals(stats.dropped,
+            stats.expired + stats.capacityDropped + stats.byteBudgetDropped + stats.oversized)
+    }
+
     @Test fun tracksActualPayloadBytesAndAgeAcrossOverflowAndPoll() {
         val queue = CrvAudioPacketQueue(2)
         val holder = CrvAudioPacketQueue.MutablePacket()

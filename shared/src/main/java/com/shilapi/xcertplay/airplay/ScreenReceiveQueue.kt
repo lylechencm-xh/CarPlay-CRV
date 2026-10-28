@@ -19,6 +19,33 @@ internal class ScreenReceiveQueue(
     private var bytes = 0L
     private var closed = false
     private var finished = false
+    private var visible = true
+    private var epoch = 0L
+    var hiddenDiscardedFrames = 0L
+        private set
+
+    /** Camera transitions must unblock TCP even while the decrypt worker is busy. */
+    fun setVisibility(value: Long, showing: Boolean) = synchronized(lock) {
+        if (value < epoch) return@synchronized
+        epoch = value
+        visible = showing
+        val iterator = pending.iterator()
+        while (iterator.hasNext()) {
+            val packet = iterator.next()
+            if (isObsoleteFrame(packet.header, packet.visibilityEpoch)) {
+                iterator.remove()
+                bytes -= packet.length
+                hiddenDiscardedFrames++
+                recycle(packet)
+            }
+        }
+        lock.notifyAll()
+    }
+
+    private fun isObsoleteFrame(header: ByteArray, value: Long): Boolean =
+        header[4].toInt() and 0xff == 0 && (!visible || value != epoch)
+
+    fun discardedForVisibility(): Long = synchronized(lock) { hiddenDiscardedFrames }
 
     init { require(capacity > 0 && maxBytes > 0) }
 
@@ -27,9 +54,15 @@ internal class ScreenReceiveQueue(
               visibilityEpoch: Long = 0L): Boolean = synchronized(lock) {
         require(length in 0..body.size)
         // One oversized protocol-valid packet may progress on its own; it cannot grow the backlog.
-        while (!closed && !finished && (pending.size >= capacity ||
+        while (!closed && !finished && !isObsoleteFrame(header, visibilityEpoch) && (pending.size >= capacity ||
                 (pending.isNotEmpty() && bytes + length > maxBytes))) lock.wait()
         if (closed || finished) return@synchronized false
+        // A producer may have entered offer before hide/show and waited for capacity.
+        // Consume that frame's nonce but never relabel or enqueue it in the new epoch.
+        if (isObsoleteFrame(header, visibilityEpoch)) {
+            hiddenDiscardedFrames++
+            return@synchronized true
+        }
         val packet = if (spare.isEmpty()) Packet() else spare.removeFirst()
         header.copyInto(packet.header)
         if (packet.body.size < length) packet.body = ByteArray(length)
